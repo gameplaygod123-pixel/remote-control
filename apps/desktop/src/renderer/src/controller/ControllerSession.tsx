@@ -4,6 +4,7 @@ import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConn
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
 import { clearCachedPin } from '../shared/devicePins'
+import { getOrCreateControllerId } from '../shared/controllerId'
 import StatusPill from '../shared/components/StatusPill'
 import { RemoteInputMessage, isPrintableKey, videoRelativePosition } from '../shared/input/inputProtocol'
 
@@ -30,6 +31,7 @@ export default function ControllerSession({
   onBack: () => void
 }): React.JSX.Element {
   const [status, setStatus] = useState('connecting to signaling server')
+  const [controllerId] = useState(getOrCreateControllerId)
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -144,7 +146,7 @@ export default function ControllerSession({
           inputChannelRef.current = null
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, pairing')
-          client.send({ type: 'pair-request', deviceId, pin })
+          client.send({ type: 'pair-request', deviceId, pin, controllerId })
         }
       })
       if (cancelled) {
@@ -170,7 +172,7 @@ export default function ControllerSession({
             if (message.reason === 'unknown device id') {
               setStatus(`pairing failed: ${message.reason} (waiting for agent, retrying...)`)
               setTimeout(() => {
-                transport.send({ type: 'pair-request', deviceId, pin })
+                transport.send({ type: 'pair-request', deviceId, pin, controllerId })
               }, PAIR_RETRY_DELAY_MS)
               return
             }
@@ -205,7 +207,7 @@ export default function ControllerSession({
               inputChannelRef.current = null
               if (videoRef.current) videoRef.current.srcObject = null
               setTimeout(() => {
-                transport.send({ type: 'pair-request', deviceId, pin })
+                transport.send({ type: 'pair-request', deviceId, pin, controllerId })
               }, PAIR_RETRY_DELAY_MS)
             }
           }
@@ -228,7 +230,7 @@ export default function ControllerSession({
       })
 
       setStatus('pairing')
-      transport.send({ type: 'pair-request', deviceId, pin })
+      transport.send({ type: 'pair-request', deviceId, pin, controllerId })
     }
 
     connect().catch((error) => setStatus(`error: ${String(error)}`))

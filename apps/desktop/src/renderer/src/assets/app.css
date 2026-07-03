@@ -116,6 +116,51 @@
   flex: 1;
 }
 
+.trusted-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trusted-list__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-border);
+}
+
+.trusted-list__id {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ev-c-text-1);
+}
+
+.trusted-list__date {
+  flex: 1;
+  font-size: 11px;
+  color: var(--ev-c-text-3);
+}
+
+.trusted-list__revoke {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: transparent;
+  color: var(--err);
+  cursor: pointer;
+}
+
+.trusted-list__revoke:hover {
+  background: var(--err-soft);
+}
+
 .status-dot {
   width: 8px;
   height: 8px;

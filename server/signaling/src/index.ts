@@ -137,7 +137,11 @@ wss.on("connection", (socket) => {
             }
           }, PENDING_APPROVAL_TIMEOUT_MS),
         );
-        send(agent.ws, { type: "connection-request", deviceId: message.deviceId });
+        send(agent.ws, {
+          type: "connection-request",
+          deviceId: message.deviceId,
+          controllerId: message.controllerId,
+        });
         send(socket, { type: "pairing-pending" });
         console.log(`connection request pending approval: ${message.deviceId}`);
         break;

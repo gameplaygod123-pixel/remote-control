@@ -500,6 +500,47 @@ flagged as a Phase 7 hardening item in the original plan).
   real against the actual Windows agent, which is also a more meaningful
   test (two separate physical machines, not a Mac self-test).
 
+### Trusted controllers -- approve once, not every time
+
+Requiring a human click on *every single* connection attempt was flagged
+by the user as impractical given how often this app already reconnects on
+its own (network drops, agent restarts, idle timeouts all trigger a fresh
+`pair-request`). Fix: remember a controller after the first accept, and
+skip the prompt for it going forward.
+
+- Controllers didn't have any persistent identity before this -- only
+  agents had a `deviceId`. `shared/controllerId.ts` adds
+  `getOrCreateControllerId()` (a `crypto.randomUUID()`, persisted in the
+  controller's own `localStorage` -- nobody types it, so a UUID is fine
+  unlike the human-facing numeric device ID). Sent as `controllerId` on
+  every `pair-request` (all four call sites in `ControllerSession.tsx`)
+  and relayed through unchanged in the server's `connection-request`.
+- Trust lives entirely on the **agent's own** `localStorage`
+  (`shared/trustedControllers.ts`), not the signaling server -- the
+  server's in-memory `agents` map resets on restart, and the security
+  decision of "do I trust this controller" is inherently the agent
+  machine's to own and persist regardless of server uptime.
+- On `connection-request`, the agent checks
+  `isTrustedController(controllerId)` *before* ever showing the prompt:
+  trusted -> immediately sends `connection-response { accept: true }`
+  with no human interaction at all; untrusted -> shows the Accept/Reject
+  card as before. Clicking Accept calls `trustController(controllerId)`
+  so the *next* attempt from that same controller skips the prompt too.
+- Agent UI gained a "Trusted devices" list (only rendered when non-empty)
+  showing each trusted controller's ID (truncated to 8 chars -- there's no
+  human-friendly name for a controller, unlike agents which have
+  `name`/`set-device-name`) with a **Remove** button
+  (`revokeController()`) that forces that controller back through the
+  Accept/Reject prompt on its next connection attempt. Revoking doesn't
+  touch the agent's PIN/deviceId at all -- it's purely "forget this
+  specific controller was previously approved."
+- Not click-verified for the same reason as the accept/reject feature
+  itself (coordinate-based clicking proved unreliable twice in this
+  session); the `controllerId` plumbing through `pair-request` ->
+  `connection-request` *was* confirmed live (no schema/validation
+  regressions, prompt still renders correctly with the new required
+  field) via another isolated local triple.
+
 ## Running locally
 
 Root of the repo:

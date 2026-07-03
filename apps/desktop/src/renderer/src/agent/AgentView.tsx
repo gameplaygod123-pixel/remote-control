@@ -6,6 +6,12 @@ import { SIGNALING_URL, AGENT_TOKEN, FIXED_PIN } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import CopyButton from '../shared/components/CopyButton'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
+import {
+  getTrustedControllers,
+  isTrustedController,
+  trustController,
+  revokeController
+} from '../shared/trustedControllers'
 
 // Cached after the first remote input message -- the agent's screen doesn't
 // resize mid-session, and re-querying nut.js on every mousemove would add
@@ -65,6 +71,8 @@ function AgentView(): React.JSX.Element {
   const [pin] = useState(() => FIXED_PIN ?? generatePin())
   const [status, setStatus] = useState('connecting to signaling server')
   const [incomingRequest, setIncomingRequest] = useState(false)
+  const [pendingControllerId, setPendingControllerId] = useState<string | null>(null)
+  const [trustedList, setTrustedList] = useState(getTrustedControllers)
   const [name, setName] = useState(getStoredName)
   const [nameDraft, setNameDraft] = useState(name)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -85,16 +93,31 @@ function AgentView(): React.JSX.Element {
   }
 
   // A correct PIN alone no longer opens the session -- the person at this
-  // machine has to explicitly let the connection through.
+  // machine has to explicitly let the connection through, once. Accepting
+  // remembers the controller so it skips this prompt next time (see the
+  // connection-request handler below) -- otherwise every reconnect from
+  // the same, already-trusted Mac would ask again, which given how often
+  // this app already auto-reconnects would get old fast.
   function handleAccept(): void {
     setIncomingRequest(false)
+    if (pendingControllerId) {
+      trustController(pendingControllerId)
+      setTrustedList(getTrustedControllers())
+    }
+    setPendingControllerId(null)
     clientRef.current?.send({ type: 'connection-response', deviceId, accept: true })
   }
 
   function handleReject(): void {
     setIncomingRequest(false)
+    setPendingControllerId(null)
     setStatus('waiting for controller to pair')
     clientRef.current?.send({ type: 'connection-response', deviceId, accept: false })
+  }
+
+  function handleRevoke(id: string): void {
+    revokeController(id)
+    setTrustedList(getTrustedControllers())
   }
 
   useEffect(() => {
@@ -152,8 +175,13 @@ function AgentView(): React.JSX.Element {
         if (message.type === 'register-result') {
           setStatus(message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`)
         } else if (message.type === 'connection-request') {
-          setIncomingRequest(true)
-          setStatus('incoming connection request')
+          if (isTrustedController(message.controllerId)) {
+            transport.send({ type: 'connection-response', deviceId, accept: true })
+          } else {
+            setPendingControllerId(message.controllerId)
+            setIncomingRequest(true)
+            setStatus('incoming connection request')
+          }
         } else if (message.type === 'pair-result' && message.ok) {
           // A re-pair can arrive while an old (e.g. failed) peer connection
           // is still around -- close it so we don't leak connections.
@@ -288,6 +316,29 @@ function AgentView(): React.JSX.Element {
         <video ref={videoRef} autoPlay muted />
         {!status.includes('connection') && <span className="video-frame__empty">Not sharing yet</span>}
       </div>
+
+      {trustedList.length > 0 && (
+        <div className="field-group">
+          <label className="field-label">Trusted devices (skip the approval prompt)</label>
+          <div className="trusted-list">
+            {trustedList.map((c) => (
+              <div key={c.id} className="trusted-list__row">
+                <span className="trusted-list__id">{c.id.slice(0, 8)}</span>
+                <span className="trusted-list__date">
+                  trusted {new Date(c.trustedAt).toLocaleDateString()}
+                </span>
+                <button
+                  className="trusted-list__revoke"
+                  onClick={() => handleRevoke(c.id)}
+                  title="Forget this device -- it'll need approval again next time"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

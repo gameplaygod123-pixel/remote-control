@@ -24,6 +24,7 @@ export const PairRequestMessage = z.object({
   type: z.literal("pair-request"),
   deviceId: z.string(),
   pin: z.string(),
+  controllerId: z.string(), // lets the agent recognize a previously-trusted controller
 });
 
 export const PairResultMessage = z.object({
@@ -115,10 +116,13 @@ export const DeviceThumbnailMessage = z.object({
 
 // A correct PIN alone no longer opens a live session -- the person at the
 // agent machine gets asked to accept or reject the incoming connection
-// first. Sent to the agent right after PIN verification succeeds.
+// first (unless the agent already recognizes this controllerId as
+// trusted from a prior accept, handled entirely client-side on the agent).
+// Sent to the agent right after PIN verification succeeds.
 export const ConnectionRequestMessage = z.object({
   type: z.literal("connection-request"),
   deviceId: z.string(),
+  controllerId: z.string(),
 });
 
 // The agent's answer to a ConnectionRequestMessage.
