@@ -10,6 +10,10 @@ export interface AgentRecord {
   online: boolean;
   name?: string;
   thumbnail?: string;
+  // A controller with a correct PIN, waiting on the agent operator to
+  // accept/reject before the session actually starts. Not the same as
+  // controllerWs, which is only set once the connection is truly live.
+  pendingControllerWs?: WebSocket | null;
 }
 
 export interface DeviceInfo {
@@ -97,6 +101,21 @@ export function pairController(deviceId: string, controllerWs: WebSocket): void 
   }
 }
 
+export function setPendingController(deviceId: string, ws: WebSocket): void {
+  const agent = agents.get(deviceId);
+  if (agent) agent.pendingControllerWs = ws;
+}
+
+// Consumes the pending controller, if any -- a given pending request can
+// only be resolved (accepted, rejected, or timed out) once.
+export function takePendingController(deviceId: string): WebSocket | null {
+  const agent = agents.get(deviceId);
+  if (!agent) return null;
+  const ws = agent.pendingControllerWs ?? null;
+  agent.pendingControllerWs = null;
+  return ws;
+}
+
 // Looks up which "other side" a message should be relayed to, given the ws
 // that sent it and the deviceId the message references.
 export function resolveRelayTarget(deviceId: string, senderWs: WebSocket): WebSocket | undefined {
@@ -107,20 +126,35 @@ export function resolveRelayTarget(deviceId: string, senderWs: WebSocket): WebSo
   return undefined;
 }
 
-// Returns the deviceId that just went offline, if the closed connection was
-// a registered agent, so the caller can broadcast the status change.
-export function removeConnection(ws: WebSocket): string | undefined {
+export interface RemoveConnectionResult {
+  // Set if the closed connection was a registered agent, so the caller can
+  // broadcast the status change.
+  offlineDeviceId?: string;
+  // Set if the closed connection was an agent that had a controller still
+  // waiting on an accept/reject decision -- that controller needs to be
+  // told the request failed rather than being left hanging forever.
+  orphanedPendingController?: WebSocket;
+}
+
+export function removeConnection(ws: WebSocket): RemoveConnectionResult {
   subscribedControllers.delete(ws);
   for (const [deviceId, agent] of agents) {
     if (agent.ws === ws) {
       agent.ws = null;
       agent.controllerWs = null;
       agent.online = false;
-      return deviceId;
+      const orphanedPendingController = agent.pendingControllerWs ?? undefined;
+      agent.pendingControllerWs = null;
+      return { offlineDeviceId: deviceId, orphanedPendingController };
     }
     if (agent.controllerWs === ws) {
       agent.controllerWs = null;
     }
+    // The pending controller itself disconnected while waiting -- clear it
+    // so the agent's prompt doesn't resolve into responding to no one.
+    if (agent.pendingControllerWs === ws) {
+      agent.pendingControllerWs = null;
+    }
   }
-  return undefined;
+  return {};
 }

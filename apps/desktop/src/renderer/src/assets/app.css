@@ -87,6 +87,35 @@
   color: var(--ev-c-text-2);
 }
 
+.connection-request {
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--warn-soft);
+  border: 1px solid rgba(245, 165, 36, 0.35);
+}
+
+.connection-request__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--warn);
+  margin-bottom: 6px;
+}
+
+.connection-request__body {
+  font-size: 13px;
+  color: var(--ev-c-text-2);
+  margin: 0 0 14px;
+}
+
+.connection-request__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.connection-request__actions .btn {
+  flex: 1;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;

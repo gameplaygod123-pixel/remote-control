@@ -64,6 +64,7 @@ function AgentView(): React.JSX.Element {
   const [deviceId] = useState(getOrCreateDeviceId)
   const [pin] = useState(() => FIXED_PIN ?? generatePin())
   const [status, setStatus] = useState('connecting to signaling server')
+  const [incomingRequest, setIncomingRequest] = useState(false)
   const [name, setName] = useState(getStoredName)
   const [nameDraft, setNameDraft] = useState(name)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -81,6 +82,19 @@ function AgentView(): React.JSX.Element {
     setNameDraft(trimmed)
     localStorage.setItem(DEVICE_NAME_KEY, trimmed)
     clientRef.current?.send({ type: 'set-device-name', deviceId, name: trimmed })
+  }
+
+  // A correct PIN alone no longer opens the session -- the person at this
+  // machine has to explicitly let the connection through.
+  function handleAccept(): void {
+    setIncomingRequest(false)
+    clientRef.current?.send({ type: 'connection-response', deviceId, accept: true })
+  }
+
+  function handleReject(): void {
+    setIncomingRequest(false)
+    setStatus('waiting for controller to pair')
+    clientRef.current?.send({ type: 'connection-response', deviceId, accept: false })
   }
 
   useEffect(() => {
@@ -137,9 +151,13 @@ function AgentView(): React.JSX.Element {
 
         if (message.type === 'register-result') {
           setStatus(message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`)
+        } else if (message.type === 'connection-request') {
+          setIncomingRequest(true)
+          setStatus('incoming connection request')
         } else if (message.type === 'pair-result' && message.ok) {
           // A re-pair can arrive while an old (e.g. failed) peer connection
           // is still around -- close it so we don't leak connections.
+          setIncomingRequest(false)
           pc?.close()
           setStatus('paired, starting screen share')
           pc = createPeerConnection(transport, deviceId, {
@@ -212,10 +230,27 @@ function AgentView(): React.JSX.Element {
       <div className="app-header">
         <div className="app-icon">🖥️</div>
         <div>
-          <div className="app-title">Agent</div>
+          <div className="app-title">Personal Remote Agent</div>
           <div className="app-subtitle">Give these to the controller to connect</div>
         </div>
       </div>
+
+      {incomingRequest && (
+        <div className="connection-request">
+          <div className="connection-request__title">Incoming connection request</div>
+          <p className="connection-request__body">
+            Someone entered the correct PIN and wants to connect to this computer.
+          </p>
+          <div className="connection-request__actions">
+            <button className="btn" onClick={handleAccept}>
+              Accept
+            </button>
+            <button className="btn btn--ghost" onClick={handleReject}>
+              Reject
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="field-group">
         <label className="field-label">Device name</label>

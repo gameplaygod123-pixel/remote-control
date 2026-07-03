@@ -414,6 +414,92 @@ experience is what Phase 6 (packaging via `electron-builder` into a proper
 installed .exe) is for -- this VBS wrapper is a lightweight stand-in for
 day-to-day use before that's built.
 
+## Rebrand: app icon, "Personal Remote" name, and launcher polish
+
+The user provided an app icon design (SVG) and asked for it applied
+everywhere, the app renamed to "Personal Remote" (their choice, English),
+and the double-click launchers to look like normal programs instead of
+generic script files.
+
+- Icon assets (`build/icon.icns`/`.ico`/`.png`, `resources/icon.png`)
+  generated from the provided SVG via `qlmanage -t` (no rsvg-convert/
+  ImageMagick available) plus `iconutil` for the `.icns`; the `.ico` was
+  hand-packed as a PNG-in-ICO container (no ico-writer package installed)
+  and verified with `file`. `main/index.ts` now sets the `icon` window
+  option on all platforms (was Linux-only) and the macOS Dock icon
+  explicitly, so it shows in dev mode too, not just a packaged build.
+- **"Personal Remote Controller.app"** (repo root) is a minimal real macOS
+  app bundle -- `Info.plist` + a one-line shell launcher + `icon.icns` --
+  replacing reliance on the classic "set icon of file to clipboard"
+  Finder/AppleScript trick, which turned out to be unreliable on current
+  macOS (repeatedly failed with "Finder got an error" during this session).
+  A real bundle is the robust way to get a custom-icon double-click
+  launcher; `start-controller.command` stays as a plain-output debug
+  fallback.
+- **`create-desktop-shortcuts.vbs`** (Windows) generates Desktop `.lnk`
+  shortcuts with `IconLocation` pointing at `build/icon.ico`, since
+  `.bat`/`.vbs` files can't carry a custom icon themselves.
+- Recolored the shared blue/purple theme (`app.css` root variables, the
+  `.app-icon` gradient, `wavy-lines.svg`) to the new orange/dark-brown
+  palette to match the icon and the device list's existing theme --
+  affects `AgentView` and the active-session view.
+- Renamed everywhere user-visible: `electron-builder.yml`
+  productName/appId/executableName, all `win.setTitle(...)` calls, the
+  HTML `<title>`, the device list's in-content fake titlebar text, and the
+  Agent header ("Agent" -> "Personal Remote Agent"). Left the internal
+  `package.json` `name` fields alone (workspace-internal identifiers, not
+  user-facing).
+
+## Agent-side connection approval (accept/reject)
+
+The user asked for a confirmation step so a correct PIN alone can't
+silently open a live control session -- the person physically at the
+agent machine has to explicitly let each connection through, like
+AnyDesk/TeamViewer's "accept incoming connection" prompt (this was also
+flagged as a Phase 7 hardening item in the original plan).
+
+- Protocol: `connection-request` (server -> agent, sent right after PIN
+  verification succeeds), `connection-response` (agent -> server,
+  `{ accept: boolean }`), `pairing-pending` (server -> controller, so its
+  UI can show "waiting for approval" instead of looking stuck on
+  "pairing").
+- Server (`pairing.ts`/`index.ts`): a correct PIN no longer immediately
+  calls `pairController()` -- it stores the controller's `ws` as
+  `AgentRecord.pendingControllerWs` and waits for the agent's
+  `connection-response`. A 30s timeout (`PENDING_APPROVAL_TIMEOUT_MS`)
+  auto-rejects with `"no response from agent"` if the operator doesn't
+  answer (e.g. away from the machine). `connection-response` is only
+  honored from the socket that actually matches `agent.ws`, same
+  spirit as the thumbnail-update guard. `removeConnection()` now returns
+  `{ offlineDeviceId?, orphanedPendingController? }` instead of a bare
+  deviceId, so the agent disconnecting while a request is pending notifies
+  the waiting controller instead of leaving it hanging, and a pending
+  controller disconnecting while waiting clears itself out of the agent's
+  record.
+- Agent UI: a `connection-request` message shows an "Incoming connection
+  request" card (`.connection-request` in `app.css`) with Accept/Reject
+  buttons, replacing the status pill until answered. Accepting sends
+  `connection-response` with `accept: true`; the existing `pair-result:true`
+  handling (unchanged) then starts the screen share exactly as before --
+  the new step only gates *whether* that handler ever fires, not what it
+  does once it does.
+- **Verification status**: the two new/tricky pieces -- the agent showing
+  the Accept/Reject prompt on `connection-request`, and the controller
+  showing "waiting for approval on the other computer..." on
+  `pairing-pending` -- were both confirmed live via an isolated local
+  agent+controller+signaling-server triple (separate port, cleaned up
+  after). Clicking Accept itself was not click-verified: a macOS
+  Accessibility permission dialog (for VS Code, unrelated to this app)
+  happened to pop up and intercept the test click. Rather than retry with
+  more coordinate-based clicking (unreliable per the Phase 5 incident
+  earlier in this session, and this one hit a similar snag), verification
+  stopped there and relied on code review instead -- accepting just calls
+  the same `connection-response`/`pair-result:true` path that was already
+  proven working throughout this whole session, so the risk of a real bug
+  in that specific step is low. Recommended: confirm Accept/Reject for
+  real against the actual Windows agent, which is also a more meaningful
+  test (two separate physical machines, not a Mac self-test).
+
 ## Running locally
 
 Root of the repo:

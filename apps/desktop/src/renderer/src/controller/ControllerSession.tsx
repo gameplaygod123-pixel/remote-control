@@ -163,7 +163,9 @@ export default function ControllerSession({
         if (!parsed.success) return
         const message = parsed.data
 
-        if (message.type === 'pair-result') {
+        if (message.type === 'pairing-pending') {
+          setStatus('waiting for approval on the other computer...')
+        } else if (message.type === 'pair-result') {
           if (!message.ok) {
             if (message.reason === 'unknown device id') {
               setStatus(`pairing failed: ${message.reason} (waiting for agent, retrying...)`)

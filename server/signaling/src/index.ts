@@ -14,6 +14,8 @@ import {
   getSubscribedControllers,
   setDeviceName,
   setDeviceThumbnail,
+  setPendingController,
+  takePendingController,
 } from "./pairing.js";
 
 const port = Number(process.env.PORT ?? 8080);
@@ -22,6 +24,20 @@ const wss = new WebSocketServer({ port });
 
 function send(ws: WebSocket, message: SignalingMessage): void {
   ws.send(JSON.stringify(message));
+}
+
+// How long a controller waits for a human at the agent to accept/reject
+// before giving up -- covers the agent operator being away, not just a
+// slow response.
+const PENDING_APPROVAL_TIMEOUT_MS = 30_000;
+const pendingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearPendingTimeout(deviceId: string): void {
+  const timeout = pendingTimeouts.get(deviceId);
+  if (timeout) {
+    clearTimeout(timeout);
+    pendingTimeouts.delete(deviceId);
+  }
 }
 
 // Re-reads current agent state rather than taking online/name as params, so
@@ -105,10 +121,43 @@ wss.on("connection", (socket) => {
           send(socket, { type: "pair-result", ok: false, reason: "incorrect pin" });
           return;
         }
-        pairController(message.deviceId, socket);
-        send(socket, { type: "pair-result", ok: true });
-        send(agent.ws, { type: "pair-result", ok: true });
-        console.log(`controller paired with agent: ${message.deviceId}`);
+        // Correct PIN alone doesn't open the session -- the agent operator
+        // still has to accept. Overwrites any previous pending request for
+        // this device (the newest request wins; the old one just times out
+        // with no one listening, which is fine).
+        setPendingController(message.deviceId, socket);
+        clearPendingTimeout(message.deviceId);
+        pendingTimeouts.set(
+          message.deviceId,
+          setTimeout(() => {
+            const pendingWs = takePendingController(message.deviceId);
+            pendingTimeouts.delete(message.deviceId);
+            if (pendingWs) {
+              send(pendingWs, { type: "pair-result", ok: false, reason: "no response from agent" });
+            }
+          }, PENDING_APPROVAL_TIMEOUT_MS),
+        );
+        send(agent.ws, { type: "connection-request", deviceId: message.deviceId });
+        send(socket, { type: "pairing-pending" });
+        console.log(`connection request pending approval: ${message.deviceId}`);
+        break;
+      }
+
+      case "connection-response": {
+        const agent = getAgent(message.deviceId);
+        if (!agent || agent.ws !== socket) break; // only the real agent may answer
+        clearPendingTimeout(message.deviceId);
+        const pendingWs = takePendingController(message.deviceId);
+        if (!pendingWs) break; // already resolved (timed out, controller left)
+        if (message.accept) {
+          pairController(message.deviceId, pendingWs);
+          send(pendingWs, { type: "pair-result", ok: true });
+          send(agent.ws, { type: "pair-result", ok: true });
+          console.log(`controller paired with agent: ${message.deviceId}`);
+        } else {
+          send(pendingWs, { type: "pair-result", ok: false, reason: "rejected by agent" });
+          console.log(`connection request rejected: ${message.deviceId}`);
+        }
         break;
       }
 
@@ -137,14 +186,26 @@ wss.on("connection", (socket) => {
       case "pong":
       case "device-list":
       case "device-status-changed":
+      case "connection-request":
+      case "pairing-pending":
         // Server-to-client only; ignore if a client somehow sends one.
         break;
     }
   });
 
   socket.on("close", () => {
-    const deviceId = removeConnection(socket);
-    if (deviceId) broadcastDeviceUpdate(deviceId);
+    const { offlineDeviceId, orphanedPendingController } = removeConnection(socket);
+    if (offlineDeviceId) {
+      clearPendingTimeout(offlineDeviceId);
+      broadcastDeviceUpdate(offlineDeviceId);
+    }
+    if (orphanedPendingController) {
+      send(orphanedPendingController, {
+        type: "pair-result",
+        ok: false,
+        reason: "agent disconnected",
+      });
+    }
     console.log("client disconnected");
   });
 });

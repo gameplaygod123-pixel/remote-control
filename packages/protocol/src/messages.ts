@@ -113,6 +113,27 @@ export const DeviceThumbnailMessage = z.object({
   image: z.string(), // data URL, e.g. "data:image/jpeg;base64,..."
 });
 
+// A correct PIN alone no longer opens a live session -- the person at the
+// agent machine gets asked to accept or reject the incoming connection
+// first. Sent to the agent right after PIN verification succeeds.
+export const ConnectionRequestMessage = z.object({
+  type: z.literal("connection-request"),
+  deviceId: z.string(),
+});
+
+// The agent's answer to a ConnectionRequestMessage.
+export const ConnectionResponseMessage = z.object({
+  type: z.literal("connection-response"),
+  deviceId: z.string(),
+  accept: z.boolean(),
+});
+
+// Sent to the controller in place of an immediate pair-result, so its UI
+// can show "waiting for approval" instead of looking stuck on "pairing".
+export const PairingPendingMessage = z.object({
+  type: z.literal("pairing-pending"),
+});
+
 export const SignalingMessage = z.discriminatedUnion("type", [
   RegisterAgentMessage,
   RegisterResultMessage,
@@ -128,6 +149,9 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   DeviceStatusChangedMessage,
   SetDeviceNameMessage,
   DeviceThumbnailMessage,
+  ConnectionRequestMessage,
+  ConnectionResponseMessage,
+  PairingPendingMessage,
 ]);
 
 export type SignalingMessage = z.infer<typeof SignalingMessage>;
