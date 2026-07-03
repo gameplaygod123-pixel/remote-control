@@ -5,6 +5,12 @@ import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
 import { clearCachedPin } from '../shared/devicePins'
 import StatusPill from '../shared/components/StatusPill'
+import { RemoteInputMessage, videoRelativePosition } from '../shared/input/inputProtocol'
+
+// Mousemove fires far more often than the remote side needs to react to --
+// this caps how frequently position updates cross the data channel without
+// making cursor movement feel laggy.
+const MOUSE_MOVE_THROTTLE_MS = 33
 
 // After a network drop -- or the agent machine being restarted by hand,
 // which can take an arbitrarily long time -- the controller and agent
@@ -27,6 +33,8 @@ export default function ControllerSession({
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
+  const inputChannelRef = useRef<RTCDataChannel | null>(null)
+  const lastMoveSentRef = useRef(0)
 
   function goBack(): void {
     window.api.window.setFullScreen(false)
@@ -34,6 +42,71 @@ export default function ControllerSession({
     pcRef.current?.close()
     onBack()
   }
+
+  function sendInput(message: RemoteInputMessage): void {
+    const channel = inputChannelRef.current
+    if (channel && channel.readyState === 'open') channel.send(JSON.stringify(message))
+  }
+
+  function buttonFromEvent(e: React.MouseEvent): 'left' | 'right' | 'middle' | null {
+    if (e.button === 0) return 'left'
+    if (e.button === 1) return 'middle'
+    if (e.button === 2) return 'right'
+    return null
+  }
+
+  function handleMouseMove(e: React.MouseEvent<HTMLVideoElement>): void {
+    const now = performance.now()
+    if (now - lastMoveSentRef.current < MOUSE_MOVE_THROTTLE_MS) return
+    const pos = videoRelativePosition(e.currentTarget, e.clientX, e.clientY)
+    if (!pos) return
+    lastMoveSentRef.current = now
+    sendInput({ t: 'move', x: pos.x, y: pos.y })
+  }
+
+  function handleMouseDown(e: React.MouseEvent<HTMLVideoElement>): void {
+    const button = buttonFromEvent(e)
+    if (!button) return
+    e.preventDefault()
+    sendInput({ t: 'down', button })
+  }
+
+  function handleMouseUp(e: React.MouseEvent<HTMLVideoElement>): void {
+    const button = buttonFromEvent(e)
+    if (!button) return
+    sendInput({ t: 'up', button })
+  }
+
+  function handleWheel(e: React.WheelEvent<HTMLVideoElement>): void {
+    e.preventDefault()
+    // Normalize a raw pixel delta down to roughly nut.js's "step" unit.
+    sendInput({ t: 'wheel', dy: e.deltaY / 40 })
+  }
+
+  // Forwards physical key events to the agent while the session is mounted.
+  // Escape is deliberately excluded -- it's reserved locally for
+  // disconnecting (see the effect below), not meant to reach the remote
+  // machine. preventDefault stops browser-native side effects (Backspace
+  // navigating back, Tab shifting focus, F5 reloading, arrow keys scrolling)
+  // that would otherwise fire alongside the forwarded key.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.code === 'Escape' || e.repeat) return
+      e.preventDefault()
+      sendInput({ t: 'keydown', code: e.code })
+    }
+    function handleKeyUp(e: KeyboardEvent): void {
+      if (e.code === 'Escape') return
+      e.preventDefault()
+      sendInput({ t: 'keyup', code: e.code })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
@@ -56,6 +129,7 @@ export default function ControllerSession({
           // connection (if any) is no longer valid -- start over.
           pcRef.current?.close()
           pcRef.current = null
+          inputChannelRef.current = null
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, pairing')
           client.send({ type: 'pair-request', deviceId, pin })
@@ -94,7 +168,11 @@ export default function ControllerSession({
           // is still around -- close it so we don't leak connections.
           pcRef.current?.close()
           setStatus('paired, waiting for video offer')
-          const pc = createPeerConnection(transport, deviceId)
+          const pc = createPeerConnection(transport, deviceId, {
+            onInputChannel: (channel) => {
+              inputChannelRef.current = channel
+            }
+          })
           pcRef.current = pc
           pc.onconnectionstatechange = () => {
             setStatus(`connection: ${pc.connectionState}`)
@@ -110,6 +188,7 @@ export default function ControllerSession({
             if (pc.connectionState === 'failed' && pcRef.current === pc) {
               pc.close()
               pcRef.current = null
+              inputChannelRef.current = null
               if (videoRef.current) videoRef.current.srcObject = null
               setTimeout(() => {
                 transport.send({ type: 'pair-request', deviceId, pin })
@@ -144,6 +223,7 @@ export default function ControllerSession({
       cancelled = true
       clientRef.current?.close()
       pcRef.current?.close()
+      inputChannelRef.current = null
       window.api.window.setFullScreen(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -164,7 +244,15 @@ export default function ControllerSession({
       <StatusPill status={status} />
 
       <div className="video-frame">
-        <video ref={videoRef} autoPlay />
+        <video
+          ref={videoRef}
+          autoPlay
+          onMouseMove={handleMouseMove}
+          onMouseDown={handleMouseDown}
+          onMouseUp={handleMouseUp}
+          onWheel={handleWheel}
+          onContextMenu={(e) => e.preventDefault()}
+        />
         {!status.startsWith('connection') && <span className="video-frame__empty">No video yet</span>}
       </div>
     </div>

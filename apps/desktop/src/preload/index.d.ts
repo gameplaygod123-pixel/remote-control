@@ -14,6 +14,10 @@ declare global {
         click: (button?: 'left' | 'right') => Promise<void>
         type: (text: string) => Promise<void>
         getPosition: () => Promise<{ x: number; y: number }>
+        mouseButton: (button: 'left' | 'right' | 'middle', down: boolean) => Promise<void>
+        scroll: (deltaY: number) => Promise<void>
+        key: (code: string, down: boolean) => Promise<void>
+        getScreenSize: () => Promise<{ width: number; height: number }>
       }
       clipboard: {
         write: (text: string) => Promise<void>

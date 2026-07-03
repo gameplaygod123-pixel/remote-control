@@ -5,6 +5,36 @@ import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL, AGENT_TOKEN, FIXED_PIN } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import CopyButton from '../shared/components/CopyButton'
+import type { RemoteInputMessage } from '../shared/input/inputProtocol'
+
+// Cached after the first remote input message -- the agent's screen doesn't
+// resize mid-session, and re-querying nut.js on every mousemove would add
+// needless latency to the hottest path.
+let cachedScreenSize: { width: number; height: number } | null = null
+
+async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
+  switch (message.t) {
+    case 'move': {
+      if (!cachedScreenSize) cachedScreenSize = await window.api.input.getScreenSize()
+      await window.api.input.move(
+        Math.round(message.x * cachedScreenSize.width),
+        Math.round(message.y * cachedScreenSize.height)
+      )
+      break
+    }
+    case 'down':
+    case 'up':
+      await window.api.input.mouseButton(message.button, message.t === 'down')
+      break
+    case 'wheel':
+      await window.api.input.scroll(message.dy)
+      break
+    case 'keydown':
+    case 'keyup':
+      await window.api.input.key(message.code, message.t === 'keydown')
+      break
+  }
+}
 
 const DEVICE_ID_KEY = 'remote-control-device-id'
 
@@ -68,7 +98,14 @@ function AgentView(): React.JSX.Element {
           // is still around -- close it so we don't leak connections.
           pc?.close()
           setStatus('paired, starting screen share')
-          pc = createPeerConnection(transport, deviceId)
+          pc = createPeerConnection(transport, deviceId, {
+            createInputChannel: true,
+            onInputChannel: (channel) => {
+              channel.onmessage = (event) => {
+                handleRemoteInput(JSON.parse(event.data) as RemoteInputMessage)
+              }
+            }
+          })
           pc.onconnectionstatechange = () => setStatus(`connection: ${pc!.connectionState}`)
 
           const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })

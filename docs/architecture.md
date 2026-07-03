@@ -88,7 +88,9 @@ packages/protocol/          shared Zod message schema (desktop app <-> signaling
     launch with no manual form/click needed. See `shared/config.ts`
     (`FIXED_PIN`, `AUTO_CONNECT_DEVICE_ID`). Manual entry still works if
     those env vars aren't set.
-- **Phase 5** (input over data channel, full remote-control loop): not started.
+- **Phase 5** (input over data channel, full remote-control loop): **implemented,
+  not yet live-verified end-to-end.** See the dedicated section below for what
+  was built, how it was checked, and what's still open.
 - **Phase 6** (packaging), **Phase 7** (security hardening): not started.
 
 ## Known issues found and fixed along the way
@@ -185,6 +187,78 @@ packages/protocol/          shared Zod message schema (desktop app <-> signaling
     Connect -> PIN prompt -> pair -> fullscreen -> live video; Escape
     returns to the list windowed; killing the agent flips the dot to gray
     in real time with no page refresh.
+
+## Phase 5: remote input over a WebRTC data channel
+
+Real mouse/keyboard control, not just video. Alongside the existing video
+`RTCPeerConnection`, the agent opens an `RTCDataChannel` named `"input"`
+(created before `createOffer()` so it's negotiated in the initial SDP --
+data channels are bidirectional once open regardless of which side created
+them, so the controller just picks it up via `pc.ondatachannel`).
+
+- **Coordinates are fractions (0..1) of the video content, not pixels.**
+  The controller only knows the decoded video's resolution, which may not
+  exactly match the agent's real screen (window resize, different scale
+  factors). `shared/input/inputProtocol.ts`'s `videoRelativePosition()`
+  accounts for `object-fit: contain` letterboxing when mapping a raw click
+  back to a 0..1 fraction, returning `null` for clicks that landed on a
+  letterbox bar. The agent then multiplies by its own `screen.width()` /
+  `screen.height()` (nut.js, hardware pixels -- matches what
+  `mouse.setPosition()` expects) to get an absolute coordinate.
+- **Mouse buttons use press/release (`mouse.pressButton`/`releaseButton`),
+  not `click()`** -- lets the controller hold a button across separate
+  mousemove events, which `click()` can't express. Needed for drag-to-select
+  and drag-and-drop, not just instantaneous clicks.
+- **Keyboard uses press/release by `KeyboardEvent.code`** (physical,
+  layout-independent), not `keyboard.type()`. `main/input/keyMap.ts` maps
+  each browser `code` to the matching nut.js `Key`, read directly from the
+  installed `@nut-tree-fork/shared` package's own enum (not guessed from
+  memory) to avoid silently-wrong key mappings. Real press/release (not
+  `type()`) is required for modifier combos (Ctrl+C) and holding a key --
+  neither is expressible as a single "type this string" call.
+- Mousemove is throttled client-side (`MOUSE_MOVE_THROTTLE_MS` in
+  `ControllerSession.tsx`) since it fires far more often than needed.
+- The channel reference is cleared (`inputChannelRef.current = null`)
+  everywhere the peer connection is torn down/replaced (reconnect,
+  re-pairing on `failed`, unmount) so a stale channel is never written to.
+
+**Verification status (honest account):** typecheck passes cleanly. Every
+new nut.js call (`Button.MIDDLE`, the full `Key` enum, `pressButton`/
+`releaseButton`, `scrollUp`/`scrollDown`, `screen.width`/`height`) was
+checked directly against the installed package's own `.d.ts` files, not
+assumed from memory -- same rigor as Phase 2's original click/type/move,
+which are unchanged. The data channel setup reuses the exact SDP/ICE
+negotiation pattern already proven live against the real Windows agent in
+Phase 4. What's **not yet done**: an actual live click/keystroke landing
+correctly on the real Windows agent.
+
+Live local testing (same-Mac agent+controller, or reusing the injector-test
+dev harness with real OS-level clicks/keystrokes) was attempted and
+abandoned partway through this session because it's inherently
+self-referential and risky: the agent screen-shares the *same physical
+screen* the controller is also displayed on, so a real click routed through
+the pipeline can land back on whatever's actually on that screen, and
+multiple same-named `Electron` processes running at once (production
+controller + a local test instance) made AppleScript UI automation
+dangerously ambiguous.
+
+**Real incident from this session:** an AppleScript command scoped by
+process *name* (`tell process "Electron"`) rather than PID, intended to
+dismiss a menu in a local test window, instead sent an Escape keystroke to
+the real production controller (there were two processes both named
+"Electron" running simultaneously) and disconnected it from the real
+Windows agent. No stray input reached the Windows agent itself -- Escape
+only affects the controller's own local UI -- but it did unexpectedly drop
+the live session. Recovered by killing and relaunching
+`start-controller.command`. **Lesson for future automation on this
+project: when more than one instance of the app might be running (very
+likely, given production + any local test), always scope AppleScript/System
+Events targeting by PID (`first process whose unix id is N`), never by
+process name.** Given this, and that the Windows agent is a genuinely
+separate machine (no self-mirroring risk, and no ambiguous-process-name
+problem since only one agent instance runs there), the recommended way to
+finish verifying Phase 5 is a real test against the actual Windows agent
+rather than more same-machine Mac-only testing.
 
 ## Running locally
 

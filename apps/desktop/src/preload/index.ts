@@ -21,7 +21,13 @@ const api = {
       ipcRenderer.invoke('input:click', button),
     type: (text: string): Promise<void> => ipcRenderer.invoke('input:type', text),
     getPosition: (): Promise<{ x: number; y: number }> =>
-      ipcRenderer.invoke('input:get-position')
+      ipcRenderer.invoke('input:get-position'),
+    mouseButton: (button: 'left' | 'right' | 'middle', down: boolean): Promise<void> =>
+      ipcRenderer.invoke('input:mouse-button', button, down),
+    scroll: (deltaY: number): Promise<void> => ipcRenderer.invoke('input:scroll', deltaY),
+    key: (code: string, down: boolean): Promise<void> => ipcRenderer.invoke('input:key', code, down),
+    getScreenSize: (): Promise<{ width: number; height: number }> =>
+      ipcRenderer.invoke('input:get-screen-size')
   },
   clipboard: {
     write: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write', text)

@@ -24,9 +24,20 @@ const ICE_SERVERS: RTCIceServer[] = [
   }
 ]
 
+export interface PeerConnectionOptions {
+  // The agent is always the SDP offerer (see AgentView/ControllerSession),
+  // so it's the one that must create the data channel for it to be
+  // negotiated in the initial offer. The controller instead receives it via
+  // ondatachannel below -- data channels are bidirectional once open
+  // regardless of which side created them.
+  createInputChannel?: boolean
+  onInputChannel?: (channel: RTCDataChannel) => void
+}
+
 export function createPeerConnection(
   transport: SignalTransport,
-  deviceId: string
+  deviceId: string,
+  options: PeerConnectionOptions = {}
 ): RTCPeerConnection {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
 
@@ -40,6 +51,14 @@ export function createPeerConnection(
         sdpMLineIndex: event.candidate.sdpMLineIndex
       })
     }
+  }
+
+  pc.ondatachannel = (event) => {
+    if (event.channel.label === 'input') options.onInputChannel?.(event.channel)
+  }
+
+  if (options.createInputChannel) {
+    options.onInputChannel?.(pc.createDataChannel('input'))
   }
 
   return pc

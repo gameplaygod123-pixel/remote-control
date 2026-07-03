@@ -2,7 +2,16 @@ import { app, shell, BrowserWindow, ipcMain, session, desktopCapturer, clipboard
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { moveMouse, clickMouse, typeText, getMousePosition } from './input/injector'
+import {
+  moveMouse,
+  clickMouse,
+  typeText,
+  getMousePosition,
+  mouseButtonToggle,
+  scrollMouse,
+  keyToggle,
+  getScreenSize
+} from './input/injector'
 
 // Agent mode runs on the Windows target (captures screen, injects input).
 // Controller mode runs on the Mac (views the stream, sends input).
@@ -115,6 +124,12 @@ app.whenReady().then(() => {
   ipcMain.handle('input:click', (_event, button: 'left' | 'right') => clickMouse(button))
   ipcMain.handle('input:type', (_event, text: string) => typeText(text))
   ipcMain.handle('input:get-position', () => getMousePosition())
+  ipcMain.handle('input:mouse-button', (_event, button: 'left' | 'right' | 'middle', down: boolean) =>
+    mouseButtonToggle(button, down)
+  )
+  ipcMain.handle('input:scroll', (_event, deltaY: number) => scrollMouse(deltaY))
+  ipcMain.handle('input:key', (_event, code: string, down: boolean) => keyToggle(code, down))
+  ipcMain.handle('input:get-screen-size', () => getScreenSize())
 
   // navigator.clipboard.writeText() can be flaky in Electron depending on
   // document focus; the native clipboard module always works.
