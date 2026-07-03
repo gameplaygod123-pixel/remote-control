@@ -1,0 +1,8 @@
+#!/bin/bash
+# Resolves to the repo root regardless of where this .app is double-clicked
+# from -- three levels up from Contents/MacOS is the .app bundle itself,
+# one more level up is the repo root.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$DIR/apps/desktop"
+export VITE_SIGNALING_URL="wss://worldcat-preferences-vocal-storage.trycloudflare.com"
+exec pnpm dev >> /tmp/personal-remote-launcher.log 2>&1

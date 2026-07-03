@@ -75,14 +75,14 @@ function createBrowserWindow(searchParams?: string): BrowserWindow {
 
 function createWindow(): void {
   const win = createBrowserWindow()
-  win.setTitle(`Remote Control - ${appMode}`)
+  win.setTitle(`Personal Remote - ${appMode}`)
 }
 
 function createLoopbackWindows(): void {
   const source = createBrowserWindow('role=source')
   const viewer = createBrowserWindow('role=viewer')
-  source.setTitle('Remote Control - loopback source')
-  viewer.setTitle('Remote Control - loopback viewer')
+  source.setTitle('Personal Remote - loopback source')
+  viewer.setTitle('Personal Remote - loopback viewer')
 
   const windows = [source, viewer]
   ipcMain.on('signal', (event, message) => {
@@ -97,8 +97,8 @@ function createLoopbackWindows(): void {
 function createInputTestWindows(): void {
   const injectorTest = createBrowserWindow('role=injector-test')
   const captureTest = createBrowserWindow('role=capture-test')
-  injectorTest.setTitle('Remote Control - injector test')
-  captureTest.setTitle('Remote Control - capture test')
+  injectorTest.setTitle('Personal Remote - injector test')
+  captureTest.setTitle('Personal Remote - capture test')
 }
 
 // This method will be called when Electron has finished
@@ -106,7 +106,7 @@ function createInputTestWindows(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.personalremote.app')
 
   // macOS ignores BrowserWindow's `icon` option for the Dock -- the Dock
   // icon needs to be set separately. Only matters for dev (`pnpm dev`);

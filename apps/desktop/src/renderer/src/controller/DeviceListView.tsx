@@ -128,7 +128,7 @@ export default function DeviceListView({
           <span />
           <span />
         </div>
-        <div className="dl-titletext">Remote Control — Computers</div>
+        <div className="dl-titletext">Personal Remote — Computers</div>
       </div>
 
       <div className="dl-body">

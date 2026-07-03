@@ -1,14 +1,14 @@
 :root {
-  --accent: #7c93ee;
-  --accent-soft: rgba(124, 147, 238, 0.15);
+  --accent: #e0793f;
+  --accent-soft: rgba(224, 121, 63, 0.15);
   --ok: #22c55e;
   --ok-soft: rgba(34, 197, 94, 0.15);
   --warn: #f5a524;
   --warn-soft: rgba(245, 165, 36, 0.15);
   --err: #ef4444;
   --err-soft: rgba(239, 68, 68, 0.15);
-  --panel: rgba(24, 26, 33, 0.72);
-  --panel-border: rgba(255, 255, 255, 0.08);
+  --panel: rgba(31, 23, 18, 0.72);
+  --panel-border: rgba(224, 121, 63, 0.12);
 }
 
 .app-shell {
@@ -39,7 +39,7 @@
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: linear-gradient(135deg, var(--accent), #4b63c9);
+  background: linear-gradient(135deg, var(--accent), #a8541f);
   display: flex;
   align-items: center;
   justify-content: center;
