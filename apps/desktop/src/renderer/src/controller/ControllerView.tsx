@@ -4,13 +4,13 @@ import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConn
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL, AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
 
-// After a network drop, the controller and agent reconnect independently --
-// there's no guarantee the agent finishes re-registering before the
-// controller re-sends its pair-request. Retry a few times on "unknown
-// device id" specifically (not on a wrong PIN -- that's a real error, not a
-// timing race) rather than failing permanently on what's likely just a race.
-const PAIR_RETRY_DELAY_MS = 2000
-const PAIR_RETRY_MAX_ATTEMPTS = 15
+// After a network drop -- or the agent machine being restarted by hand,
+// which can take an arbitrarily long time -- the controller and agent
+// reconnect independently with no ordering guarantee. Retry indefinitely on
+// "unknown device id" specifically (not on a wrong PIN -- that's a real
+// error, not a timing/availability issue) rather than giving up on what's
+// virtually always just the agent not being back yet.
+const PAIR_RETRY_DELAY_MS = 3000
 
 function ControllerView(): React.JSX.Element {
   const [deviceId, setDeviceId] = useState(AUTO_CONNECT_DEVICE_ID ?? '')
@@ -49,8 +49,6 @@ function ControllerView(): React.JSX.Element {
       onMessage: (handler) => client.onMessage(handler)
     }
 
-    let pairRetries = 0
-
     transport.onMessage(async (raw) => {
       const parsed = SignalingMessage.safeParse(raw)
       if (!parsed.success) return
@@ -58,9 +56,8 @@ function ControllerView(): React.JSX.Element {
 
       if (message.type === 'pair-result') {
         if (!message.ok) {
-          if (message.reason === 'unknown device id' && pairRetries < PAIR_RETRY_MAX_ATTEMPTS) {
-            pairRetries += 1
-            setStatus(`pairing failed: ${message.reason} (retrying...)`)
+          if (message.reason === 'unknown device id') {
+            setStatus(`pairing failed: ${message.reason} (waiting for agent, retrying...)`)
             setTimeout(() => {
               transport.send({ type: 'pair-request', deviceId: targetDeviceId, pin: targetPin })
             }, PAIR_RETRY_DELAY_MS)
@@ -69,7 +66,6 @@ function ControllerView(): React.JSX.Element {
           setStatus(`pairing failed: ${message.reason}`)
           return
         }
-        pairRetries = 0
         // A re-pair can arrive while an old (e.g. failed) peer connection
         // is still around -- close it so we don't leak connections.
         pcRef.current?.close()
