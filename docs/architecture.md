@@ -324,6 +324,41 @@ actually been exercised yet at the time of writing (real usage so far went
 through the single-device `VITE_DEVICE_ID`/`VITE_PIN` auto-connect launcher
 scripts, which bypass the device list entirely).
 
+**Confirmed working live** (2026-07-04): both device naming and PIN
+remembering tested by the user against the real Windows agent -- name
+shows correctly in the Mac's device list, reconnecting to an already-paired
+device no longer prompts for the PIN.
+
+## Device list thumbnails
+
+Originally deliberately skipped ("simple online/offline status dots... to
+save bandwidth" -- see the multi-device-list entry above) but added after
+the user asked for it once the list was actually in use. Each online agent
+captures a low-res (320x200, JPEG quality 70) screenshot via Electron's
+`desktopCapturer.getSources()` every `THUMBNAIL_INTERVAL_MS` (4s,
+`AgentView.tsx`) and pushes it through the signaling server
+(`device-thumbnail` message) to any controller currently browsing the
+device list.
+
+- This is deliberately **not** the real video track -- `desktopCapturer`'s
+  own thumbnail is cheap (no separate capture/encode pipeline) and the real
+  `getDisplayMedia`/WebRTC path only exists once a controller has actually
+  paired and opened a session, which the device list is explicitly *not*
+  doing yet.
+- Paused while a call is actively connected
+  (`pc?.connectionState === 'connected'` in `AgentView.tsx`) -- the
+  controller already has full live video at that point, so capturing and
+  sending a redundant low-res thumbnail nobody's looking at would just
+  waste the agent's upload bandwidth during the one time it matters most.
+- The server stores each agent's latest thumbnail (`AgentRecord.thumbnail`
+  in `pairing.ts`) and includes it in the initial `device-list` response,
+  so a controller that just opened the list sees a preview immediately
+  instead of waiting up to 4s for the next tick.
+- Sanity-checked server-side that the sender's `ws` actually matches the
+  registered agent for that `deviceId` before accepting a thumbnail update
+  -- cheap guard against a mismatched/rogue client, same spirit as the rest
+  of the pairing logic even though this is a personal-use app.
+
 ## Running locally
 
 Root of the repo:
