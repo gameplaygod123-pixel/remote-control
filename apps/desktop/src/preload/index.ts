@@ -22,6 +22,9 @@ const api = {
     type: (text: string): Promise<void> => ipcRenderer.invoke('input:type', text),
     getPosition: (): Promise<{ x: number; y: number }> =>
       ipcRenderer.invoke('input:get-position')
+  },
+  clipboard: {
+    write: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write', text)
   }
 }
 

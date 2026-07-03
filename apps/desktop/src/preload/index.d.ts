@@ -15,6 +15,9 @@ declare global {
         type: (text: string) => Promise<void>
         getPosition: () => Promise<{ x: number; y: number }>
       }
+      clipboard: {
+        write: (text: string) => Promise<void>
+      }
     }
   }
 }

@@ -4,6 +4,7 @@ import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConn
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL, AGENT_TOKEN, FIXED_PIN } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
+import CopyButton from '../shared/components/CopyButton'
 
 const DEVICE_ID_KEY = 'remote-control-device-id'
 
@@ -113,11 +114,17 @@ function AgentView(): React.JSX.Element {
       <div className="credential-grid">
         <div className="credential-box">
           <div className="credential-label">Device ID</div>
-          <div className="credential-value">{deviceId}</div>
+          <div className="credential-value-row">
+            <span className="credential-value">{deviceId}</span>
+            <CopyButton value={deviceId} />
+          </div>
         </div>
         <div className="credential-box">
           <div className="credential-label">PIN</div>
-          <div className="credential-value">{pin}</div>
+          <div className="credential-value-row">
+            <span className="credential-value">{pin}</span>
+            <CopyButton value={pin} />
+          </div>
           <div className="credential-hint">{FIXED_PIN ? 'fixed' : 'changes on restart'}</div>
         </div>
       </div>

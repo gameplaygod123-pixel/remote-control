@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, session, desktopCapturer } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, session, desktopCapturer, clipboard } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -115,6 +115,10 @@ app.whenReady().then(() => {
   ipcMain.handle('input:click', (_event, button: 'left' | 'right') => clickMouse(button))
   ipcMain.handle('input:type', (_event, text: string) => typeText(text))
   ipcMain.handle('input:get-position', () => getMousePosition())
+
+  // navigator.clipboard.writeText() can be flaky in Electron depending on
+  // document focus; the native clipboard module always works.
+  ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(text))
 
   // Grant getUserMedia/getDisplayMedia requests from the renderer (needed for screen capture).
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
