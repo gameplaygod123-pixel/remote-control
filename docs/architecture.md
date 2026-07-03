@@ -300,6 +300,30 @@ problem since only one agent instance runs there), the recommended way to
 finish verifying Phase 5 is a real test against the actual Windows agent
 rather than more same-machine Mac-only testing.
 
+## Device names
+
+Agents can set a human-friendly name (typed on the Agent's own screen,
+persisted in its `localStorage`) that the controller's device list shows
+instead of the raw numeric device ID. Renaming sends a dedicated
+`set-device-name` message rather than re-sending `register-agent` --
+re-registering resets the whole server-side `AgentRecord` (including
+`controllerWs`), which would disconnect an active session just to change a
+label. `pairing.ts`'s `setDeviceName()` mutates only the `name` field.
+`index.ts`'s `broadcastDeviceUpdate(deviceId)` re-reads the full current
+record (online + name) rather than taking them as params, so registration,
+disconnect, and rename all broadcast from one place instead of each call
+site needing to know the complete current state itself.
+
+Note the PIN-remembering behavior the device list already had before this
+(`shared/devicePins.ts`, cached in the controller's `localStorage` on first
+successful connect via `DeviceListView`'s `submitPin()`, cleared only on an
+"incorrect pin" pairing failure) -- reconnecting to an already-paired
+device from the list should already skip the PIN prompt with no code
+change needed here. Flagged as worth re-confirming live, since it hadn't
+actually been exercised yet at the time of writing (real usage so far went
+through the single-device `VITE_DEVICE_ID`/`VITE_PIN` auto-connect launcher
+scripts, which bypass the device list entirely).
+
 ## Running locally
 
 Root of the repo:
