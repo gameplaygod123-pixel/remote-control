@@ -108,8 +108,31 @@ function AgentView(): React.JSX.Element {
           })
           pc.onconnectionstatechange = () => setStatus(`connection: ${pc!.connectionState}`)
 
-          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
-          stream.getTracks().forEach((track) => pc!.addTrack(track, stream))
+          // frameRate: without an explicit ask, Chromium's screen-capture
+          // default can be quite conservative (sometimes ~5fps), which reads
+          // as "laggy" even though the connection itself is fine.
+          const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: { ideal: 30, max: 30 } }
+          })
+          const [videoTrack] = stream.getVideoTracks()
+          // Tells the encoder to prioritize smooth motion (cursor movement,
+          // scrolling) over per-frame sharpness -- the right tradeoff for a
+          // remote-control session, not a screen-recording.
+          if (videoTrack) videoTrack.contentHint = 'motion'
+
+          stream.getTracks().forEach((track) => {
+            const sender = pc!.addTrack(track, stream)
+            if (track.kind !== 'video') return
+            // WebRTC's default bandwidth estimate ramps up slowly and starts
+            // conservative, especially over a TURN relay -- a stale/blurry
+            // low-bitrate stream is easy to misread as network lag. Raising
+            // the ceiling lets it settle on a sharper, more responsive
+            // stream sooner once real available bandwidth allows it.
+            const params = sender.getParameters()
+            if (!params.encodings?.length) params.encodings = [{}]
+            params.encodings[0].maxBitrate = 4_000_000
+            sender.setParameters(params).catch(() => {})
+          })
           if (videoRef.current) videoRef.current.srcObject = stream
 
           const offer = await pc.createOffer()

@@ -230,8 +230,8 @@ export default function ControllerSession({
   }, [deviceId, pin])
 
   return (
-    <div className="app-shell app-shell--wide">
-      <div className="app-header">
+    <div className="session-shell">
+      <div className="session-header">
         <button className="btn btn--ghost" onClick={goBack} style={{ padding: '8px 14px' }}>
           ← Back
         </button>
@@ -239,11 +239,10 @@ export default function ControllerSession({
           <div className="app-title">{deviceId}</div>
           <div className="app-subtitle">Press Esc to disconnect</div>
         </div>
+        <StatusPill status={status} />
       </div>
 
-      <StatusPill status={status} />
-
-      <div className="video-frame">
+      <div className="session-video-area">
         <video
           ref={videoRef}
           autoPlay
