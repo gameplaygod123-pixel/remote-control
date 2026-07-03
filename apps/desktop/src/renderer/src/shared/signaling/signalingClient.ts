@@ -4,42 +4,100 @@ export interface SignalingClient extends SignalTransport {
   close(): void
 }
 
+export interface ConnectSignalingOptions {
+  // Fired after every RECONNECT (not the initial connect -- that's when the
+  // returned promise resolves). Use this to redo registration/pairing,
+  // since the server forgets all state (who's registered, who's paired)
+  // the moment a connection drops.
+  onReconnect?: () => void
+  // Fired when a previously-open connection drops, before a reconnect
+  // attempt is scheduled. Useful for reflecting "reconnecting..." in the UI.
+  onDisconnect?: () => void
+}
+
 // Sent well under the ~1-2 minute idle-connection timeout typical of free
-// tunnels/proxies (e.g. a Cloudflare quick tunnel) so the WebSocket -- and
-// the agent's registration/pairing state on the server -- doesn't silently
-// die from inactivity between signaling messages.
+// tunnels/proxies (e.g. a Cloudflare quick tunnel) so the WebSocket doesn't
+// silently die from inactivity between signaling messages.
 const HEARTBEAT_INTERVAL_MS = 25_000
 
-// Connects to the real signaling server over WebSocket. Implements the same
-// SignalTransport interface as the Phase 1 IPC-relay transport, so
-// createPeerConnection() and the pairing/SDP message handlers don't need to
-// change when swapping one for the other.
-export function connectSignaling(url: string): Promise<SignalingClient> {
+// Reconnect backoff after a real drop (network blip, tunnel restart, etc.).
+// Capped at 30s so it doesn't hammer the server but still recovers promptly.
+const RECONNECT_MIN_DELAY_MS = 1_000
+const RECONNECT_MAX_DELAY_MS = 30_000
+
+// Connects to the real signaling server over WebSocket, with automatic
+// reconnection on drop. Implements the same SignalTransport interface as
+// the Phase 1 IPC-relay transport, so createPeerConnection() and the
+// pairing/SDP message handlers don't need to change when swapping one for
+// the other.
+export function connectSignaling(
+  url: string,
+  options: ConnectSignalingOptions = {}
+): Promise<SignalingClient> {
+  const handlers: Array<(message: unknown) => void> = []
+  let ws: WebSocket | null = null
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+  let reconnectDelay = RECONNECT_MIN_DELAY_MS
+  let stopped = false
+  let settled = false
+
+  const client: SignalingClient = {
+    send: (message) => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message))
+    },
+    onMessage: (handler) => handlers.push(handler),
+    close: () => {
+      stopped = true
+      if (heartbeatTimer) clearInterval(heartbeatTimer)
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      ws?.close()
+    }
+  }
+
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url)
-    const handlers: Array<(message: unknown) => void> = []
+    function connectOnce(): void {
+      const socket = new WebSocket(url)
+      ws = socket
 
-    ws.addEventListener('open', () => {
-      const heartbeat = setInterval(() => {
-        ws.send(JSON.stringify({ type: 'ping' }))
-      }, HEARTBEAT_INTERVAL_MS)
-      ws.addEventListener('close', () => clearInterval(heartbeat))
+      socket.addEventListener('open', () => {
+        reconnectDelay = RECONNECT_MIN_DELAY_MS
+        heartbeatTimer = setInterval(() => {
+          socket.send(JSON.stringify({ type: 'ping' }))
+        }, HEARTBEAT_INTERVAL_MS)
 
-      resolve({
-        send: (message) => ws.send(JSON.stringify(message)),
-        onMessage: (handler) => handlers.push(handler),
-        close: () => {
-          clearInterval(heartbeat)
-          ws.close()
+        if (!settled) {
+          settled = true
+          resolve(client)
+        } else {
+          options.onReconnect?.()
         }
       })
-    })
 
-    ws.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data as string)
-      handlers.forEach((handler) => handler(message))
-    })
+      socket.addEventListener('message', (event) => {
+        const message = JSON.parse(event.data as string)
+        handlers.forEach((handler) => handler(message))
+      })
 
-    ws.addEventListener('error', () => reject(new Error(`failed to connect to ${url}`)))
+      socket.addEventListener('close', () => {
+        if (heartbeatTimer) clearInterval(heartbeatTimer)
+
+        if (!settled) {
+          settled = true
+          reject(new Error(`failed to connect to ${url}`))
+          return
+        }
+
+        if (!stopped) {
+          options.onDisconnect?.()
+          reconnectTimer = setTimeout(() => {
+            reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_DELAY_MS)
+            connectOnce()
+          }, reconnectDelay)
+        }
+      })
+    }
+
+    connectOnce()
   })
 }

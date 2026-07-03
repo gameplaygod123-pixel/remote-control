@@ -4,6 +4,14 @@ import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConn
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL, AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
 
+// After a network drop, the controller and agent reconnect independently --
+// there's no guarantee the agent finishes re-registering before the
+// controller re-sends its pair-request. Retry a few times on "unknown
+// device id" specifically (not on a wrong PIN -- that's a real error, not a
+// timing race) rather than failing permanently on what's likely just a race.
+const PAIR_RETRY_DELAY_MS = 2000
+const PAIR_RETRY_MAX_ATTEMPTS = 15
+
 function ControllerView(): React.JSX.Element {
   const [deviceId, setDeviceId] = useState(AUTO_CONNECT_DEVICE_ID ?? '')
   const [pin, setPin] = useState(FIXED_PIN ?? '')
@@ -12,15 +20,36 @@ function ControllerView(): React.JSX.Element {
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
 
-  async function connect(targetDeviceId: string, targetPin: string): Promise<void> {
+  async function connect(
+    targetDeviceId: string,
+    targetPin: string,
+    isCancelled: () => boolean = () => false
+  ): Promise<void> {
     setStatus('connecting to signaling server')
-    const client = await connectSignaling(SIGNALING_URL)
+    const client = await connectSignaling(SIGNALING_URL, {
+      onDisconnect: () => setStatus('disconnected, reconnecting...'),
+      onReconnect: () => {
+        // The server forgets pairing on disconnect, and the old peer
+        // connection (if any) is no longer valid -- start over.
+        pcRef.current?.close()
+        pcRef.current = null
+        if (videoRef.current) videoRef.current.srcObject = null
+        setStatus('reconnected, pairing')
+        client.send({ type: 'pair-request', deviceId: targetDeviceId, pin: targetPin })
+      }
+    })
+    if (isCancelled()) {
+      client.close()
+      return
+    }
     clientRef.current = client
 
     const transport: SignalTransport = {
       send: (message) => client.send(message),
       onMessage: (handler) => client.onMessage(handler)
     }
+
+    let pairRetries = 0
 
     transport.onMessage(async (raw) => {
       const parsed = SignalingMessage.safeParse(raw)
@@ -29,9 +58,18 @@ function ControllerView(): React.JSX.Element {
 
       if (message.type === 'pair-result') {
         if (!message.ok) {
+          if (message.reason === 'unknown device id' && pairRetries < PAIR_RETRY_MAX_ATTEMPTS) {
+            pairRetries += 1
+            setStatus(`pairing failed: ${message.reason} (retrying...)`)
+            setTimeout(() => {
+              transport.send({ type: 'pair-request', deviceId: targetDeviceId, pin: targetPin })
+            }, PAIR_RETRY_DELAY_MS)
+            return
+          }
           setStatus(`pairing failed: ${message.reason}`)
           return
         }
+        pairRetries = 0
         setStatus('paired, waiting for video offer')
         const pc = createPeerConnection(transport, targetDeviceId)
         pcRef.current = pc
@@ -59,8 +97,15 @@ function ControllerView(): React.JSX.Element {
   }
 
   useEffect(() => {
-    if (AUTO_CONNECT_DEVICE_ID && FIXED_PIN) {
-      connect(AUTO_CONNECT_DEVICE_ID, FIXED_PIN).catch((error) => setStatus(`error: ${String(error)}`))
+    if (!(AUTO_CONNECT_DEVICE_ID && FIXED_PIN)) return
+    let cancelled = false
+    connect(AUTO_CONNECT_DEVICE_ID, FIXED_PIN, () => cancelled).catch((error) =>
+      setStatus(`error: ${String(error)}`)
+    )
+    return () => {
+      cancelled = true
+      clientRef.current?.close()
+      pcRef.current?.close()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

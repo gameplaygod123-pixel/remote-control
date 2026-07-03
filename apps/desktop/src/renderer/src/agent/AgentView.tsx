@@ -26,16 +26,32 @@ function AgentView(): React.JSX.Element {
 
   useEffect(() => {
     let pc: RTCPeerConnection | undefined
+    let client: Awaited<ReturnType<typeof connectSignaling>> | undefined
     let cancelled = false
 
     async function start(): Promise<void> {
-      const client = await connectSignaling(SIGNALING_URL)
-      if (cancelled) return
+      client = await connectSignaling(SIGNALING_URL, {
+        onDisconnect: () => setStatus('disconnected, reconnecting...'),
+        onReconnect: () => {
+          // The server forgets registration/pairing on disconnect, and the
+          // old peer connection (if any) is no longer valid -- start over.
+          pc?.close()
+          pc = undefined
+          if (videoRef.current) videoRef.current.srcObject = null
+          setStatus('reconnected, registering')
+          client!.send({ type: 'register-agent', token: AGENT_TOKEN, deviceId, pin })
+        }
+      })
+      if (cancelled) {
+        client.close()
+        return
+      }
+      const activeClient = client
       setStatus('registering')
 
       const transport: SignalTransport = {
-        send: (message) => client.send(message),
-        onMessage: (handler) => client.onMessage(handler)
+        send: (message) => activeClient.send(message),
+        onMessage: (handler) => activeClient.onMessage(handler)
       }
 
       transport.onMessage(async (raw) => {
@@ -76,6 +92,7 @@ function AgentView(): React.JSX.Element {
     return () => {
       cancelled = true
       pc?.close()
+      client?.close()
     }
   }, [deviceId, pin])
 

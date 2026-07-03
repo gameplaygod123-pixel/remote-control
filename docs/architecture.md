@@ -116,6 +116,29 @@ packages/protocol/          shared Zod message schema (desktop app <-> signaling
   `signalingClient.ts`), server replies `pong`. Confirmed via a 200s soak
   test with no disconnect. If pairing ever again fails with "unknown device
   id" right after a period of inactivity, suspect this class of bug first.
+- **Auto-reconnect added** for real network drops (not just idle timeouts):
+  `signalingClient.ts` now retries with exponential backoff (1s up to a
+  30s cap) on disconnect, and exposes `onReconnect`/`onDisconnect` hooks so
+  `AgentView`/`ControllerView` can redo registration/pairing, since the
+  server forgets all state when a connection drops. Two real bugs surfaced
+  while building and testing this:
+  - **React StrictMode (dev mode) double-invokes effects**, and the old
+    cleanup only closed the RTCPeerConnection, not the signaling
+    `SignalingClient` itself -- leaving an orphaned, never-registered
+    WebSocket connection alive that could win a race and "steal" a
+    registration slot from the real one after a reconnect. Fixed by
+    tracking the client in the effect's closure and calling `client.close()`
+    both in cleanup and in the cancelled-check path right after connecting.
+  - **Reconnect race**: after a real drop, the agent and controller
+    reconnect independently with no ordering guarantee -- the controller's
+    re-sent `pair-request` can arrive before the agent finishes
+    re-registering, permanently failing with "unknown device id" since
+    there was no retry. Fixed by retrying the pair-request every 2s (up to
+    15 attempts) specifically on that failure reason (not on a wrong PIN --
+    that's a real error, not a timing race).
+  - Verified by killing and restarting an isolated test signaling server
+    mid-session and confirming both sides recover to a fully connected
+    video call with no manual intervention.
 
 ## Running locally
 
