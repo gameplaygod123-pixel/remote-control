@@ -3,6 +3,7 @@ import { connectSignaling, SignalingClient } from '../shared/signaling/signaling
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL, AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
+import StatusPill from '../shared/components/StatusPill'
 
 // After a network drop -- or the agent machine being restarted by hand,
 // which can take an arbitrarily long time -- the controller and agent
@@ -126,18 +127,52 @@ function ControllerView(): React.JSX.Element {
   }, [])
 
   return (
-    <div style={{ padding: 16 }}>
-      <h1>Controller</h1>
-      <p>
-        Device ID:{' '}
-        <input value={deviceId} onChange={(e) => setDeviceId(e.target.value)} placeholder="123456789" />
-      </p>
-      <p>
-        PIN: <input value={pin} onChange={(e) => setPin(e.target.value)} placeholder="123456" />
-      </p>
-      <button onClick={() => connect(deviceId, pin)}>Connect</button>
-      <p>status: {status}</p>
-      <video ref={videoRef} autoPlay style={{ width: 800 }} />
+    <div className="app-shell app-shell--wide">
+      <div className="app-header">
+        <div className="app-icon">🎮</div>
+        <div>
+          <div className="app-title">Controller</div>
+          <div className="app-subtitle">Connect to a remote agent</div>
+        </div>
+      </div>
+
+      <div className="credential-grid">
+        <div className="field-group">
+          <label className="field-label" htmlFor="device-id">
+            Device ID
+          </label>
+          <input
+            id="device-id"
+            className="field-input"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+            placeholder="123456789"
+          />
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="pin">
+            PIN
+          </label>
+          <input
+            id="pin"
+            className="field-input"
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            placeholder="123456"
+          />
+        </div>
+      </div>
+
+      <button className="btn" onClick={() => connect(deviceId, pin)} style={{ alignSelf: 'flex-start' }}>
+        Connect
+      </button>
+
+      <StatusPill status={status} />
+
+      <div className="video-frame">
+        <video ref={videoRef} autoPlay />
+        {!status.startsWith('connection') && <span className="video-frame__empty">No video yet</span>}
+      </div>
     </div>
   )
 }

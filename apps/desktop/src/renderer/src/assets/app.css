@@ -1,0 +1,225 @@
+:root {
+  --accent: #7c93ee;
+  --accent-soft: rgba(124, 147, 238, 0.15);
+  --ok: #22c55e;
+  --ok-soft: rgba(34, 197, 94, 0.15);
+  --warn: #f5a524;
+  --warn-soft: rgba(245, 165, 36, 0.15);
+  --err: #ef4444;
+  --err-soft: rgba(239, 68, 68, 0.15);
+  --panel: rgba(24, 26, 33, 0.72);
+  --panel-border: rgba(255, 255, 255, 0.08);
+}
+
+.app-shell {
+  width: 100%;
+  max-width: 460px;
+  padding: 32px;
+  border-radius: 20px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.app-shell--wide {
+  max-width: 720px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), #4b63c9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.app-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ev-c-text-1);
+}
+
+.app-subtitle {
+  font-size: 13px;
+  color: var(--ev-c-text-2);
+  margin-top: 2px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.status-pill.is-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.status-pill.is-error {
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+.status-pill.is-idle {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ev-c-text-2);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-dot.is-pulsing {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.credential-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.credential-box {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-border);
+}
+
+.credential-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ev-c-text-3);
+  margin-bottom: 6px;
+}
+
+.credential-value {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ev-c-text-1);
+  letter-spacing: 0.03em;
+}
+
+.credential-hint {
+  font-size: 12px;
+  color: var(--ev-c-text-3);
+  margin-top: 4px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ev-c-text-2);
+}
+
+.field-input {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 15px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ev-c-text-1);
+  outline: none;
+  transition:
+    border-color 150ms,
+    background 150ms;
+}
+
+.field-input:focus {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.field-input::placeholder {
+  color: var(--ev-c-text-3);
+}
+
+.btn {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 18px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #0d0f14;
+  cursor: pointer;
+  transition:
+    filter 150ms,
+    transform 100ms;
+}
+
+.btn:hover {
+  filter: brightness(1.08);
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.video-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0a0b0e;
+  border: 1px solid var(--panel-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.video-frame__empty {
+  color: var(--ev-c-text-3);
+  font-size: 13px;
+}

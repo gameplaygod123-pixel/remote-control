@@ -4,10 +4,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  overflow: auto;
   background-image: url('./wavy-lines.svg');
   background-size: cover;
   user-select: none;
+  padding: 24px;
 }
 
 code {
@@ -31,7 +32,7 @@ code {
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  margin-bottom: 80px;
+  width: 100%;
 }
 
 .logo {

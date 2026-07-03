@@ -3,6 +3,7 @@ import { connectSignaling } from '../shared/signaling/signalingClient'
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL, AGENT_TOKEN, FIXED_PIN } from '../shared/config'
+import StatusPill from '../shared/components/StatusPill'
 
 const DEVICE_ID_KEY = 'remote-control-device-id'
 
@@ -100,17 +101,33 @@ function AgentView(): React.JSX.Element {
   }, [deviceId, pin])
 
   return (
-    <div style={{ padding: 16 }}>
-      <h1>Agent</h1>
-      <p>Give these to the controller to connect:</p>
-      <p>
-        Device ID: <strong>{deviceId}</strong>
-      </p>
-      <p>
-        PIN: <strong>{pin}</strong> {FIXED_PIN ? '(fixed)' : '(changes each time this app restarts)'}
-      </p>
-      <p>status: {status}</p>
-      <video ref={videoRef} autoPlay muted style={{ width: 300 }} />
+    <div className="app-shell">
+      <div className="app-header">
+        <div className="app-icon">🖥️</div>
+        <div>
+          <div className="app-title">Agent</div>
+          <div className="app-subtitle">Give these to the controller to connect</div>
+        </div>
+      </div>
+
+      <div className="credential-grid">
+        <div className="credential-box">
+          <div className="credential-label">Device ID</div>
+          <div className="credential-value">{deviceId}</div>
+        </div>
+        <div className="credential-box">
+          <div className="credential-label">PIN</div>
+          <div className="credential-value">{pin}</div>
+          <div className="credential-hint">{FIXED_PIN ? 'fixed' : 'changes on restart'}</div>
+        </div>
+      </div>
+
+      <StatusPill status={status} />
+
+      <div className="video-frame">
+        <video ref={videoRef} autoPlay muted />
+        {!status.includes('connection') && <span className="video-frame__empty">Not sharing yet</span>}
+      </div>
     </div>
   )
 }
