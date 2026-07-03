@@ -131,6 +131,20 @@ app.whenReady().then(() => {
   ipcMain.handle('input:key', (_event, code: string, down: boolean) => keyToggle(code, down))
   ipcMain.handle('input:get-screen-size', () => getScreenSize())
 
+  // Low-res preview for the controller's device list -- deliberately using
+  // desktopCapturer's own downscaled thumbnail (cheap, no separate encode
+  // step) rather than reusing the full getDisplayMedia/WebRTC video path,
+  // which only exists once a controller has actually paired for a session.
+  ipcMain.handle('agent:capture-thumbnail', async (): Promise<string | null> => {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 320, height: 200 }
+    })
+    const thumbnail = sources[0]?.thumbnail
+    if (!thumbnail || thumbnail.isEmpty()) return null
+    return `data:image/jpeg;base64,${thumbnail.toJPEG(70).toString('base64')}`
+  })
+
   // navigator.clipboard.writeText() can be flaky in Electron depending on
   // document focus; the native clipboard module always works.
   ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(text))

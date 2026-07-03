@@ -32,6 +32,9 @@ const api = {
   clipboard: {
     write: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write', text)
   },
+  agent: {
+    captureThumbnail: (): Promise<string | null> => ipcRenderer.invoke('agent:capture-thumbnail')
+  },
   window: {
     setFullScreen: (value: boolean): Promise<void> =>
       ipcRenderer.invoke('window:set-fullscreen', value)

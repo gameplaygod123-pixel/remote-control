@@ -9,6 +9,7 @@ interface Device {
   deviceId: string
   online: boolean
   name?: string
+  thumbnail?: string
 }
 
 export default function DeviceListView({
@@ -38,6 +39,10 @@ export default function DeviceListView({
       })
     }
 
+    function applyThumbnail(deviceId: string, thumbnail: string): void {
+      setDevices((prev) => prev.map((d) => (d.deviceId === deviceId ? { ...d, thumbnail } : d)))
+    }
+
     connectSignaling(SIGNALING_URL, {
       onDisconnect: () => setStatus('disconnected, reconnecting...'),
       onReconnect: () => {
@@ -60,6 +65,8 @@ export default function DeviceListView({
           if (message.type === 'device-list') applyDeviceList(message.devices)
           else if (message.type === 'device-status-changed') {
             applyStatusChange(message.deviceId, message.online, message.name)
+          } else if (message.type === 'device-thumbnail') {
+            applyThumbnail(message.deviceId, message.image)
           }
         })
 
@@ -107,6 +114,15 @@ export default function DeviceListView({
         <div className="device-grid">
           {devices.map((device) => (
             <div key={device.deviceId} className="device-card">
+              <div className={`device-card__thumbnail ${device.online ? '' : 'is-offline'}`}>
+                {device.thumbnail ? (
+                  <img src={device.thumbnail} alt="" />
+                ) : (
+                  <span className="device-card__thumbnail-empty">
+                    {device.online ? 'waiting for preview...' : 'offline'}
+                  </span>
+                )}
+              </div>
               <div className="device-card__header">
                 <span className={`status-dot-inline ${device.online ? 'is-ok' : 'is-idle'}`} />
                 <div>

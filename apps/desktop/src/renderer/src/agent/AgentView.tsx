@@ -58,6 +58,8 @@ function generatePin(): string {
   return String(Math.floor(100_000 + Math.random() * 900_000))
 }
 
+const THUMBNAIL_INTERVAL_MS = 4000
+
 function AgentView(): React.JSX.Element {
   const [deviceId] = useState(getOrCreateDeviceId)
   const [pin] = useState(() => FIXED_PIN ?? generatePin())
@@ -85,6 +87,16 @@ function AgentView(): React.JSX.Element {
     let pc: RTCPeerConnection | undefined
     let client: Awaited<ReturnType<typeof connectSignaling>> | undefined
     let cancelled = false
+
+    // Low-res device-list preview -- paused while a real call is connected
+    // (pc.connectionState === 'connected') since the controller already has
+    // full live video at that point and there's no point spending capture
+    // time/bandwidth on a thumbnail nobody's looking at.
+    const thumbnailInterval = setInterval(async () => {
+      if (cancelled || pc?.connectionState === 'connected') return
+      const image = await window.api.agent.captureThumbnail()
+      if (image) client?.send({ type: 'device-thumbnail', deviceId, image })
+    }, THUMBNAIL_INTERVAL_MS)
 
     async function start(): Promise<void> {
       client = await connectSignaling(SIGNALING_URL, {
@@ -188,6 +200,7 @@ function AgentView(): React.JSX.Element {
 
     return () => {
       cancelled = true
+      clearInterval(thumbnailInterval)
       clientRef.current = null
       pc?.close()
       client?.close()

@@ -22,6 +22,9 @@ declare global {
       clipboard: {
         write: (text: string) => Promise<void>
       }
+      agent: {
+        captureThumbnail: () => Promise<string | null>
+      }
       window: {
         setFullScreen: (value: boolean) => Promise<void>
       }

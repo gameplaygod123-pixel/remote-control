@@ -74,6 +74,7 @@ export const DeviceInfo = z.object({
   deviceId: z.string(),
   online: z.boolean(),
   name: z.string().optional(),
+  thumbnail: z.string().optional(), // data URL, low-res preview -- see device-thumbnail
 });
 
 export const DeviceListMessage = z.object({
@@ -101,6 +102,17 @@ export const SetDeviceNameMessage = z.object({
   name: z.string(),
 });
 
+// A low-res (~320x200), throttled preview screenshot pushed by an online
+// agent every few seconds so the controller's device list can show what
+// each machine currently looks like, Parsec/AnyDesk-style -- separate from
+// the real video track, which only exists once a controller actually pairs
+// and opens a full session.
+export const DeviceThumbnailMessage = z.object({
+  type: z.literal("device-thumbnail"),
+  deviceId: z.string(),
+  image: z.string(), // data URL, e.g. "data:image/jpeg;base64,..."
+});
+
 export const SignalingMessage = z.discriminatedUnion("type", [
   RegisterAgentMessage,
   RegisterResultMessage,
@@ -115,6 +127,7 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   DeviceListMessage,
   DeviceStatusChangedMessage,
   SetDeviceNameMessage,
+  DeviceThumbnailMessage,
 ]);
 
 export type SignalingMessage = z.infer<typeof SignalingMessage>;

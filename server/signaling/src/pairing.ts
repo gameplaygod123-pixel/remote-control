@@ -9,12 +9,14 @@ export interface AgentRecord {
   failedAttempts: number;
   online: boolean;
   name?: string;
+  thumbnail?: string;
 }
 
 export interface DeviceInfo {
   deviceId: string;
   online: boolean;
   name?: string;
+  thumbnail?: string;
 }
 
 // In-memory only -- fine for a personal, single-user relay. Restarting the
@@ -40,6 +42,7 @@ export function registerAgent(
     failedAttempts: 0,
     online: true,
     name: name ?? existing?.name,
+    thumbnail: existing?.thumbnail,
   });
 }
 
@@ -54,11 +57,17 @@ export function setDeviceName(deviceId: string, name: string): void {
   if (agent) agent.name = name;
 }
 
+export function setDeviceThumbnail(deviceId: string, image: string): void {
+  const agent = agents.get(deviceId);
+  if (agent) agent.thumbnail = image;
+}
+
 export function listDevices(): DeviceInfo[] {
   return [...agents.entries()].map(([deviceId, agent]) => ({
     deviceId,
     online: agent.online,
     name: agent.name,
+    thumbnail: agent.thumbnail,
   }));
 }
 

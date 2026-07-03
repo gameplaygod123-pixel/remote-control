@@ -13,6 +13,7 @@ import {
   subscribeToDeviceList,
   getSubscribedControllers,
   setDeviceName,
+  setDeviceThumbnail,
 } from "./pairing.js";
 
 const port = Number(process.env.PORT ?? 8080);
@@ -69,6 +70,22 @@ wss.on("connection", (socket) => {
       case "set-device-name": {
         setDeviceName(message.deviceId, message.name);
         broadcastDeviceUpdate(message.deviceId);
+        break;
+      }
+
+      case "device-thumbnail": {
+        // Only the agent that actually owns this deviceId may update its
+        // thumbnail -- cheap sanity check against a mismatched/rogue sender.
+        const agent = getAgent(message.deviceId);
+        if (!agent || agent.ws !== socket) break;
+        setDeviceThumbnail(message.deviceId, message.image);
+        for (const controllerWs of getSubscribedControllers()) {
+          send(controllerWs, {
+            type: "device-thumbnail",
+            deviceId: message.deviceId,
+            image: message.image,
+          });
+        }
         break;
       }
 
