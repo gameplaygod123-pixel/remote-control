@@ -8,11 +8,13 @@ export interface AgentRecord {
   controllerWs: WebSocket | null;
   failedAttempts: number;
   online: boolean;
+  name?: string;
 }
 
 export interface DeviceInfo {
   deviceId: string;
   online: boolean;
+  name?: string;
 }
 
 // In-memory only -- fine for a personal, single-user relay. Restarting the
@@ -24,16 +26,40 @@ const agents = new Map<string, AgentRecord>();
 // "device-status-changed" updates to as agents come and go.
 const subscribedControllers = new Set<WebSocket>();
 
-export function registerAgent(deviceId: string, ws: WebSocket, pinHash: string): void {
-  agents.set(deviceId, { ws, pinHash, controllerWs: null, failedAttempts: 0, online: true });
+export function registerAgent(
+  deviceId: string,
+  ws: WebSocket,
+  pinHash: string,
+  name?: string,
+): void {
+  const existing = agents.get(deviceId);
+  agents.set(deviceId, {
+    ws,
+    pinHash,
+    controllerWs: null,
+    failedAttempts: 0,
+    online: true,
+    name: name ?? existing?.name,
+  });
 }
 
 export function getAgent(deviceId: string): AgentRecord | undefined {
   return agents.get(deviceId);
 }
 
+// Relabels an already-registered agent without touching its live
+// ws/controllerWs/pinHash -- renaming must never disrupt an active pairing.
+export function setDeviceName(deviceId: string, name: string): void {
+  const agent = agents.get(deviceId);
+  if (agent) agent.name = name;
+}
+
 export function listDevices(): DeviceInfo[] {
-  return [...agents.entries()].map(([deviceId, agent]) => ({ deviceId, online: agent.online }));
+  return [...agents.entries()].map(([deviceId, agent]) => ({
+    deviceId,
+    online: agent.online,
+    name: agent.name,
+  }));
 }
 
 export function subscribeToDeviceList(ws: WebSocket): void {

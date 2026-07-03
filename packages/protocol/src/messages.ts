@@ -11,6 +11,7 @@ export const RegisterAgentMessage = z.object({
   token: z.string(), // pre-shared token gating who may register an agent
   deviceId: z.string(),
   pin: z.string(), // sent once at registration; server stores only a hash
+  name: z.string().optional(), // human-friendly label, e.g. "Bedroom PC"
 });
 
 export const RegisterResultMessage = z.object({
@@ -72,6 +73,7 @@ export const ListDevicesMessage = z.object({
 export const DeviceInfo = z.object({
   deviceId: z.string(),
   online: z.boolean(),
+  name: z.string().optional(),
 });
 
 export const DeviceListMessage = z.object({
@@ -80,11 +82,23 @@ export const DeviceListMessage = z.object({
 });
 
 // Pushed to every controller that has asked for the list, whenever any
-// device's online status changes, so the list updates live without polling.
+// device's online status *or name* changes, so the list updates live
+// without polling.
 export const DeviceStatusChangedMessage = z.object({
   type: z.literal("device-status-changed"),
   deviceId: z.string(),
   online: z.boolean(),
+  name: z.string().optional(),
+});
+
+// Sent by an already-registered agent to relabel itself without touching
+// its live pairing/connection state -- re-sending register-agent would
+// reset the whole record (including the active controllerWs), disconnecting
+// anyone currently connected just to change a display name.
+export const SetDeviceNameMessage = z.object({
+  type: z.literal("set-device-name"),
+  deviceId: z.string(),
+  name: z.string(),
 });
 
 export const SignalingMessage = z.discriminatedUnion("type", [
@@ -100,6 +114,7 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   ListDevicesMessage,
   DeviceListMessage,
   DeviceStatusChangedMessage,
+  SetDeviceNameMessage,
 ]);
 
 export type SignalingMessage = z.infer<typeof SignalingMessage>;

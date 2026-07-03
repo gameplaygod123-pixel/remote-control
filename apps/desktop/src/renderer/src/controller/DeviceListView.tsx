@@ -8,6 +8,7 @@ import StatusPill from '../shared/components/StatusPill'
 interface Device {
   deviceId: string
   online: boolean
+  name?: string
 }
 
 export default function DeviceListView({
@@ -28,12 +29,12 @@ export default function DeviceListView({
       setDevices(list)
     }
 
-    function applyStatusChange(deviceId: string, online: boolean): void {
+    function applyStatusChange(deviceId: string, online: boolean, name?: string): void {
       setDevices((prev) => {
         if (prev.some((d) => d.deviceId === deviceId)) {
-          return prev.map((d) => (d.deviceId === deviceId ? { ...d, online } : d))
+          return prev.map((d) => (d.deviceId === deviceId ? { ...d, online, name } : d))
         }
-        return [...prev, { deviceId, online }]
+        return [...prev, { deviceId, online, name }]
       })
     }
 
@@ -58,7 +59,7 @@ export default function DeviceListView({
           const message = parsed.data
           if (message.type === 'device-list') applyDeviceList(message.devices)
           else if (message.type === 'device-status-changed') {
-            applyStatusChange(message.deviceId, message.online)
+            applyStatusChange(message.deviceId, message.online, message.name)
           }
         })
 
@@ -108,7 +109,10 @@ export default function DeviceListView({
             <div key={device.deviceId} className="device-card">
               <div className="device-card__header">
                 <span className={`status-dot-inline ${device.online ? 'is-ok' : 'is-idle'}`} />
-                <span className="device-card__id">{device.deviceId}</span>
+                <div>
+                  <div className="device-card__id">{device.name || device.deviceId}</div>
+                  {device.name && <div className="device-card__subid">{device.deviceId}</div>}
+                </div>
               </div>
               {pinPromptFor === device.deviceId ? (
                 <div className="device-card__pin-prompt">

@@ -40,6 +40,7 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
 }
 
 const DEVICE_ID_KEY = 'remote-control-device-id'
+const DEVICE_NAME_KEY = 'remote-control-device-name'
 
 function getOrCreateDeviceId(): string {
   const existing = localStorage.getItem(DEVICE_ID_KEY)
@@ -47,6 +48,10 @@ function getOrCreateDeviceId(): string {
   const id = String(Math.floor(100_000_000 + Math.random() * 900_000_000))
   localStorage.setItem(DEVICE_ID_KEY, id)
   return id
+}
+
+function getStoredName(): string {
+  return localStorage.getItem(DEVICE_NAME_KEY) ?? ''
 }
 
 function generatePin(): string {
@@ -57,7 +62,24 @@ function AgentView(): React.JSX.Element {
   const [deviceId] = useState(getOrCreateDeviceId)
   const [pin] = useState(() => FIXED_PIN ?? generatePin())
   const [status, setStatus] = useState('connecting to signaling server')
+  const [name, setName] = useState(getStoredName)
+  const [nameDraft, setNameDraft] = useState(name)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const clientRef = useRef<Awaited<ReturnType<typeof connectSignaling>> | null>(null)
+  const nameRef = useRef(name)
+  nameRef.current = name
+
+  // Renaming re-sends only a lightweight set-device-name message, never a
+  // fresh register-agent -- re-registering would reset the whole record on
+  // the server (including who's currently paired), disconnecting an active
+  // session just to change a display name.
+  function commitName(): void {
+    const trimmed = nameDraft.trim()
+    setName(trimmed)
+    setNameDraft(trimmed)
+    localStorage.setItem(DEVICE_NAME_KEY, trimmed)
+    clientRef.current?.send({ type: 'set-device-name', deviceId, name: trimmed })
+  }
 
   useEffect(() => {
     let pc: RTCPeerConnection | undefined
@@ -74,9 +96,16 @@ function AgentView(): React.JSX.Element {
           pc = undefined
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, registering')
-          client!.send({ type: 'register-agent', token: AGENT_TOKEN, deviceId, pin })
+          client!.send({
+            type: 'register-agent',
+            token: AGENT_TOKEN,
+            deviceId,
+            pin,
+            name: nameRef.current
+          })
         }
       })
+      clientRef.current = client
       if (cancelled) {
         client.close()
         return
@@ -152,13 +181,14 @@ function AgentView(): React.JSX.Element {
         }
       })
 
-      transport.send({ type: 'register-agent', token: AGENT_TOKEN, deviceId, pin })
+      transport.send({ type: 'register-agent', token: AGENT_TOKEN, deviceId, pin, name: nameRef.current })
     }
 
     start().catch((error) => setStatus(`error: ${String(error)}`))
 
     return () => {
       cancelled = true
+      clientRef.current = null
       pc?.close()
       client?.close()
     }
@@ -172,6 +202,18 @@ function AgentView(): React.JSX.Element {
           <div className="app-title">Agent</div>
           <div className="app-subtitle">Give these to the controller to connect</div>
         </div>
+      </div>
+
+      <div className="field-group">
+        <label className="field-label">Device name</label>
+        <input
+          className="field-input"
+          placeholder="e.g. Bedroom PC"
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
+          onBlur={commitName}
+          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+        />
       </div>
 
       <div className="credential-grid">

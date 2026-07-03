@@ -12,6 +12,7 @@ import {
   listDevices,
   subscribeToDeviceList,
   getSubscribedControllers,
+  setDeviceName,
 } from "./pairing.js";
 
 const port = Number(process.env.PORT ?? 8080);
@@ -22,9 +23,20 @@ function send(ws: WebSocket, message: SignalingMessage): void {
   ws.send(JSON.stringify(message));
 }
 
-function broadcastDeviceStatus(deviceId: string, online: boolean): void {
+// Re-reads current agent state rather than taking online/name as params, so
+// every caller (register, disconnect, rename) broadcasts the same
+// single-source-of-truth snapshot instead of each having to know the full
+// current state itself.
+function broadcastDeviceUpdate(deviceId: string): void {
+  const agent = getAgent(deviceId);
+  if (!agent) return;
   for (const controllerWs of getSubscribedControllers()) {
-    send(controllerWs, { type: "device-status-changed", deviceId, online });
+    send(controllerWs, {
+      type: "device-status-changed",
+      deviceId,
+      online: agent.online,
+      name: agent.name,
+    });
   }
 }
 
@@ -47,10 +59,16 @@ wss.on("connection", (socket) => {
           return;
         }
         const pinHash = await hashPin(message.pin);
-        registerAgent(message.deviceId, socket, pinHash);
+        registerAgent(message.deviceId, socket, pinHash, message.name);
         send(socket, { type: "register-result", ok: true });
-        broadcastDeviceStatus(message.deviceId, true);
+        broadcastDeviceUpdate(message.deviceId);
         console.log(`agent registered: ${message.deviceId}`);
+        break;
+      }
+
+      case "set-device-name": {
+        setDeviceName(message.deviceId, message.name);
+        broadcastDeviceUpdate(message.deviceId);
         break;
       }
 
@@ -109,7 +127,7 @@ wss.on("connection", (socket) => {
 
   socket.on("close", () => {
     const deviceId = removeConnection(socket);
-    if (deviceId) broadcastDeviceStatus(deviceId, false);
+    if (deviceId) broadcastDeviceUpdate(deviceId);
     console.log("client disconnected");
   });
 });

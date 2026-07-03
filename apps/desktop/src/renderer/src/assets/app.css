@@ -273,6 +273,12 @@
   color: var(--ev-c-text-1);
 }
 
+.device-card__subid {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--ev-c-text-3);
+}
+
 .device-card__pin-prompt {
   display: flex;
   gap: 6px;
