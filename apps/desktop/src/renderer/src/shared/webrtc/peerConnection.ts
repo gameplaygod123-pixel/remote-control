@@ -7,8 +7,22 @@ export interface SignalTransport {
   onMessage(handler: (message: unknown) => void): void
 }
 
-// Free-tier STUN for now; Phase 4 adds a free TURN relay for hard-NAT cases.
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
+// Free-tier STUN + TURN. TURN (Open Relay Project's public demo relay) matters
+// once the two machines are on genuinely different networks: consumer
+// NATs/CGNAT often can't do direct P2P, so without a relay the connection
+// just hangs instead of falling back. Fine for personal use; swap for a
+// self-hosted coturn on a small VPS later if this free tier proves flaky.
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:openrelay.metered.ca:80' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
+]
 
 export function createPeerConnection(
   transport: SignalTransport,

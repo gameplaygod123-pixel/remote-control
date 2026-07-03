@@ -66,14 +66,19 @@ packages/protocol/          shared Zod message schema (desktop app <-> signaling
 - **Phase 3** (real signaling server + Device ID/PIN pairing): done, verified
   end-to-end with two separate app processes (agent + controller) on the
   same Mac connecting through `server/signaling` on `localhost:8080`.
-- **Phase 4** (cross-network connectivity, free-tier TURN + tunnel): **not
-  started**. This is what requires two actual separate machines (this is
-  where a Windows agent + Mac controller test matters) — the signaling
-  server currently only listens on localhost, so a second machine can't
-  reach it yet. Needs: deploy `server/signaling` behind a Cloudflare Tunnel
-  (or similar) to get a public `wss://` URL, wire in free TURN credentials
-  (Open Relay Project), and test with the two machines on genuinely
-  different networks.
+- **Phase 4** (cross-network connectivity, free-tier TURN + tunnel): done for
+  the Mac-only verification step — added free TURN (Open Relay Project) to
+  the ICE server list in `peerConnection.ts`, and confirmed a full
+  agent+controller pairing and WebRTC connection through a public Cloudflare
+  quick tunnel (`cloudflared tunnel --url http://localhost:8080`) pointed at
+  the local signaling server, instead of `localhost`. **Still needed**: the
+  actual two-separate-machines test (Windows agent + Mac controller on
+  genuinely different networks) — this only proved the tunnel/TURN plumbing
+  works, not that it survives a real hard-NAT scenario.
+  - The Cloudflare quick tunnel URL is **temporary** — it changes every time
+    `cloudflared` is restarted, and free quick tunnels aren't meant for
+    long-term/production use (no uptime guarantee). Fine for testing; a
+    named tunnel or small VPS is the eventual upgrade per the original plan.
 - **Phase 5** (input over data channel, full remote-control loop): not started.
 - **Phase 6** (packaging), **Phase 7** (security hardening): not started.
 
@@ -95,6 +100,15 @@ packages/protocol/          shared Zod message schema (desktop app <-> signaling
   correctly (confirmed via screenshot with cursor visible). Don't trust
   `getPosition()` for verification; the real injection path never needs it
   anyway. Worth re-checking whether this also affects Windows.
+- **Signaling WebSocket silently died after ~1-2 minutes idle** when routed
+  through the Cloudflare quick tunnel — the tunnel (or some proxy in the
+  path) drops idle connections, which wiped the agent's registration on the
+  server without the agent's UI ever noticing (no reconnect/close handling
+  existed). Fixed with an application-level heartbeat: the client sends a
+  `{type: "ping"}` every 25s (`HEARTBEAT_INTERVAL_MS` in
+  `signalingClient.ts`), server replies `pong`. Confirmed via a 200s soak
+  test with no disconnect. If pairing ever again fails with "unknown device
+  id" right after a period of inactivity, suspect this class of bug first.
 
 ## Running locally
 

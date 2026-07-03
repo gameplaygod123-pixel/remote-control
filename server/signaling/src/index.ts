@@ -77,8 +77,13 @@ wss.on("connection", (socket) => {
         break;
       }
 
+      case "ping":
+        send(socket, { type: "pong" });
+        break;
+
       case "register-result":
       case "pair-result":
+      case "pong":
         // Server-to-client only; ignore if a client somehow sends one.
         break;
     }

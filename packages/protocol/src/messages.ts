@@ -51,6 +51,17 @@ export const IceCandidateMessage = z.object({
   sdpMLineIndex: z.number().nullable(),
 });
 
+// Keeps the WebSocket connection alive through proxies/tunnels (e.g. a free
+// Cloudflare quick tunnel) that silently close idle connections after ~1-2
+// minutes of no traffic. Sent by the client on an interval well under that.
+export const PingMessage = z.object({
+  type: z.literal("ping"),
+});
+
+export const PongMessage = z.object({
+  type: z.literal("pong"),
+});
+
 export const SignalingMessage = z.discriminatedUnion("type", [
   RegisterAgentMessage,
   RegisterResultMessage,
@@ -59,6 +70,8 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   SdpOfferMessage,
   SdpAnswerMessage,
   IceCandidateMessage,
+  PingMessage,
+  PongMessage,
 ]);
 
 export type SignalingMessage = z.infer<typeof SignalingMessage>;
