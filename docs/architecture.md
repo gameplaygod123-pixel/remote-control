@@ -391,6 +391,29 @@ keeps the original blue/purple theme; only this one screen was reskinned.
   Phase 5 incident) -- trusted the standard CSS grid behavior instead of
   fighting the tooling further.
 
+## Silent launch on Windows (no visible console window)
+
+`start-agent.bat` runs `pnpm.cmd dev` directly, so double-clicking it pops
+up a visible cmd.exe console alongside the Agent window -- fine for
+development (it's how every real Windows error in this whole project got
+diagnosed), but not what a normal double-click-to-open program looks like.
+
+`start-agent-silent.vbs` wraps it: `WScript.Shell.Run` with windowStyle 0
+launches `start-agent.bat` with no visible window at all. The underlying
+`pnpm dev` process (and the real Agent window it eventually opens) runs
+exactly the same either way -- only the console host window is hidden.
+
+Trade-off worth knowing: if something fails before the Agent window can
+open (`pnpm` not on PATH, a dependency error, etc.), the silent version
+shows nothing at all -- no window, no error, just silence. If the Agent
+ever doesn't appear after using the silent launcher, the first thing to
+try is running `start-agent.bat` directly to see the actual error.
+
+A real "no console at all, ever, even on real crashes, still debuggable"
+experience is what Phase 6 (packaging via `electron-builder` into a proper
+installed .exe) is for -- this VBS wrapper is a lightweight stand-in for
+day-to-day use before that's built.
+
 ## Running locally
 
 Root of the repo:
