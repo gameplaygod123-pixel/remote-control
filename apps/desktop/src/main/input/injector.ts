@@ -13,6 +13,14 @@ export async function clickMouse(button: 'left' | 'right' = 'left'): Promise<voi
   await mouse.click(button === 'left' ? Button.LEFT : Button.RIGHT)
 }
 
+// nut.js defaults keyboard.config.autoDelayMs to 300ms *per character* --
+// fine for a one-shot type() of a whole string, but since remote text input
+// now calls this once per real keystroke (see RemoteInputMessage's 'text'
+// case), that 300ms would land on every single character typed, on top of
+// network latency. The remote keystrokes are already paced by how fast the
+// person is actually typing, so nut.js doesn't need to add its own pacing.
+keyboard.config.autoDelayMs = 0
+
 export async function typeText(text: string): Promise<void> {
   await keyboard.type(text)
 }

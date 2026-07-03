@@ -5,7 +5,7 @@ import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
 import { clearCachedPin } from '../shared/devicePins'
 import StatusPill from '../shared/components/StatusPill'
-import { RemoteInputMessage, videoRelativePosition } from '../shared/input/inputProtocol'
+import { RemoteInputMessage, isPrintableKey, videoRelativePosition } from '../shared/input/inputProtocol'
 
 // Mousemove fires far more often than the remote side needs to react to --
 // this caps how frequently position updates cross the data channel without
@@ -83,20 +83,32 @@ export default function ControllerSession({
     sendInput({ t: 'wheel', dy: e.deltaY / 40 })
   }
 
-  // Forwards physical key events to the agent while the session is mounted.
-  // Escape is deliberately excluded -- it's reserved locally for
-  // disconnecting (see the effect below), not meant to reach the remote
-  // machine. preventDefault stops browser-native side effects (Backspace
-  // navigating back, Tab shifting focus, F5 reloading, arrow keys scrolling)
-  // that would otherwise fire alongside the forwarded key.
+  // Forwards key events to the agent while the session is mounted. Escape is
+  // deliberately excluded -- it's reserved locally for disconnecting (see
+  // the effect below), not meant to reach the remote machine.
+  // preventDefault stops browser-native side effects (Backspace navigating
+  // back, Tab shifting focus, F5 reloading, arrow keys scrolling) that
+  // would otherwise fire alongside the forwarded key.
+  //
+  // Printable characters (including non-Latin text like Thai) go through
+  // `text` + nut.js's Unicode-aware type() -- see isPrintableKey. Repeat is
+  // allowed through for these so holding a key retypes it, like a real
+  // keyboard. Everything else (modifiers, arrows, function keys, and any
+  // Ctrl/Alt/Meta shortcut) goes through the physical-key hold path so
+  // combos and held state are real on the agent's OS.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      if (e.code === 'Escape' || e.repeat) return
+      if (e.code === 'Escape') return
       e.preventDefault()
+      if (isPrintableKey(e)) {
+        sendInput({ t: 'text', text: e.key })
+        return
+      }
+      if (e.repeat) return
       sendInput({ t: 'keydown', code: e.code })
     }
     function handleKeyUp(e: KeyboardEvent): void {
-      if (e.code === 'Escape') return
+      if (e.code === 'Escape' || isPrintableKey(e)) return
       e.preventDefault()
       sendInput({ t: 'keyup', code: e.code })
     }

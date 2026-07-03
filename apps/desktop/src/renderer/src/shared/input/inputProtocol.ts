@@ -13,6 +13,21 @@ export type RemoteInputMessage =
   | { t: 'wheel'; dy: number }
   | { t: 'keydown'; code: string }
   | { t: 'keyup'; code: string }
+  | { t: 'text'; text: string }
+
+// Physical-key-code injection (nut.js's Key enum) only covers a fixed,
+// US-layout-shaped set of keys -- there's no way to express "type a Thai
+// character" as a physical key press at all. Printable characters are sent
+// as the browser's already-resolved KeyboardEvent.key instead (which
+// reflects whatever input layout/IME is active on the controller) and
+// typed via nut.js's Unicode-aware keyboard.type() on the agent, which
+// works regardless of the language or the agent's own active layout.
+// Excluded whenever Ctrl/Alt/Meta is held -- that's a shortcut (Ctrl+C),
+// not text entry, and must go through the physical-key hold path instead
+// so the modifier combo is real on the agent's OS.
+export function isPrintableKey(e: KeyboardEvent): boolean {
+  return e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey
+}
 
 // The video element is styled with object-fit: contain, so it letterboxes
 // when the element's aspect ratio doesn't exactly match the stream's --

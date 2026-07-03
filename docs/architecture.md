@@ -209,38 +209,78 @@ them, so the controller just picks it up via `pc.ondatachannel`).
   not `click()`** -- lets the controller hold a button across separate
   mousemove events, which `click()` can't express. Needed for drag-to-select
   and drag-and-drop, not just instantaneous clicks.
-- **Keyboard uses press/release by `KeyboardEvent.code`** (physical,
-  layout-independent), not `keyboard.type()`. `main/input/keyMap.ts` maps
-  each browser `code` to the matching nut.js `Key`, read directly from the
-  installed `@nut-tree-fork/shared` package's own enum (not guessed from
-  memory) to avoid silently-wrong key mappings. Real press/release (not
-  `type()`) is required for modifier combos (Ctrl+C) and holding a key --
-  neither is expressible as a single "type this string" call.
+- **Keyboard is a hybrid of two paths** (`isPrintableKey()` in
+  `inputProtocol.ts` decides which):
+  - **Printable characters** (`KeyboardEvent.key.length === 1`, no
+    Ctrl/Alt/Meta held) are sent as `{ t: 'text', text: e.key }` and typed
+    on the agent via nut.js's `keyboard.type()` (native `libnut.typeString`,
+    Unicode-aware -- Windows injects via `SendInput`+`KEYEVENTF_UNICODE`
+    under the hood). This is what makes **non-Latin text (Thai, etc.) work
+    at all**: `main/input/keyMap.ts`'s physical-`code`→nut.js-`Key` map can
+    only express a fixed, US-layout-shaped key set (confirmed by reading
+    libnut's own key lookup table -- there is no way to represent a Thai
+    character as a "physical key" in that model). `e.key` instead reflects
+    whatever input layout/IME is active on the controller, so this works
+    for any language the person can type on their own keyboard.
+  - **Everything else** (modifiers, arrows, function keys, and any
+    Ctrl/Alt/Meta combo) still goes through physical-key press/release by
+    `KeyboardEvent.code`, so real shortcuts (Ctrl+C, Alt+Tab, Shift+Arrow
+    selection) hold real modifier state on the agent's OS -- something a
+    single `type()` call can't express.
+  - `nut.js`'s `keyboard.config.autoDelayMs` defaults to **300ms per
+    character**, meant for typing a whole string in one `type()` call. Since
+    remote text now calls `type()` once per real keystroke, that 300ms would
+    otherwise land on every character on top of network latency -- set to 0
+    in `injector.ts` (the remote keystrokes are already paced by how fast
+    the person is actually typing).
 - Mousemove is throttled client-side (`MOUSE_MOVE_THROTTLE_MS` in
   `ControllerSession.tsx`) since it fires far more often than needed.
 - The channel reference is cleared (`inputChannelRef.current = null`)
   everywhere the peer connection is torn down/replaced (reconnect,
   re-pairing on `failed`, unmount) so a stale channel is never written to.
+- The active session uses its own edge-to-edge `.session-shell` layout, not
+  the centered/max-width `.app-shell` card used by the setup screens --
+  first shipped version accidentally reused `.app-shell`, so even after
+  going fullscreen the video sat tiny in a 720px-wide box in the middle of
+  the screen. Real bug, caught by the user on the first live test, not by
+  local testing (see below).
+- Screen-share capture requests `frameRate: { ideal: 30, max: 30 }` and sets
+  `track.contentHint = 'motion'`, and the video sender's `maxBitrate` is
+  raised to 4 Mbps via `RTCRtpSender.setParameters()` -- Chromium's default
+  screen-capture/WebRTC settings are conservative enough to read as lag on
+  their own, separate from real network latency.
 
-**Verification status (honest account):** typecheck passes cleanly. Every
-new nut.js call (`Button.MIDDLE`, the full `Key` enum, `pressButton`/
-`releaseButton`, `scrollUp`/`scrollDown`, `screen.width`/`height`) was
-checked directly against the installed package's own `.d.ts` files, not
-assumed from memory -- same rigor as Phase 2's original click/type/move,
-which are unchanged. The data channel setup reuses the exact SDP/ICE
-negotiation pattern already proven live against the real Windows agent in
-Phase 4. What's **not yet done**: an actual live click/keystroke landing
-correctly on the real Windows agent.
+**Verification status:** live-tested end-to-end against the real Windows
+agent (not just locally) after the fixes above. Mouse move/click/drag and
+the fullscreen layout confirmed working by the user on the first pass.
+Typing was broken on that same first pass -- see the bug below -- fixed
+before it was tested again; re-confirmation from the user on typing
+(especially Thai) is the open item.
 
-Live local testing (same-Mac agent+controller, or reusing the injector-test
-dev harness with real OS-level clicks/keystrokes) was attempted and
-abandoned partway through this session because it's inherently
-self-referential and risky: the agent screen-shares the *same physical
-screen* the controller is also displayed on, so a real click routed through
-the pipeline can land back on whatever's actually on that screen, and
-multiple same-named `Electron` processes running at once (production
-controller + a local test instance) made AppleScript UI automation
-dangerously ambiguous.
+**Real bug found via the user's live test (not caught by local
+review/typecheck):** the original implementation sent every key as a
+physical `KeyboardEvent.code`, which can only reach nut.js's fixed,
+US-layout-shaped `Key` enum. Typing failed because there's no physical-key
+representation of Thai text (or, for Latin text on a non-US agent layout,
+this approach would silently produce the wrong character rather than
+failing loudly). Fixed by adding the printable-character `text` path
+described above. Lesson: typecheck and reading the native library's own
+key table gives confidence the code the compiler sees is correct, but
+whether a given library call produces the *intended real-world effect*
+(a Thai character actually appearing) still needs an actual test on the
+target machine -- there was no way to catch this without either testing
+against real Windows agent, or independently reasoning through what
+`KeyboardEvent.code` can and can't represent (which is what turned up the
+bug once the user reported the symptom).
+
+Local same-Mac testing (agent+controller on one machine, or the
+injector-test dev harness with real OS-level clicks/keystrokes) was
+attempted earlier and abandoned because it's inherently self-referential
+and risky: the agent screen-shares the *same physical screen* the
+controller is also displayed on, so a real click routed through the
+pipeline can land back on whatever's actually on that screen, and multiple
+same-named `Electron` processes running at once (production controller + a
+local test instance) made AppleScript UI automation dangerously ambiguous.
 
 **Real incident from this session:** an AppleScript command scoped by
 process *name* (`tell process "Electron"`) rather than PID, intended to

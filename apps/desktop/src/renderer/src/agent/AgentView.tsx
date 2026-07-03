@@ -33,6 +33,9 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
     case 'keyup':
       await window.api.input.key(message.code, message.t === 'keydown')
       break
+    case 'text':
+      await window.api.input.type(message.text)
+      break
   }
 }
 
