@@ -359,6 +359,38 @@ device list.
   -- cheap guard against a mismatched/rogue client, same spirit as the rest
   of the pairing logic even though this is a personal-use app.
 
+## Device list visual redesign
+
+The user provided a mockup (dark-brown/orange, monospace, full-window
+layout with a device count header and an online/offline + last-updated
+footer bar) and asked for the device list to match it, with the grid
+reflowing nicely as the controller window is resized. Implemented as a
+self-contained theme (`assets/deviceList.css`, `.dl-*` classes) scoped to
+just `DeviceListView.tsx` -- the rest of the app (Agent, active session)
+keeps the original blue/purple theme; only this one screen was reskinned.
+
+- `.dl-shell` uses `position: fixed; inset: 0` to fill the whole window
+  instead of the centered/max-width `.app-shell` card, and the grid is
+  `repeat(auto-fill, minmax(230px, 1fr))` so it reflows into more columns
+  as the window widens -- standard CSS, not manually recalculated.
+- Kept the app's real native window chrome (macOS traffic lights) as-is
+  rather than building a custom frameless titlebar to match the mockup's
+  monochrome dots exactly -- the in-content "dots" row is purely
+  decorative, matching the mockup's look without the added complexity of
+  `frame: false` + custom drag regions + wiring real minimize/close.
+- `StatusPill`'s `classify()` (ok/warn/error/idle) was exported so the new
+  themed pill (`.dl-pill`) could reuse the same status-string
+  classification instead of duplicating it, just rendered with the new
+  color palette.
+- Verified visually with a throwaway local agent+controller+signaling
+  triple (separate ports, cleaned up afterward) rather than against the
+  production Mac controller -- confirms the layout renders correctly
+  including a real device thumbnail; resizing the test window to confirm
+  grid reflow was attempted but skipped after AppleScript's window sizing
+  command failed unreliably (same class of accessibility flakiness as the
+  Phase 5 incident) -- trusted the standard CSS grid behavior instead of
+  fighting the tooling further.
+
 ## Running locally
 
 Root of the repo:
