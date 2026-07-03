@@ -62,6 +62,9 @@ function AgentView(): React.JSX.Element {
         if (message.type === 'register-result') {
           setStatus(message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`)
         } else if (message.type === 'pair-result' && message.ok) {
+          // A re-pair can arrive while an old (e.g. failed) peer connection
+          // is still around -- close it so we don't leak connections.
+          pc?.close()
           setStatus('paired, starting screen share')
           pc = createPeerConnection(transport, deviceId)
           pc.onconnectionstatechange = () => setStatus(`connection: ${pc!.connectionState}`)

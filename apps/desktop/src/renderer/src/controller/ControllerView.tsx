@@ -70,10 +70,29 @@ function ControllerView(): React.JSX.Element {
           return
         }
         pairRetries = 0
+        // A re-pair can arrive while an old (e.g. failed) peer connection
+        // is still around -- close it so we don't leak connections.
+        pcRef.current?.close()
         setStatus('paired, waiting for video offer')
         const pc = createPeerConnection(transport, targetDeviceId)
         pcRef.current = pc
-        pc.onconnectionstatechange = () => setStatus(`connection: ${pc.connectionState}`)
+        pc.onconnectionstatechange = () => {
+          setStatus(`connection: ${pc.connectionState}`)
+          // Covers the case where the *agent's* signaling connection drops
+          // and reconnects while ours stays up the whole time -- we'd never
+          // otherwise notice, since our own onReconnect only fires when OUR
+          // connection drops. The agent re-registering wipes the old
+          // pairing server-side, so the video link dies; re-pairing here
+          // gets a fresh offer once the agent is back.
+          if (pc.connectionState === 'failed' && pcRef.current === pc) {
+            pc.close()
+            pcRef.current = null
+            if (videoRef.current) videoRef.current.srcObject = null
+            setTimeout(() => {
+              transport.send({ type: 'pair-request', deviceId: targetDeviceId, pin: targetPin })
+            }, PAIR_RETRY_DELAY_MS)
+          }
+        }
         pc.ontrack = (event) => {
           if (videoRef.current) videoRef.current.srcObject = event.streams[0]
         }

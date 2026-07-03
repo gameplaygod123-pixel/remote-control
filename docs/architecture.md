@@ -139,6 +139,20 @@ packages/protocol/          shared Zod message schema (desktop app <-> signaling
   - Verified by killing and restarting an isolated test signaling server
     mid-session and confirming both sides recover to a fully connected
     video call with no manual intervention.
+  - **Asymmetric-drop gap found on the real Mac<->Windows link**: if only
+    the *agent's* signaling connection drops and reconnects while the
+    controller's own connection stays up the whole time, the controller
+    never notices (its own `onReconnect` only fires when *its* connection
+    drops) -- but the agent re-registering wipes the old pairing
+    server-side, so the video link dies and the controller's
+    `RTCPeerConnection` state goes to `failed` forever. Fixed by having the
+    controller re-send `pair-request` whenever its peer connection state
+    becomes `failed`, reusing the same retry-on-"unknown device id" path.
+    Also added defensive `pc?.close()` before creating a replacement peer
+    connection on both sides, since re-pairing can now happen more than
+    once. Verified live against the real Windows agent (not just the local
+    isolated test): killed the agent's connection, watched the controller
+    self-heal back to `connection: connected` with a live video feed.
 
 ## Running locally
 
