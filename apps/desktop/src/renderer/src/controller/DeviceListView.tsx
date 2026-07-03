@@ -3,13 +3,30 @@ import { connectSignaling, SignalingClient } from '../shared/signaling/signaling
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
 import { getCachedPin, setCachedPin } from '../shared/devicePins'
-import StatusPill from '../shared/components/StatusPill'
+import { classify } from '../shared/components/StatusPill'
+import '../assets/deviceList.css'
 
 interface Device {
   deviceId: string
   online: boolean
   name?: string
   thumbnail?: string
+}
+
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString('th-TH', { hour12: false })
+}
+
+// The image-1 mockup shows every card with the same small monitor icon as a
+// placeholder (colored by online/offline) rather than text -- shown until a
+// real thumbnail arrives, or permanently for offline devices.
+function MonitorIcon(): React.JSX.Element {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+      <rect x="3" y="4" width="18" height="13" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="8" y="8" width="8" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  )
 }
 
 export default function DeviceListView({
@@ -21,6 +38,7 @@ export default function DeviceListView({
   const [status, setStatus] = useState('connecting to signaling server')
   const [pinPromptFor, setPinPromptFor] = useState<string | null>(null)
   const [pinInput, setPinInput] = useState('')
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const clientRef = useRef<SignalingClient | null>(null)
 
   useEffect(() => {
@@ -28,6 +46,7 @@ export default function DeviceListView({
 
     function applyDeviceList(list: Device[]): void {
       setDevices(list)
+      setLastUpdated(new Date())
     }
 
     function applyStatusChange(deviceId: string, online: boolean, name?: string): void {
@@ -37,10 +56,12 @@ export default function DeviceListView({
         }
         return [...prev, { deviceId, online, name }]
       })
+      setLastUpdated(new Date())
     }
 
     function applyThumbnail(deviceId: string, thumbnail: string): void {
       setDevices((prev) => prev.map((d) => (d.deviceId === deviceId ? { ...d, thumbnail } : d)))
+      setLastUpdated(new Date())
     }
 
     connectSignaling(SIGNALING_URL, {
@@ -96,67 +117,86 @@ export default function DeviceListView({
     onConnect(pinPromptFor, pinInput)
   }
 
+  const onlineCount = devices.filter((d) => d.online).length
+  const statusVariant = classify(status)
+
   return (
-    <div className="app-shell app-shell--wide">
-      <div className="app-header">
-        <div className="app-icon">💻</div>
-        <div>
-          <div className="app-title">Computers</div>
-          <div className="app-subtitle">Pick a device to connect to</div>
+    <div className="dl-shell">
+      <div className="dl-titlebar">
+        <div className="dl-dots">
+          <span />
+          <span />
+          <span />
         </div>
+        <div className="dl-titletext">Remote Control — Computers</div>
       </div>
 
-      <StatusPill status={status} />
+      <div className="dl-body">
+        <div className="dl-header">
+          <div>
+            <h1 className="dl-heading">
+              Computers<span className="dl-cursor">_</span>
+            </h1>
+            <p className="dl-subheading">พบเครื่องทั้งหมด {devices.length} เครื่อง</p>
+          </div>
+          <span className={`dl-pill is-${statusVariant}`}>
+            <span className={`dl-pill-dot${statusVariant === 'warn' ? ' is-pulsing' : ''}`} />
+            {status}
+          </span>
+        </div>
 
-      {devices.length === 0 ? (
-        <p className="app-subtitle">No devices have registered with this server yet.</p>
-      ) : (
-        <div className="device-grid">
-          {devices.map((device) => (
-            <div key={device.deviceId} className="device-card">
-              <div className={`device-card__thumbnail ${device.online ? '' : 'is-offline'}`}>
-                {device.thumbnail ? (
-                  <img src={device.thumbnail} alt="" />
+        {devices.length === 0 ? (
+          <p className="dl-empty">No devices have registered with this server yet.</p>
+        ) : (
+          <div className="dl-grid">
+            {devices.map((device) => (
+              <div key={device.deviceId} className="dl-card">
+                <div className={`dl-thumb ${device.online ? '' : 'is-offline'}`}>
+                  {device.thumbnail ? <img src={device.thumbnail} alt="" /> : <MonitorIcon />}
+                </div>
+                <div>
+                  <div className="dl-name">{device.name || device.deviceId}</div>
+                  {device.name && <div className="dl-id">{device.deviceId}</div>}
+                </div>
+                <div className={`dl-status-row ${device.online ? 'is-ok' : ''}`}>
+                  <span className={`dl-status-dot ${device.online ? 'is-ok' : 'is-idle'}`} />
+                  {device.online ? 'online' : 'offline'}
+                </div>
+                {pinPromptFor === device.deviceId ? (
+                  <div className="dl-pin-prompt">
+                    <input
+                      className="dl-pin-input"
+                      placeholder="PIN"
+                      value={pinInput}
+                      autoFocus
+                      onChange={(e) => setPinInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && submitPin()}
+                    />
+                    <button className="dl-btn" style={{ width: 'auto', padding: '0 14px' }} onClick={submitPin}>
+                      Go
+                    </button>
+                  </div>
                 ) : (
-                  <span className="device-card__thumbnail-empty">
-                    {device.online ? 'waiting for preview...' : 'offline'}
-                  </span>
+                  <button
+                    className="dl-btn"
+                    disabled={!device.online}
+                    onClick={() => handleConnectClick(device.deviceId)}
+                  >
+                    Connect
+                  </button>
                 )}
               </div>
-              <div className="device-card__header">
-                <span className={`status-dot-inline ${device.online ? 'is-ok' : 'is-idle'}`} />
-                <div>
-                  <div className="device-card__id">{device.name || device.deviceId}</div>
-                  {device.name && <div className="device-card__subid">{device.deviceId}</div>}
-                </div>
-              </div>
-              {pinPromptFor === device.deviceId ? (
-                <div className="device-card__pin-prompt">
-                  <input
-                    className="field-input"
-                    placeholder="PIN"
-                    value={pinInput}
-                    autoFocus
-                    onChange={(e) => setPinInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && submitPin()}
-                  />
-                  <button className="btn" onClick={submitPin}>
-                    Go
-                  </button>
-                </div>
-              ) : (
-                <button
-                  className="btn"
-                  disabled={!device.online}
-                  onClick={() => handleConnectClick(device.deviceId)}
-                >
-                  Connect
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="dl-footer">
+        <span>
+          online: {onlineCount} · offline: {devices.length - onlineCount}
+        </span>
+        <span>{lastUpdated ? `อัปเดตล่าสุด ${formatTime(lastUpdated)}` : ''}</span>
+      </div>
     </div>
   )
 }
