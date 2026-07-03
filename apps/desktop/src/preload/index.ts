@@ -25,6 +25,10 @@ const api = {
   },
   clipboard: {
     write: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write', text)
+  },
+  window: {
+    setFullScreen: (value: boolean): Promise<void> =>
+      ipcRenderer.invoke('window:set-fullscreen', value)
   }
 }
 

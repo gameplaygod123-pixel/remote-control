@@ -18,6 +18,9 @@ declare global {
       clipboard: {
         write: (text: string) => Promise<void>
       }
+      window: {
+        setFullScreen: (value: boolean) => Promise<void>
+      }
     }
   }
 }

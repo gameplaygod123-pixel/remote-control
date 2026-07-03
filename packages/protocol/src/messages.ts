@@ -62,6 +62,31 @@ export const PongMessage = z.object({
   type: z.literal("pong"),
 });
 
+// A controller asks for the current roster of devices that have ever
+// registered with this server (not just currently-online ones), so it can
+// show a "Computers" list with online/offline status, Parsec/AnyDesk-style.
+export const ListDevicesMessage = z.object({
+  type: z.literal("list-devices"),
+});
+
+export const DeviceInfo = z.object({
+  deviceId: z.string(),
+  online: z.boolean(),
+});
+
+export const DeviceListMessage = z.object({
+  type: z.literal("device-list"),
+  devices: z.array(DeviceInfo),
+});
+
+// Pushed to every controller that has asked for the list, whenever any
+// device's online status changes, so the list updates live without polling.
+export const DeviceStatusChangedMessage = z.object({
+  type: z.literal("device-status-changed"),
+  deviceId: z.string(),
+  online: z.boolean(),
+});
+
 export const SignalingMessage = z.discriminatedUnion("type", [
   RegisterAgentMessage,
   RegisterResultMessage,
@@ -72,6 +97,9 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   IceCandidateMessage,
   PingMessage,
   PongMessage,
+  ListDevicesMessage,
+  DeviceListMessage,
+  DeviceStatusChangedMessage,
 ]);
 
 export type SignalingMessage = z.infer<typeof SignalingMessage>;

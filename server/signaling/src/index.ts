@@ -9,6 +9,9 @@ import {
   pairController,
   resolveRelayTarget,
   removeConnection,
+  listDevices,
+  subscribeToDeviceList,
+  getSubscribedControllers,
 } from "./pairing.js";
 
 const port = Number(process.env.PORT ?? 8080);
@@ -17,6 +20,12 @@ const wss = new WebSocketServer({ port });
 
 function send(ws: WebSocket, message: SignalingMessage): void {
   ws.send(JSON.stringify(message));
+}
+
+function broadcastDeviceStatus(deviceId: string, online: boolean): void {
+  for (const controllerWs of getSubscribedControllers()) {
+    send(controllerWs, { type: "device-status-changed", deviceId, online });
+  }
 }
 
 wss.on("connection", (socket) => {
@@ -40,13 +49,14 @@ wss.on("connection", (socket) => {
         const pinHash = await hashPin(message.pin);
         registerAgent(message.deviceId, socket, pinHash);
         send(socket, { type: "register-result", ok: true });
+        broadcastDeviceStatus(message.deviceId, true);
         console.log(`agent registered: ${message.deviceId}`);
         break;
       }
 
       case "pair-request": {
         const agent = getAgent(message.deviceId);
-        if (!agent) {
+        if (!agent || !agent.online || !agent.ws) {
           send(socket, { type: "pair-result", ok: false, reason: "unknown device id" });
           return;
         }
@@ -77,6 +87,12 @@ wss.on("connection", (socket) => {
         break;
       }
 
+      case "list-devices": {
+        subscribeToDeviceList(socket);
+        send(socket, { type: "device-list", devices: listDevices() });
+        break;
+      }
+
       case "ping":
         send(socket, { type: "pong" });
         break;
@@ -84,13 +100,16 @@ wss.on("connection", (socket) => {
       case "register-result":
       case "pair-result":
       case "pong":
+      case "device-list":
+      case "device-status-changed":
         // Server-to-client only; ignore if a client somehow sends one.
         break;
     }
   });
 
   socket.on("close", () => {
-    removeConnection(socket);
+    const deviceId = removeConnection(socket);
+    if (deviceId) broadcastDeviceStatus(deviceId, false);
     console.log("client disconnected");
   });
 });

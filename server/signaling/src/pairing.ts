@@ -3,23 +3,45 @@ import type { WebSocket } from "ws";
 const MAX_PAIR_ATTEMPTS = 5;
 
 export interface AgentRecord {
-  ws: WebSocket;
+  ws: WebSocket | null; // null while offline -- the record itself persists
   pinHash: string;
   controllerWs: WebSocket | null;
   failedAttempts: number;
+  online: boolean;
+}
+
+export interface DeviceInfo {
+  deviceId: string;
+  online: boolean;
 }
 
 // In-memory only -- fine for a personal, single-user relay. Restarting the
-// signaling server drops all agents/pairings, which is an acceptable
+// signaling server drops the whole device roster, which is an acceptable
 // trade-off for the free-tier setup described in the plan.
 const agents = new Map<string, AgentRecord>();
 
+// Controllers that asked for the device list, so we know who to push
+// "device-status-changed" updates to as agents come and go.
+const subscribedControllers = new Set<WebSocket>();
+
 export function registerAgent(deviceId: string, ws: WebSocket, pinHash: string): void {
-  agents.set(deviceId, { ws, pinHash, controllerWs: null, failedAttempts: 0 });
+  agents.set(deviceId, { ws, pinHash, controllerWs: null, failedAttempts: 0, online: true });
 }
 
 export function getAgent(deviceId: string): AgentRecord | undefined {
   return agents.get(deviceId);
+}
+
+export function listDevices(): DeviceInfo[] {
+  return [...agents.entries()].map(([deviceId, agent]) => ({ deviceId, online: agent.online }));
+}
+
+export function subscribeToDeviceList(ws: WebSocket): void {
+  subscribedControllers.add(ws);
+}
+
+export function getSubscribedControllers(): WebSocket[] {
+  return [...subscribedControllers];
 }
 
 export function hasExceededAttempts(deviceId: string): boolean {
@@ -46,16 +68,24 @@ export function resolveRelayTarget(deviceId: string, senderWs: WebSocket): WebSo
   const agent = agents.get(deviceId);
   if (!agent) return undefined;
   if (senderWs === agent.ws) return agent.controllerWs ?? undefined;
-  if (senderWs === agent.controllerWs) return agent.ws;
+  if (senderWs === agent.controllerWs) return agent.ws ?? undefined;
   return undefined;
 }
 
-export function removeConnection(ws: WebSocket): void {
+// Returns the deviceId that just went offline, if the closed connection was
+// a registered agent, so the caller can broadcast the status change.
+export function removeConnection(ws: WebSocket): string | undefined {
+  subscribedControllers.delete(ws);
   for (const [deviceId, agent] of agents) {
     if (agent.ws === ws) {
-      agents.delete(deviceId);
-    } else if (agent.controllerWs === ws) {
+      agent.ws = null;
+      agent.controllerWs = null;
+      agent.online = false;
+      return deviceId;
+    }
+    if (agent.controllerWs === ws) {
       agent.controllerWs = null;
     }
   }
+  return undefined;
 }

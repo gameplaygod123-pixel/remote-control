@@ -46,7 +46,9 @@ apps/desktop/              Electron + Vite + React + TS app (agent + controller 
   src/preload/              contextBridge API exposed to renderer
   src/renderer/src/
     agent/AgentView.tsx     real agent UI: registers, shows Device ID + PIN, shares screen
-    controller/ControllerView.tsx   real controller UI: pairing form, renders video
+    controller/ControllerView.tsx   top-level nav: device list <-> session
+    controller/DeviceListView.tsx   "Computers" list -- online/offline status, per-device PIN cache
+    controller/ControllerSession.tsx  one active connection: pairing, video, fullscreen-on-connect
     loopback/               Phase 1 dev harness (same-process source/viewer video test)
     dev-test/               Phase 2 dev harness (injector-test / capture-test)
     shared/webrtc/peerConnection.ts     shared RTCPeerConnection setup
@@ -153,6 +155,36 @@ packages/protocol/          shared Zod message schema (desktop app <-> signaling
     once. Verified live against the real Windows agent (not just the local
     isolated test): killed the agent's connection, watched the controller
     self-heal back to `connection: connected` with a live video feed.
+
+- **Multi-device support (post-Phase-4, ahead of schedule)**: added a
+  Parsec/AnyDesk-style "Computers" list as the controller's default screen
+  (`DeviceListView.tsx`), since the user plans to add more agent machines
+  soon. Deliberately **no live thumbnails** (user's choice) -- just an
+  online/offline status dot per device, updated in real time via a new
+  `device-status-changed` broadcast from the server.
+  - Server (`pairing.ts`) no longer deletes an agent's record when it
+    disconnects -- it marks `online: false` and keeps the record, so the
+    device still shows up (grayed out) in the list. This is a real
+    behavior change from Phase 3/4: the device roster is now sticky for
+    the life of the signaling server process (still wiped on server
+    restart -- still in-memory only).
+  - New protocol messages: `list-devices` (controller asks), `device-list`
+    (full roster reply), `device-status-changed` (live push to any
+    controller that has asked at least once -- tracked via a
+    `subscribedControllers` Set in `pairing.ts`).
+  - Controller UX: click a device -> if no PIN cached for it yet
+    (`shared/devicePins.ts`, localStorage), prompt inline; on success the
+    PIN is remembered for next time. Connecting fullscreens the window
+    (`window.api.window.setFullScreen`, new IPC handler in `main/index.ts`);
+    Escape or the Back button exits fullscreen and returns to the list.
+  - The old single-device `VITE_DEVICE_ID`/`VITE_PIN` auto-connect env vars
+    (used by `start-controller.command`) still work and bypass the list
+    entirely -- `ControllerView.tsx` checks for them before rendering
+    `DeviceListView`.
+  - Verified locally end-to-end: device appears online with a green dot,
+    Connect -> PIN prompt -> pair -> fullscreen -> live video; Escape
+    returns to the list windowed; killing the agent flips the dot to gray
+    in real time with no page refresh.
 
 ## Running locally
 

@@ -120,6 +120,12 @@ app.whenReady().then(() => {
   // document focus; the native clipboard module always works.
   ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(text))
 
+  // Used by the controller to go fullscreen once a remote session connects,
+  // and back to windowed when returning to the device list.
+  ipcMain.handle('window:set-fullscreen', (event, value: boolean) => {
+    BrowserWindow.fromWebContents(event.sender)?.setFullScreen(value)
+  })
+
   // Grant getUserMedia/getDisplayMedia requests from the renderer (needed for screen capture).
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media')
