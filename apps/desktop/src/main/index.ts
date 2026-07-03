@@ -42,7 +42,7 @@ function createBrowserWindow(searchParams?: string): BrowserWindow {
     height: 670,
     show: false,
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -107,6 +107,11 @@ function createInputTestWindows(): void {
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
+
+  // macOS ignores BrowserWindow's `icon` option for the Dock -- the Dock
+  // icon needs to be set separately. Only matters for dev (`pnpm dev`);
+  // a packaged .app already gets its Dock icon from build/icon.icns.
+  app.dock?.setIcon(icon)
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
