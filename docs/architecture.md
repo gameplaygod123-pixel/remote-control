@@ -66,19 +66,26 @@ packages/protocol/          shared Zod message schema (desktop app <-> signaling
 - **Phase 3** (real signaling server + Device ID/PIN pairing): done, verified
   end-to-end with two separate app processes (agent + controller) on the
   same Mac connecting through `server/signaling` on `localhost:8080`.
-- **Phase 4** (cross-network connectivity, free-tier TURN + tunnel): done for
-  the Mac-only verification step — added free TURN (Open Relay Project) to
-  the ICE server list in `peerConnection.ts`, and confirmed a full
-  agent+controller pairing and WebRTC connection through a public Cloudflare
-  quick tunnel (`cloudflared tunnel --url http://localhost:8080`) pointed at
-  the local signaling server, instead of `localhost`. **Still needed**: the
-  actual two-separate-machines test (Windows agent + Mac controller on
-  genuinely different networks) — this only proved the tunnel/TURN plumbing
-  works, not that it survives a real hard-NAT scenario.
+- **Phase 4** (cross-network connectivity, free-tier TURN + tunnel): **done,
+  fully verified across two real separate machines.** Added free TURN (Open
+  Relay Project) to the ICE server list in `peerConnection.ts`. Deployed
+  `server/signaling` behind a public Cloudflare quick tunnel
+  (`cloudflared tunnel --url http://localhost:8080`) running on the Mac, and
+  confirmed a real Windows machine (agent) paired with the Mac (controller)
+  over the internet — live desktop video from Windows rendered in the Mac's
+  controller window. This is the actual target usage scenario from the
+  original plan (two personal machines, different networks).
   - The Cloudflare quick tunnel URL is **temporary** — it changes every time
     `cloudflared` is restarted, and free quick tunnels aren't meant for
     long-term/production use (no uptime guarantee). Fine for testing; a
     named tunnel or small VPS is the eventual upgrade per the original plan.
+  - Added an **auto-connect** convenience for personal use: set `VITE_PIN`
+    to the same fixed value on both agent and controller (instead of the
+    default rotating one-time PIN), and `VITE_DEVICE_ID` on the controller
+    matching the agent's ID — the controller then pairs automatically on
+    launch with no manual form/click needed. See `shared/config.ts`
+    (`FIXED_PIN`, `AUTO_CONNECT_DEVICE_ID`). Manual entry still works if
+    those env vars aren't set.
 - **Phase 5** (input over data channel, full remote-control loop): not started.
 - **Phase 6** (packaging), **Phase 7** (security hardening): not started.
 

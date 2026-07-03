@@ -1,18 +1,18 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { connectSignaling, SignalingClient } from '../shared/signaling/signalingClient'
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
-import { SIGNALING_URL } from '../shared/config'
+import { SIGNALING_URL, AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
 
 function ControllerView(): React.JSX.Element {
-  const [deviceId, setDeviceId] = useState('')
-  const [pin, setPin] = useState('')
+  const [deviceId, setDeviceId] = useState(AUTO_CONNECT_DEVICE_ID ?? '')
+  const [pin, setPin] = useState(FIXED_PIN ?? '')
   const [status, setStatus] = useState('not connected')
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
 
-  async function connect(): Promise<void> {
+  async function connect(targetDeviceId: string, targetPin: string): Promise<void> {
     setStatus('connecting to signaling server')
     const client = await connectSignaling(SIGNALING_URL)
     clientRef.current = client
@@ -33,7 +33,7 @@ function ControllerView(): React.JSX.Element {
           return
         }
         setStatus('paired, waiting for video offer')
-        const pc = createPeerConnection(transport, deviceId)
+        const pc = createPeerConnection(transport, targetDeviceId)
         pcRef.current = pc
         pc.onconnectionstatechange = () => setStatus(`connection: ${pc.connectionState}`)
         pc.ontrack = (event) => {
@@ -44,7 +44,7 @@ function ControllerView(): React.JSX.Element {
         await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
         const answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
-        transport.send({ type: 'sdp-answer', deviceId, sdp: answer.sdp })
+        transport.send({ type: 'sdp-answer', deviceId: targetDeviceId, sdp: answer.sdp })
       } else if (message.type === 'ice-candidate' && pcRef.current) {
         await pcRef.current.addIceCandidate({
           candidate: message.candidate,
@@ -55,8 +55,15 @@ function ControllerView(): React.JSX.Element {
     })
 
     setStatus('pairing')
-    transport.send({ type: 'pair-request', deviceId, pin })
+    transport.send({ type: 'pair-request', deviceId: targetDeviceId, pin: targetPin })
   }
+
+  useEffect(() => {
+    if (AUTO_CONNECT_DEVICE_ID && FIXED_PIN) {
+      connect(AUTO_CONNECT_DEVICE_ID, FIXED_PIN).catch((error) => setStatus(`error: ${String(error)}`))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div style={{ padding: 16 }}>
@@ -68,7 +75,7 @@ function ControllerView(): React.JSX.Element {
       <p>
         PIN: <input value={pin} onChange={(e) => setPin(e.target.value)} placeholder="123456" />
       </p>
-      <button onClick={connect}>Connect</button>
+      <button onClick={() => connect(deviceId, pin)}>Connect</button>
       <p>status: {status}</p>
       <video ref={videoRef} autoPlay style={{ width: 800 }} />
     </div>

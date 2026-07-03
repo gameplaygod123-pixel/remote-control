@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { connectSignaling } from '../shared/signaling/signalingClient'
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
-import { SIGNALING_URL, AGENT_TOKEN } from '../shared/config'
+import { SIGNALING_URL, AGENT_TOKEN, FIXED_PIN } from '../shared/config'
 
 const DEVICE_ID_KEY = 'remote-control-device-id'
 
@@ -20,7 +20,7 @@ function generatePin(): string {
 
 function AgentView(): React.JSX.Element {
   const [deviceId] = useState(getOrCreateDeviceId)
-  const [pin] = useState(generatePin)
+  const [pin] = useState(() => FIXED_PIN ?? generatePin())
   const [status, setStatus] = useState('connecting to signaling server')
   const videoRef = useRef<HTMLVideoElement>(null)
 
@@ -87,7 +87,7 @@ function AgentView(): React.JSX.Element {
         Device ID: <strong>{deviceId}</strong>
       </p>
       <p>
-        PIN: <strong>{pin}</strong> (changes each time this app restarts)
+        PIN: <strong>{pin}</strong> {FIXED_PIN ? '(fixed)' : '(changes each time this app restarts)'}
       </p>
       <p>status: {status}</p>
       <video ref={videoRef} autoPlay muted style={{ width: 300 }} />
