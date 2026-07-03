@@ -1,0 +1,12 @@
+{
+  "name": "remote-control-root",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "scripts": {
+    "dev:desktop": "pnpm --filter desktop dev",
+    "dev:signaling": "pnpm --filter signaling-server dev"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@remote-control/protocol",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "src/messages.ts",
+  "types": "src/messages.ts",
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
