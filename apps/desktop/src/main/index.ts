@@ -87,6 +87,18 @@ const inputTest = process.env.INPUT_TEST === '1'
 // window normally.
 const startHidden = process.env.START_HIDDEN === '1' || process.argv.includes('--hidden')
 
+// backgroundThrottling:false on the window wasn't enough on Windows: when
+// the agent window is hidden to the tray mid-session, Chromium's native
+// window occlusion tracking still marks the renderer as not-visible and
+// suspends its rendering pipeline, freezing the outgoing screen capture --
+// the controller sees a frozen frame and control appears dead the moment X
+// is clicked. These are the standard switches every Electron app that
+// captures/streams from a hidden window ships; they must be set before
+// app ready.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+
 // Not null/undefined once the agent's tray icon exists -- Quit in its
 // context menu is the only thing allowed to actually close the window
 // rather than hiding it (see setupAgentTray below).
