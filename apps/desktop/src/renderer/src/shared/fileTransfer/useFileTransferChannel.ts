@@ -16,6 +16,16 @@ export interface TransferState {
 // identical to "still going, just slow."
 const STALL_TIMEOUT_MS = 15_000
 
+// Surfaces the real browser/DOM error text (e.g. "Failed to execute
+// 'send' on 'RTCDataChannel': ...") in the UI itself rather than a generic
+// "failed to send" -- this app is a packaged install with no accessible
+// devtools console, so the UI is the only place a real diagnostic message
+// can reach anyone.
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
 // Shared by AgentView and ControllerSession -- both sides can send and
 // receive over the same "file-transfer" data channel (see peerConnection.ts),
 // so both use identical send/receive orchestration rather than duplicating
@@ -70,7 +80,7 @@ export function useFileTransferChannel(): {
           setTransfer((prev) => (prev ? { ...prev, progress: 100, done: true } : prev))
         } catch (error) {
           console.error('failed to save received file:', error)
-          setTransfer((prev) => (prev ? { ...prev, error: 'failed to save to Downloads' } : prev))
+          setTransfer((prev) => (prev ? { ...prev, error: describeError(error) } : prev))
         }
         setTimeout(() => setTransfer(null), 3000)
       }
@@ -80,7 +90,7 @@ export function useFileTransferChannel(): {
         receive(event)
       } catch (error) {
         console.error('file-transfer receive error:', error)
-        setTransfer((prev) => (prev ? { ...prev, error: 'transfer failed' } : prev))
+        setTransfer((prev) => (prev ? { ...prev, error: describeError(error) } : prev))
       }
     }
   }, [])
@@ -104,7 +114,7 @@ export function useFileTransferChannel(): {
           setTransfer((prev) => (prev ? { ...prev, progress: 100, done: true } : prev))
         } catch (error) {
           console.error('file-transfer send error:', error)
-          setTransfer((prev) => (prev ? { ...prev, error: 'failed to send' } : prev))
+          setTransfer((prev) => (prev ? { ...prev, error: describeError(error) } : prev))
         }
         await new Promise((resolve) => setTimeout(resolve, 2000))
       }

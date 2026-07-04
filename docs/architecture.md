@@ -1112,6 +1112,38 @@ flagged as the natural upgrade path in the original plan's known-risks
 section) -- not something fixable by changing this app's own protocol
 code further.
 
+### The connection badge showed "direct" -- and the chunk-size bump was the actual bug
+
+Badge confirmed a direct P2P connection, ruling out TURN relay entirely.
+Then the *next* file-transfer attempt (same 3.8MB file, now on v1.5.0 with
+the new error handling) immediately surfaced `"Dungeon": failed to send`
+-- a real, reproducible failure, not a stall or a slow-but-working
+transfer.
+
+Root cause: **the 64KB chunk-size bump from the previous change**.
+`RTCDataChannel.send()` throws synchronously if a single message exceeds
+the max message size actually negotiated between the two peers for that
+specific connection -- a per-connection SCTP negotiation outcome, not a
+fixed constant this app can know in advance. 16KB is conservative enough
+to stay under that ceiling essentially always; 64KB apparently wasn't, at
+least for this connection. Reverted `CHUNK_SIZE` back to 16KB and
+`BUFFERED_AMOUNT_LOW_THRESHOLD` back to 1MB (the exact values from before
+the "faster transfer" attempt) -- re-verified byte-exact with the
+standalone test again after reverting.
+
+This is exactly why the earlier "let's bump chunk size, it's a free win"
+reasoning was wrong: message-size limits aren't discoverable or
+guaranteed portable across connections, so a value that's "obviously
+safe" on one path can silently break another. Not worth revisiting
+without a real, measured need -- 16KB stays.
+
+Also improved error visibility while looking at this: **`describeError()`**
+in `useFileTransferChannel.ts` now surfaces the actual `Error.message`
+from a failed send/receive/save (e.g. the real DOMException text) instead
+of a generic hardcoded string like "failed to send" -- important because
+this is a packaged app with no accessible devtools console, so the
+in-app error banner is the only diagnostic channel available at all.
+
 ## Running locally
 
 Root of the repo:

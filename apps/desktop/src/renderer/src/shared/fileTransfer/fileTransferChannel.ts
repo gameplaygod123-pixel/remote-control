@@ -5,22 +5,23 @@
 // sends, whichever side has createFileReceiver attached to onmessage receives --
 // same channel object works either way once open, like the input channel does.
 
-// Chromium's data-channel implementation comfortably handles messages well
-// above this; 64KB cuts the number of send()/onmessage round-trips (and
-// their per-message JS overhead) roughly 4x versus a more conservative
-// 16KB without meaningfully risking hitting any real message-size ceiling.
-// Note this is very unlikely to be the actual bottleneck for a slow
-// transfer -- see connectionType.ts for the more likely culprit (TURN
-// relay bandwidth).
-const CHUNK_SIZE = 64 * 1024
+// Was briefly bumped to 64KB to reduce per-message overhead, but that
+// broke a real transfer with "failed to send" -- RTCDataChannel.send()
+// throws synchronously if a single message exceeds the max message size
+// actually negotiated between the two peers for this connection (SCTP's
+// negotiated limit, which isn't something this app controls or can query
+// in advance). 16KB is the conservative, near-universally-safe value and
+// is back to being the known-good baseline; not worth risking another
+// silent-ish failure for a modest speed gain that wasn't the real
+// bottleneck anyway (see connectionType.ts -- relay bandwidth, not chunk
+// size, is the usual culprit for a genuinely slow transfer).
+const CHUNK_SIZE = 16 * 1024
 
 // Pause sending once this much is buffered locally, resuming on
 // `bufferedamountlow` -- without this, blasting a large file into `send()`
 // as fast as possible can balloon memory/latency far ahead of what the
-// other side has actually received. Scaled up alongside CHUNK_SIZE so this
-// still allows a healthy number of in-flight chunks rather than throttling
-// after just a handful.
-const BUFFERED_AMOUNT_LOW_THRESHOLD = 4 * 1024 * 1024
+// other side has actually received.
+const BUFFERED_AMOUNT_LOW_THRESHOLD = 1024 * 1024
 
 type ControlMessage = { t: 'file-start'; name: string; size: number } | { t: 'file-end' }
 
