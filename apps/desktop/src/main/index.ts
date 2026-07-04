@@ -78,11 +78,14 @@ const loopbackTest = process.env.LOOPBACK_TEST === '1'
 // this validates each side in isolation before wiring them together (Phase 5).
 const inputTest = process.env.INPUT_TEST === '1'
 
-// Set by start-agent-background.bat (the auto-start-at-boot launcher) so
-// the agent comes up tray-only, like Parsec's host app, instead of
-// popping a window every time Windows logs in. Manual launches (plain
-// start-agent.bat/.vbs) still show the window normally.
-const startHidden = process.env.START_HIDDEN === '1'
+// Two ways this gets set: `START_HIDDEN=1` from start-agent-background.bat
+// (the dev-mode launcher script), or a `--hidden` argv flag that this app
+// passes to itself via setLoginItemSettings below (the packaged-install
+// path). Either way the agent comes up tray-only, like Parsec's host app,
+// instead of popping a window every time Windows logs in. Manual launches
+// (double-clicking the app / plain start-agent.bat/.vbs) still show the
+// window normally.
+const startHidden = process.env.START_HIDDEN === '1' || process.argv.includes('--hidden')
 
 // Not null/undefined once the agent's tray icon exists -- Quit in its
 // context menu is the only thing allowed to actually close the window
@@ -225,6 +228,18 @@ app.whenReady().then(async () => {
   // genuinely fresh install does this actually show the picker UI.
   const appMode: AppMode = envMode ?? getSavedMode() ?? (await promptForMode())
   if (!envMode) saveMode(appMode)
+
+  // The installed app previously had *no* auto-start mechanism at all --
+  // the old enable-autostart.vbs script only ever applied to the dev-mode
+  // source checkout (a Startup-folder shortcut to start-agent-background.vbs),
+  // which doesn't exist once that folder is deleted after installing the
+  // real packaged app. Only the agent needs this: it's the side that has
+  // to be reachable for incoming connections after an unattended reboot.
+  // Safe to call on every launch -- it's how Electron expects this to be
+  // kept in sync (e.g. if the install path ever changes after an update).
+  if (app.isPackaged && appMode === 'agent') {
+    app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] })
+  }
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.

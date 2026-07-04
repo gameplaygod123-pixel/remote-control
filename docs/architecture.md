@@ -602,6 +602,43 @@ force a window in front of you just to sit there running.
   `enable-autostart.vbs` + a real reboot to confirm the hidden auto-start
   path.
 
+### Bug found live: the packaged installer had no auto-start at all
+
+The VBS/Startup-folder auto-start above only ever applied to the dev-mode
+source checkout (`enable-autostart.vbs` drops a shortcut to
+`start-agent-background.vbs`, a file that only exists in that checkout).
+Once the user actually installed the real packaged app and deleted the old
+dev-mode folder (see the earlier "Folder In Use" troubleshooting in the
+session transcript), there was **no auto-start mechanism left at all** --
+the installed app never registered itself to launch at login by any means.
+Surfaced as: close/reboot Windows, agent never comes back, have to launch
+it by hand every time.
+
+Fixed with Electron's own `app.setLoginItemSettings()` -- the API the
+original tray section above explicitly avoided because "the app isn't
+packaged yet ... no stable installed .exe path for that API to point at."
+That blocker is gone now that Phase 6 packaging is done:
+
+```js
+if (app.isPackaged && appMode === 'agent') {
+  app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] })
+}
+```
+
+Called on every launch of a packaged agent (cheap, and keeps the
+registered path in sync if the install location ever changes). Windows
+starts the app with a `--hidden` argv flag on login; `startHidden` now
+checks `process.argv.includes('--hidden')` in addition to the existing
+`START_HIDDEN=1` env var (which still covers the dev-mode scripts), so
+both paths land on the same tray-only-no-window-flash behavior. Only
+wired for agent mode -- the controller is meant to be opened by hand when
+you actually want to connect somewhere, not run unattended.
+
+The old `.vbs` auto-start scripts are left in the repo since they still
+serve dev-mode (`pnpm dev`) testing, but are no longer relevant to the
+packaged/installed workflow -- that now "just works" out of the box with
+zero extra setup scripts to run.
+
 ### Bug found live: trust didn't survive fully quitting the agent
 
 Confirmed working end-to-end by the user (accept once, reconnects skip
