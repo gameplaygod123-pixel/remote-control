@@ -38,6 +38,14 @@ export default function DeviceListView({
   const [pinPromptFor, setPinPromptFor] = useState<string | null>(null)
   const [pinInput, setPinInput] = useState('')
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  // Manual entry -- connects straight to a Device ID/PIN without waiting
+  // for it to show up in the auto-discovered list. Needed for a device
+  // that hasn't registered with this signaling server yet, is on a
+  // different signaling server entirely, or just hasn't shown up for any
+  // other reason -- a correct ID+PIN is enough to try pairing regardless.
+  const [showAddDevice, setShowAddDevice] = useState(false)
+  const [addDeviceId, setAddDeviceId] = useState('')
+  const [addPin, setAddPin] = useState('')
   const clientRef = useRef<SignalingClient | null>(null)
 
   useEffect(() => {
@@ -116,6 +124,14 @@ export default function DeviceListView({
     onConnect(pinPromptFor, pinInput)
   }
 
+  async function submitAddDevice(): Promise<void> {
+    const deviceId = addDeviceId.trim()
+    const pin = addPin.trim()
+    if (!deviceId || !pin) return
+    await window.api.controllerMemory.setCachedPin(deviceId, pin)
+    onConnect(deviceId, pin)
+  }
+
   const onlineCount = devices.filter((d) => d.online).length
   const statusVariant = classify(status)
 
@@ -138,11 +154,44 @@ export default function DeviceListView({
             </h1>
             <p className="dl-subheading">พบเครื่องทั้งหมด {devices.length} เครื่อง</p>
           </div>
-          <span className={`dl-pill is-${statusVariant}`}>
-            <span className={`dl-pill-dot${statusVariant === 'warn' ? ' is-pulsing' : ''}`} />
-            {status}
-          </span>
+          <div className="dl-header-actions">
+            <span className={`dl-pill is-${statusVariant}`}>
+              <span className={`dl-pill-dot${statusVariant === 'warn' ? ' is-pulsing' : ''}`} />
+              {status}
+            </span>
+            <button className="dl-add-toggle" onClick={() => setShowAddDevice((v) => !v)}>
+              {showAddDevice ? '✕ Cancel' : '+ Add device'}
+            </button>
+          </div>
         </div>
+
+        {showAddDevice && (
+          <div className="dl-add-card">
+            <input
+              className="dl-pin-input"
+              placeholder="Device ID"
+              value={addDeviceId}
+              autoFocus
+              onChange={(e) => setAddDeviceId(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && submitAddDevice()}
+            />
+            <input
+              className="dl-pin-input"
+              placeholder="PIN"
+              value={addPin}
+              onChange={(e) => setAddPin(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && submitAddDevice()}
+            />
+            <button
+              className="dl-btn"
+              style={{ width: 'auto', padding: '0 14px' }}
+              disabled={!addDeviceId.trim() || !addPin.trim()}
+              onClick={submitAddDevice}
+            >
+              Connect
+            </button>
+          </div>
+        )}
 
         {devices.length === 0 ? (
           <p className="dl-empty">No devices have registered with this server yet.</p>

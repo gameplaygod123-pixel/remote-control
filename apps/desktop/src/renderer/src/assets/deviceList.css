@@ -106,6 +106,40 @@
   color: var(--dl-accent);
 }
 
+.dl-header-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dl-add-toggle {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--dl-border);
+  background: transparent;
+  color: var(--dl-text-dim);
+  cursor: pointer;
+}
+
+.dl-add-toggle:hover {
+  border-color: var(--dl-accent);
+  color: var(--dl-accent);
+}
+
+.dl-add-card {
+  display: flex;
+  gap: 8px;
+  padding: 14px;
+  margin-bottom: 20px;
+  border-radius: 10px;
+  border: 1px solid var(--dl-border);
+  background: var(--dl-card-bg);
+}
+
 .dl-pill.is-error {
   background: rgba(239, 68, 68, 0.12);
   color: #f87171;
