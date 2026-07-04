@@ -55,3 +55,8 @@ publish:
   provider: github
   owner: gameplaygod123-pixel
   repo: remote-control
+  # electron-builder defaults to publishing as a draft, which is invisible
+  # to both the public releases list and electron-updater's feed -- would
+  # otherwise need a manual `gh release edit --draft=false` after every
+  # release. This publishes it live immediately instead.
+  releaseType: release

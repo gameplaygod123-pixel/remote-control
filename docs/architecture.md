@@ -792,8 +792,7 @@ than migration logic for a case that only ever happens once.
 
 ## Auto-update wiring (electron-updater + GitHub Releases)
 
-Added the client-side half of auto-updating; the repo itself is
-deliberately still private, so this isn't live yet (see below).
+Added the client-side half of auto-updating.
 
 - Added `electron-updater` and `apps/desktop/src/main/updater.ts`:
   `initAutoUpdater()` is a no-op unless `app.isPackaged` (running via
@@ -816,15 +815,22 @@ deliberately still private, so this isn't live yet (see below).
   going forward: bump the version in `apps/desktop/package.json` first,
   then run this from `apps/desktop` with `GH_TOKEN` set.
 
-**Not done yet, on purpose**: the repo is still private. A public GitHub
-Releases feed requires the repo itself to be public (releases inherit repo
-visibility), and going public would make the old commits containing the
-now-retired real PIN (807302) permanently visible. Asked the user
-explicitly before flipping this -- answer was to hold off until the
-Windows installer itself has been tested end-to-end (still an open item
-from Phase 6). Until the repo goes public, none of this auto-update
-wiring actually does anything at runtime; it's just in place for when it
-does.
+**Now live**: the repo went public on 2026-07-04 (asked the user
+explicitly first, since the old commits containing the now-retired real
+PIN 807302 become permanently visible once public -- they confirmed going
+ahead once the Windows installer had been test-installed). First real
+release published the same day: `v1.2.0`, via `GH_TOKEN=$(gh auth token)
+pnpm release:win` from `apps/desktop`. One gotcha: electron-builder's GitHub publish creates the release as a
+**draft** by default -- draft releases don't show up in the public
+releases list and electron-updater can't see them either. Had to manually
+`gh release edit v1.2.0 --repo gameplaygod123-pixel/remote-control
+--draft=false` for this first release; fixed for good after that by
+adding `releaseType: release` to the `publish` block in
+`electron-builder.yml`, so future `pnpm release:win` runs publish live
+immediately with no extra step. Verified the published asset
+(`latest.yml`) is reachable with a plain anonymous `curl` (no token),
+confirming the feed is actually usable by an installed app with no
+credentials.
 
 ### Manual "check for updates" control
 
