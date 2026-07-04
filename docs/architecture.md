@@ -1507,6 +1507,33 @@ Framed as absolute numbers to evaluate, not a clean %-improvement figure,
 since the *previous* badge didn't measure processing time or codec at
 all -- there's no prior number for those two to compare against.
 
+### Real test result: fast decode/network, but only 25fps -- missing maxFramerate
+
+First real number back: `Decode 2ms · Network 13ms · 25fps · 1920×1080 ·
+15.1 Mbps · H264`. Confirms H.264 preference took effect (codec name
+shows up correctly) and decode/network are both excellent -- clearly not
+the bottleneck. But fps sat at 25 despite the 60fps capture request, with
+bitrate parked right at the 15Mbps ceiling. Reported symptom matched: a
+press-and-hold drag (moving a desktop icon) felt specifically laggy --
+sensible given continuous drags depend on smooth *visual* tracking more
+than a single click does, and 25fps means each frame is ~40ms stale
+versus the 16ms-paced mouse-position updates already being sent.
+
+**Root cause, most likely**: `degradationPreference: 'maintain-framerate'`
+is only a hint about what to sacrifice *once* bandwidth is constrained --
+it doesn't set an actual frame-rate target. With bitrate sitting at the
+ceiling, the encoder was evidently spending that whole budget on fewer,
+higher-quality frames instead of more frequent ones. `getDisplayMedia`'s
+`frameRate` constraint only bounds what's *captured*, not what the
+RTCRtpSender's encoder chooses to actually push out.
+
+**Fix**: added `params.encodings[0].maxFramerate = 60` alongside the
+existing `maxBitrate`/`degradationPreference` -- this is the direct way
+to tell the encoder what frame rate to target, rather than just hinting
+at trade-off priorities. Not yet confirmed against a second real
+measurement; next step is the user re-testing the same drag scenario and
+reporting the new fps/bitrate numbers.
+
 ## Running locally
 
 Root of the repo:

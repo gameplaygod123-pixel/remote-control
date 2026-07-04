@@ -319,6 +319,16 @@ function AgentView(): React.JSX.Element {
             const params = sender.getParameters()
             if (!params.encodings?.length) params.encodings = [{}]
             params.encodings[0].maxBitrate = 15_000_000
+            // Real test showed only ~25fps actually achieved despite the
+            // 60fps capture request and plenty of unused bitrate headroom
+            // (bitrate was sitting right at the ceiling) -- the encoder was
+            // evidently choosing fewer, higher-quality frames over more
+            // frequent ones. `degradationPreference` alone is only a hint
+            // about what to sacrifice *under bandwidth pressure*; it
+            // doesn't set an actual frame rate target. `maxFramerate` is
+            // the direct way to tell the encoder what it should be aiming
+            // for regardless of how much bitrate headroom it thinks it has.
+            params.encodings[0].maxFramerate = 60
             // Under bandwidth pressure, WebRTC's default ('balanced') will
             // trade off *both* resolution and frame rate. For control feel,
             // a choppier-but-clear frame is worse than a softer-but-smooth
