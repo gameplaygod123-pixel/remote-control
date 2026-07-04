@@ -10,9 +10,11 @@ import type { UpdaterStatus } from '../../../../main/updater'
 // theme (Controller) without needing per-theme overrides.
 export default function UpdateBadge(): React.JSX.Element {
   const [status, setStatus] = useState<UpdaterStatus | null>(null)
+  const [version, setVersion] = useState<string | null>(null)
 
   useEffect(() => {
     window.api.updater.onStatus(setStatus)
+    window.api.getAppVersion().then(setVersion)
   }, [])
 
   function label(): string {
@@ -45,13 +47,16 @@ export default function UpdateBadge(): React.JSX.Element {
     status?.state === 'checking' || status?.state === 'downloading' || status?.state === 'available'
 
   return (
-    <button
-      className="footer-link"
-      onClick={handleClick}
-      disabled={busy}
-      title={status?.state === 'error' ? status.message : undefined}
-    >
-      {label()}
-    </button>
+    <span className="update-badge-group">
+      {version && <span className="app-version">v{version}</span>}
+      <button
+        className="footer-link"
+        onClick={handleClick}
+        disabled={busy}
+        title={status?.state === 'error' ? status.message : undefined}
+      >
+        {label()}
+      </button>
+    </span>
   )
 }

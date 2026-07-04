@@ -254,6 +254,7 @@ app.whenReady().then(async () => {
   ipcMain.on('ping', () => console.log('pong'))
 
   ipcMain.handle('get-mode', (): AppMode => appMode)
+  ipcMain.handle('get-app-version', (): string => app.getVersion())
 
   // Explicit escape hatch for the "deleted and reinstalled, mode picker
   // never showed again" case -- uninstalling doesn't clear userData, so

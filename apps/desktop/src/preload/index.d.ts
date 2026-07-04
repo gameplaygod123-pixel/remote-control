@@ -8,6 +8,7 @@ declare global {
     electron: ElectronAPI
     api: {
       getMode: () => Promise<AppMode>
+      getAppVersion: () => Promise<string>
       sendSignal: (message: unknown) => void
       onSignal: (handler: (message: unknown) => void) => void
       input: {

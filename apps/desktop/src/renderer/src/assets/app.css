@@ -531,6 +531,18 @@
   cursor: default;
 }
 
+.update-badge-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-version {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.55;
+}
+
 /* Full-bleed agent screen -- fills the whole window edge-to-edge (like
    the device list's `.dl-shell`) instead of a small centered card
    floating over the starter template's decorative background. */

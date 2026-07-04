@@ -9,6 +9,7 @@ import UpdateBadge from '../shared/components/UpdateBadge'
 import SwitchModeLink from '../shared/components/SwitchModeLink'
 import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
+import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
 import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
 
@@ -66,7 +67,7 @@ function AgentView(): React.JSX.Element {
   const clientRef = useRef<Awaited<ReturnType<typeof connectSignaling>> | null>(null)
   const nameRef = useRef(name)
   nameRef.current = name
-  const { transfer, attachChannel, sendFiles } = useFileTransferChannel()
+  const { transfer, attachChannel, sendFiles, rejectDrop } = useFileTransferChannel()
 
   function handleDragOver(e: React.DragEvent): void {
     e.preventDefault()
@@ -74,6 +75,14 @@ function AgentView(): React.JSX.Element {
 
   function handleDrop(e: React.DragEvent): void {
     e.preventDefault()
+    const directoryName = findDroppedDirectory(e.dataTransfer)
+    if (directoryName) {
+      rejectDrop(
+        directoryName,
+        "folders aren't supported -- zip it first and drop the .zip instead"
+      )
+      return
+    }
     if (e.dataTransfer.files.length > 0) sendFiles(e.dataTransfer.files)
   }
 

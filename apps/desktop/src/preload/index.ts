@@ -7,6 +7,7 @@ type AppMode = 'agent' | 'controller'
 // Custom APIs for renderer
 const api = {
   getMode: (): Promise<AppMode> => ipcRenderer.invoke('get-mode'),
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('get-app-version'),
   // Generic signaling transport: relayed via the main process for the Phase 1
   // loopback test, will point at the real signaling WebSocket from Phase 3 onward.
   sendSignal: (message: unknown): void => {

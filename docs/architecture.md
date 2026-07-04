@@ -1181,6 +1181,46 @@ freeze. Worth remembering as a pattern: for a packaged app with no
 devtools access, investing in "show the real error" pays for itself
 almost immediately.
 
+### Same error, persisted after the fix -- the actual cause was a folder, not a file
+
+The user retested, confirmed they'd genuinely restarted into v1.5.2 (the
+"read the whole file upfront" fix), and got the *exact same*
+`NotFoundError` on the same file, from a real local file on their own
+Mac's Finder (ruled out the earlier remote-video-drag theory too). The
+"read once immediately" fix from the previous entry didn't touch the
+actual cause at all.
+
+**Real root cause**: "Dungeon" is a **folder**, not a file (a game
+folder). The browser's File/Blob drag-and-drop API has no concept of
+directory content -- a dropped folder still shows up in
+`dataTransfer.files` as a `File`-shaped object with a name and even an
+apparent size, but calling `.arrayBuffer()` (or `.slice().arrayBuffer()`)
+on it throws `NotFoundError` immediately, because there's no actual byte
+content behind a directory entry. Neither of the two previous fixes stood
+a chance -- this was never about *when* or *how* the file was read, it
+was that there was no file to read in the first place.
+
+**Fix**: detect this *before* ever attempting a read, using
+`DataTransferItem.webkitGetAsEntry()` (only available via
+`dataTransfer.items`, not `dataTransfer.files` -- `File` objects
+themselves have no `isDirectory` property). New
+`findDroppedDirectory(dataTransfer)` in `fileTransferChannel.ts` checks
+every dropped item's entry and returns the first directory's name, or
+`null` if everything dropped is a real file. Both `ControllerSession`'s
+and `AgentView`'s `handleDrop` check this first and, if found, call a new
+`rejectDrop(name, reason)` from `useFileTransferChannel` -- shows the same
+error banner UI but with an actionable message ("folders aren't supported
+-- zip it first and drop the .zip instead") instead of a cryptic browser
+exception, and never attempts a doomed read at all.
+
+Three attempts, three different (wrong, wrong, then right) theories --
+the pattern that actually worked was: ship a fix, ask the user to
+literally confirm the version before re-testing, and take the *exact*
+error text at face value rather than assuming the previous theory must
+still be right just because it seemed sound. "A requested file or
+directory could not be found" -- was, quite literally, about a directory
+the whole time.
+
 ## Running locally
 
 Root of the repo:

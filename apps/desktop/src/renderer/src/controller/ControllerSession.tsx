@@ -6,6 +6,7 @@ import { SIGNALING_URL } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
+import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
 import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
 import {
   RemoteInputMessage,
@@ -49,7 +50,7 @@ export default function ControllerSession({
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const inputChannelRef = useRef<RTCDataChannel | null>(null)
   const lastMoveSentRef = useRef(0)
-  const { transfer, attachChannel, sendFiles } = useFileTransferChannel()
+  const { transfer, attachChannel, sendFiles, rejectDrop } = useFileTransferChannel()
 
   function handleDragOver(e: React.DragEvent<HTMLVideoElement>): void {
     e.preventDefault()
@@ -57,6 +58,14 @@ export default function ControllerSession({
 
   function handleDrop(e: React.DragEvent<HTMLVideoElement>): void {
     e.preventDefault()
+    const directoryName = findDroppedDirectory(e.dataTransfer)
+    if (directoryName) {
+      rejectDrop(
+        directoryName,
+        "folders aren't supported -- zip it first and drop the .zip instead"
+      )
+      return
+    }
     if (e.dataTransfer.files.length > 0) sendFiles(e.dataTransfer.files)
   }
 

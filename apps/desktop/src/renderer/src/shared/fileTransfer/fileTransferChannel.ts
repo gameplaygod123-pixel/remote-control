@@ -5,6 +5,22 @@
 // sends, whichever side has createFileReceiver attached to onmessage receives --
 // same channel object works either way once open, like the input channel does.
 
+// A dropped folder shows up in `dataTransfer.files` too, with a `File`
+// object that looks perfectly normal (has a name, even a size) but throws
+// a NotFoundError the instant anything tries to actually read its content
+// -- the browser's File/Blob API has no concept of directory content,
+// only real files. `webkitGetAsEntry()` (only available via
+// `DataTransferItem`, not `File`) is the way to detect this *before*
+// attempting a read that's guaranteed to fail. Returns the name of the
+// first directory found, or null if every dropped item is a real file.
+export function findDroppedDirectory(dataTransfer: DataTransfer): string | null {
+  for (const item of dataTransfer.items) {
+    const entry = item.webkitGetAsEntry?.()
+    if (entry?.isDirectory) return entry.name
+  }
+  return null
+}
+
 // Was briefly bumped to 64KB to reduce per-message overhead, but that
 // broke a real transfer with "failed to send" -- RTCDataChannel.send()
 // throws synchronously if a single message exceeds the max message size

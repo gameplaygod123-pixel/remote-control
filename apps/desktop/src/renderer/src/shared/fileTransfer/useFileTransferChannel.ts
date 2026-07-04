@@ -34,6 +34,7 @@ export function useFileTransferChannel(): {
   transfer: TransferState | null
   attachChannel: (channel: RTCDataChannel) => void
   sendFiles: (files: FileList | File[]) => void
+  rejectDrop: (name: string, reason: string) => void
 } {
   const [transfer, setTransfer] = useState<TransferState | null>(null)
   const channelRef = useRef<RTCDataChannel | null>(null)
@@ -95,6 +96,16 @@ export function useFileTransferChannel(): {
     }
   }, [])
 
+  // For a drop that's rejected before ever reaching sendFiles -- e.g. a
+  // folder, which the browser's File/Blob API can't read as byte content
+  // at all (that's what a raw NotFoundError from a directory drop actually
+  // means, discovered the hard way). Surfaces the same error banner
+  // without pretending a transfer was attempted.
+  const rejectDrop = useCallback((name: string, reason: string) => {
+    setTransfer({ direction: 'send', name, progress: 0, done: false, error: reason })
+    setTimeout(() => setTransfer(null), 4000)
+  }, [])
+
   const sendFiles = useCallback((files: FileList | File[]) => {
     const channel = channelRef.current
     if (!channel || channel.readyState !== 'open') return
@@ -122,5 +133,5 @@ export function useFileTransferChannel(): {
     })()
   }, [])
 
-  return { transfer, attachChannel, sendFiles }
+  return { transfer, attachChannel, sendFiles, rejectDrop }
 }
