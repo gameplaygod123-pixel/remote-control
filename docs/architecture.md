@@ -1534,6 +1534,42 @@ at trade-off priorities. Not yet confirmed against a second real
 measurement; next step is the user re-testing the same drag scenario and
 reporting the new fps/bitrate numbers.
 
+### Confirmed fixed (25fps -> 57fps), but surfaced a second, unrelated bug
+
+Re-test: `Decode 2ms · Network 11ms · 57fps · 1920×1080 · 15.0 Mbps ·
+H264` -- `maxFramerate` fix confirmed working, landing right at the 60fps
+target. But a new, more serious symptom showed up: releasing a mouse
+button during a drag kept the drag *visibly continuing on the remote
+machine for up to ~3 seconds* after the actual release.
+
+**Root cause**: `sendInput()` (`ControllerSession.tsx`) had zero
+backpressure awareness -- every mousemove during a drag (now up to
+60/sec, since the earlier smoothness pass tightened the throttle from
+33ms to 16ms) was sent unconditionally via `channel.send()`. WebRTC data
+channels are ordered and reliable by default: if the channel can't drain
+messages as fast as they're being fed in (plausible now that the video
+track is also asking for up to 15Mbps over the same connection), queued
+`move` messages back up, and a `down`/`up` message sent chronologically
+*after* that backlog is stuck behind all of it until the whole queue
+drains -- which is exactly "release the button, but the remote side keeps
+dragging for seconds," a self-inflicted side effect of this session's own
+earlier bitrate/frame-rate increases putting more pressure on the shared
+connection.
+
+**Fix**: `sendInput()` now checks `channel.bufferedAmount` before sending
+a `move` message specifically, and silently skips it once buffered data
+exceeds 16KB -- a stale position update is safe to drop since a newer one
+supersedes it anyway. Critically, this check is scoped to `t === 'move'`
+only: button state (`down`/`up`) and key events always send regardless of
+buffered amount, since those must never be dropped. This is the same
+backpressure pattern already used for file transfer
+(`bufferedAmountLowThreshold`/`waitForDrain`), just applied as a
+drop-if-stale policy instead of a wait-and-retry one, since a mouse
+position (unlike a file chunk) doesn't need to arrive at all once
+superseded.
+
+Not yet confirmed against a real re-test.
+
 ## Running locally
 
 Root of the repo:

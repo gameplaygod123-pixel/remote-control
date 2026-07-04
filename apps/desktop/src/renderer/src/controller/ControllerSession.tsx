@@ -100,9 +100,24 @@ export default function ControllerSession({
     onBack()
   }
 
+  // The input channel is ordered/reliable by default with no backpressure
+  // handling at all -- every mousemove during a fast drag (up to 60/sec)
+  // got sent unconditionally. If the channel can't drain as fast as it's
+  // fed (competing with the video track's own bitrate over the same
+  // connection, or just a moment of network jitter), queued 'move'
+  // messages pile up, and a 'down'/'up' sent chronologically *after* them
+  // gets stuck behind that whole backlog -- exactly the reported symptom
+  // of a drag visibly continuing for seconds after the button was
+  // actually released. Only 'move' is safe to drop when backed up (a
+  // newer position supersedes anything older anyway); button state and
+  // key events must never be skipped, so they always send regardless.
+  const INPUT_BUFFERED_AMOUNT_THRESHOLD = 16 * 1024
+
   function sendInput(message: RemoteInputMessage): void {
     const channel = inputChannelRef.current
-    if (channel && channel.readyState === 'open') channel.send(JSON.stringify(message))
+    if (!channel || channel.readyState !== 'open') return
+    if (message.t === 'move' && channel.bufferedAmount > INPUT_BUFFERED_AMOUNT_THRESHOLD) return
+    channel.send(JSON.stringify(message))
   }
 
   function buttonFromEvent(e: React.MouseEvent): 'left' | 'right' | 'middle' | null {
