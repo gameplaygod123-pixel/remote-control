@@ -112,14 +112,31 @@ export const CODE_TO_KEY: Partial<Record<string, Key>> = {
   ShiftRight: Key.RightShift,
   ArrowUp: Key.Up,
   ControlLeft: Key.LeftControl,
-  MetaLeft: Key.LeftSuper,
+  // The agent is always Windows -- Cmd (Mac) mapping to the literal
+  // Windows/Super key would mean Cmd+C, Cmd+V, Cmd+Z, Cmd+A, Cmd+S, Cmd+F
+  // (the shortcuts anyone controlling from a Mac actually reaches for)
+  // silently do nothing useful on the remote machine, since Windows
+  // expects Ctrl for all of these. Mapping Cmd to Ctrl instead matches
+  // what every other cross-platform remote-desktop tool does by default.
+  // Trade-off: this means a *literal* Windows-key shortcut (Win+D, Win+E)
+  // can no longer be sent from a Mac's Cmd key -- a much rarer need than
+  // copy/paste working at all.
+  MetaLeft: Key.LeftControl,
   AltLeft: Key.LeftAlt,
   Space: Key.Space,
   AltRight: Key.RightAlt,
-  MetaRight: Key.RightSuper,
+  MetaRight: Key.RightControl,
   ContextMenu: Key.Menu,
   ControlRight: Key.RightControl,
   ArrowLeft: Key.Left,
   ArrowDown: Key.Down,
-  ArrowRight: Key.Right
+  ArrowRight: Key.Right,
+  // Media keys -- present on most Mac keyboards as Fn-modified F-keys.
+  AudioVolumeMute: Key.AudioMute,
+  AudioVolumeDown: Key.AudioVolDown,
+  AudioVolumeUp: Key.AudioVolUp,
+  MediaPlayPause: Key.AudioPlay,
+  MediaStop: Key.AudioStop,
+  MediaTrackNext: Key.AudioNext,
+  MediaTrackPrevious: Key.AudioPrev
 }

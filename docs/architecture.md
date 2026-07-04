@@ -1397,6 +1397,60 @@ Deferred: the third original suggestion (letting quality/resolution be
 adjustable, or auto-tuning based on the new stats readout) until the user
 reports back what the actual fps/bitrate numbers look like in practice.
 
+## Special keyboard shortcuts: Cmd mapped to the wrong key entirely
+
+Asked to check on special shortcuts specifically. Found a real, previously
+unnoticed bug rather than a missing feature: `keyMap.ts`'s `CODE_TO_KEY`
+mapped `MetaLeft`/`MetaRight` (Cmd on a Mac keyboard) to
+`Key.LeftSuper`/`Key.RightSuper` -- nut.js's *literal Windows key*. Since
+the agent is always Windows, this meant Cmd+C, Cmd+V, Cmd+Z, Cmd+A,
+Cmd+S, Cmd+F -- the shortcuts anyone controlling from a Mac reaches for
+by muscle memory -- were injecting "Windows key + letter" on the remote
+machine the whole time, which does nothing useful (or occasionally
+something unrelated, like Win+C's Windows-version-dependent behavior).
+This had gone unnoticed because everything *tested* up to this point had
+been mouse/typing/video-focused, not modifier combos.
+
+**Fix**: `MetaLeft`/`MetaRight` now map to `Key.LeftControl`/
+`Key.RightControl` instead. This is the same default every other
+cross-platform remote-desktop tool ships -- copy/paste/undo/etc. working
+is far more commonly needed than sending a literal Windows-key shortcut
+from a Mac. Trade-off, stated plainly: there's now no way to send an
+actual Windows-key combo (Win+D, Win+E, Win+L) from a Mac's Cmd key. Not
+addressed further since nobody's asked for that yet.
+
+**Also added while in this file**: media key mappings that nut.js
+already supports but weren't wired up --
+`AudioVolumeMute/Down/Up`, `MediaPlayPause`, `MediaStop`,
+`MediaTrackNext/Previous` (real `KeyboardEvent.code` values, present on
+Mac keyboards as Fn-modified F-keys) -> `Key.AudioMute` / `AudioVolDown`
+/ `AudioVolUp` / `AudioPlay` / `AudioStop` / `AudioNext` / `AudioPrev`.
+
+**Known limitations, not bugs, worth stating explicitly**:
+- **Ctrl+Alt+Delete cannot be injected by any user-mode software**,
+  including nut.js -- Windows routes that combo to the secure desktop
+  specifically to prevent this. Already flagged in the original plan's
+  known-risks section; would need a signed Windows service running in
+  the right session to work around, well out of scope here.
+- **Cmd+Tab, Cmd+Space (Spotlight), and similar macOS system-level
+  shortcuts never reach this app's renderer at all** -- macOS's window
+  server intercepts them before any application's keydown handler sees
+  them, remote-control app or not. Same is true for every other
+  remote-desktop tool.
+- **Cmd+Q / Cmd+W could quit or close the controller app itself** rather
+  than reaching the remote machine -- there's no custom
+  `Menu.setApplicationMenu()` in this app, so Electron's default macOS
+  menu (with standard Quit/Close/Minimize accelerators) is active. That
+  same default menu is also *why* Cmd+C/V/X/A/Z already work for local
+  text fields (the rename input, PIN field) in the first place -- macOS
+  Electron apps need an Edit menu with `role: 'copy'/'paste'/etc.` for
+  those to function at all in `<input>` elements, so removing the whole
+  menu to fix the Cmd+Q risk would break local field editing as a side
+  effect. Left as-is; flagged rather than "fixed" since a real fix needs
+  either scoping Quit/Close out of the default menu specifically or
+  guarding it with a confirmation while a session is active -- not done
+  without the user confirming they actually want that trade-off.
+
 ## Running locally
 
 Root of the repo:
