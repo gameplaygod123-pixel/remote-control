@@ -790,6 +790,42 @@ it once on the Mac's device list. Deliberately not more automated than
 that -- a manual one-time step here is simpler and more obviously correct
 than migration logic for a case that only ever happens once.
 
+## Auto-update wiring (electron-updater + GitHub Releases)
+
+Added the client-side half of auto-updating; the repo itself is
+deliberately still private, so this isn't live yet (see below).
+
+- Added `electron-updater` and `apps/desktop/src/main/updater.ts`:
+  `initAutoUpdater()` is a no-op unless `app.isPackaged` (running via
+  `pnpm dev` has no real feed or installer to update against). Checks once
+  at startup and every 6 hours after -- long enough intervals to not spam
+  GitHub, frequent enough that the agent (which can run unattended for
+  days after auto-starting at boot) doesn't need a manual restart to pick
+  up a release. On `update-downloaded`, shows a native dialog with
+  "Restart now" / "Later"; if left running, `autoInstallOnAppQuit` applies
+  it the next time the app actually closes anyway.
+- `electron-builder.yml`'s `publish` block now points at
+  `provider: github, owner: gameplaygod123-pixel, repo: remote-control`
+  (was a placeholder `generic` URL). This is what both the *read* side
+  (the installed app's update feed) and the *write* side (`electron-builder
+  --publish always`) resolve against.
+- New script `pnpm release:win` (in `apps/desktop`) = build + `electron-builder
+  --win --publish always`. Needs a `GH_TOKEN` env var (a GitHub PAT with
+  `repo` scope) set on the Mac when run -- `gh auth token` works if the
+  `gh` CLI is already logged in. This is the actual "cut a release" command
+  going forward: bump the version in `apps/desktop/package.json` first,
+  then run this from `apps/desktop` with `GH_TOKEN` set.
+
+**Not done yet, on purpose**: the repo is still private. A public GitHub
+Releases feed requires the repo itself to be public (releases inherit repo
+visibility), and going public would make the old commits containing the
+now-retired real PIN (807302) permanently visible. Asked the user
+explicitly before flipping this -- answer was to hold off until the
+Windows installer itself has been tested end-to-end (still an open item
+from Phase 6). Until the repo goes public, none of this auto-update
+wiring actually does anything at runtime; it's just in place for when it
+does.
+
 ## Running locally
 
 Root of the repo:

@@ -47,6 +47,11 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
+# Update feed for electron-updater. Publishing a release (electron-builder
+# --publish always) needs a GH_TOKEN env var with repo write access on the
+# machine doing the build; the app itself only *reads* this feed at
+# runtime, which needs no token as long as the repo/releases are public.
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: gameplaygod123-pixel
+  repo: remote-control

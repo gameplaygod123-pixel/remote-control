@@ -39,6 +39,7 @@ import {
   regeneratePin as regenerateAgentPin
 } from './agentIdentity'
 import { getSavedMode, saveMode, type AppMode } from './appModeConfig'
+import { initAutoUpdater } from './updater'
 import {
   getCachedPin,
   setCachedPin,
@@ -336,6 +337,7 @@ app.whenReady().then(async () => {
   }
 
   launchWindows()
+  initAutoUpdater()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
