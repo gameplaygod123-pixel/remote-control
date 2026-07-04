@@ -274,9 +274,19 @@ function AgentView(): React.JSX.Element {
 
           // frameRate: without an explicit ask, Chromium's screen-capture
           // default can be quite conservative (sometimes ~5fps), which reads
-          // as "laggy" even though the connection itself is fine.
+          // as "laggy" even though the connection itself is fine. Pushed to
+          // 60fps (from 30) since a smooth cursor/motion feel matters more
+          // for remote *control* than per-frame sharpness -- paired with
+          // capping resolution to 1080p below so the extra frames don't
+          // just double the encoder's/network's workload at full native
+          // resolution (which on a high-res monitor was likely the actual
+          // bottleneck behind feeling laggy, not the frame rate cap itself).
           const stream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: { ideal: 30, max: 30 } }
+            video: {
+              frameRate: { ideal: 60, max: 60 },
+              width: { ideal: 1920, max: 1920 },
+              height: { ideal: 1080, max: 1080 }
+            }
           })
           const [videoTrack] = stream.getVideoTracks()
           // Tells the encoder to prioritize smooth motion (cursor movement,
@@ -294,7 +304,16 @@ function AgentView(): React.JSX.Element {
             // stream sooner once real available bandwidth allows it.
             const params = sender.getParameters()
             if (!params.encodings?.length) params.encodings = [{}]
-            params.encodings[0].maxBitrate = 4_000_000
+            // Bumped alongside the 1080p/60fps cap above -- more frames
+            // per second need more bitrate headroom to stay sharp instead
+            // of turning to mush under motion.
+            params.encodings[0].maxBitrate = 6_000_000
+            // Under bandwidth pressure, WebRTC's default ('balanced') will
+            // trade off *both* resolution and frame rate. For control feel,
+            // a choppier-but-clear frame is worse than a softer-but-smooth
+            // one -- explicitly prioritize keeping frame rate up and let
+            // resolution/sharpness degrade first instead.
+            params.degradationPreference = 'maintain-framerate'
             sender.setParameters(params).catch(() => {})
           })
           if (videoRef.current) videoRef.current.srcObject = stream

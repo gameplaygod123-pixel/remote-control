@@ -1343,6 +1343,60 @@ buggy:
   leaving a session is untouched, so that part of the cleanup still
   happens correctly either way.
 
+## Smoothness pass: capture resolution/framerate + a real stats readout
+
+User reported remote control not feeling smooth and asked for options.
+Given the input (mouse/keyboard) channel is already a small, throttled
+data channel unlikely to be the bottleneck, the video feed was the prime
+suspect -- specifically, the agent was capturing at *native* screen
+resolution with no cap, meaning a 1440p/4K monitor was encoding and
+transmitting far more pixel data per frame than necessary, which is a
+classic cause of choppy-feeling remote control (this is why AnyDesk/
+TeamViewer/Parsec all cap capture resolution rather than sending native).
+Picked two of three suggested fixes to try first, deferring further
+tuning until real numbers are in:
+
+- **Capture resolution cap + higher frame rate target**
+  (`AgentView.tsx`'s `getDisplayMedia` call): now requests
+  `1920x1080 @ 60fps` (was uncapped resolution @ 30fps). The resolution
+  cap is what actually makes 60fps achievable without exploding bandwidth
+  -- doubling frame rate while *also* leaving resolution uncapped on a
+  high-res monitor would have made things worse, not better.
+- **`degradationPreference: 'maintain-framerate'`** on the video sender's
+  encoding parameters, alongside bumping `maxBitrate` 4Mbps -> 6Mbps to
+  give the higher frame rate headroom. Without this, WebRTC's default
+  bandwidth-adaptation ('balanced') will trade off *both* resolution and
+  frame rate under pressure -- for a control session, a choppy-but-sharp
+  frame is worse than a soft-but-smooth one, so frame rate is now
+  explicitly protected first.
+- **Mouse-move throttle tightened** 33ms -> 16ms (`ControllerSession.tsx`)
+  to match the new 60fps target -- the video being smoother doesn't help
+  if cursor position updates are still capped at ~30/sec.
+- **Real stats readout** (`shared/webrtc/useVideoStats.ts`): polls
+  `RTCPeerConnection.getStats()` every second for the inbound video RTP
+  stats (actual fps, resolution, and a computed bitrate from the
+  `bytesReceived` delta between samples) and shows it as a small badge
+  next to the connection-type badge in the session header, e.g. "58fps ·
+  1920×1080 · 5.2 Mbps". This answers "is it actually achieving what was
+  asked, or is something else limiting it" with real numbers instead of
+  guessing -- e.g. distinguishes "capped by my own settings" from
+  "bandwidth-limited" from "something else entirely (CPU encode limits,
+  capture overhead)".
+- Tracking the peer connection as React state (`activePc`, alongside the
+  existing `pcRef`) was necessary for the stats hook's effect to actually
+  re-run when the connection is replaced -- mutating a ref doesn't trigger
+  a re-render on its own, so `useVideoStats` would otherwise keep polling
+  a stale (or the very first) connection object forever.
+- Hit one linter-flagged React anti-pattern while writing the hook: calling
+  `setState(null)` synchronously inside an effect body (to reset stats
+  when `pc` goes null) triggers cascading renders. Fixed by deriving the
+  exposed value at render time (`return pc ? stats : null`) instead of
+  mutating state to represent "no active connection."
+
+Deferred: the third original suggestion (letting quality/resolution be
+adjustable, or auto-tuning based on the new stats readout) until the user
+reports back what the actual fps/bitrate numbers look like in practice.
+
 ## Running locally
 
 Root of the repo:

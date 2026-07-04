@@ -8,6 +8,7 @@ import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
 import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
 import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
+import { useVideoStats } from '../shared/webrtc/useVideoStats'
 import {
   RemoteInputMessage,
   isPrintableKey,
@@ -17,8 +18,10 @@ import {
 
 // Mousemove fires far more often than the remote side needs to react to --
 // this caps how frequently position updates cross the data channel without
-// making cursor movement feel laggy.
-const MOUSE_MOVE_THROTTLE_MS = 33
+// making cursor movement feel laggy. Matched to the video's 60fps target
+// (was 33ms/~30fps) so cursor updates aren't the bottleneck on
+// responsiveness now that the video itself can keep up at that rate.
+const MOUSE_MOVE_THROTTLE_MS = 16
 
 // After a network drop -- or the agent machine being restarted by hand,
 // which can take an arbitrarily long time -- the controller and agent
@@ -44,6 +47,11 @@ export default function ControllerSession({
   // is passing through the free TURN server (shared, bandwidth-limited)
   // rather than a direct path between the two machines.
   const [connectionType, setConnectionType] = useState<ConnectionType | null>(null)
+  // Tracked as state (not just pcRef) so useVideoStats' effect re-runs
+  // whenever the underlying peer connection is actually replaced --
+  // mutating a ref doesn't trigger a re-render on its own.
+  const [activePc, setActivePc] = useState<RTCPeerConnection | null>(null)
+  const videoStats = useVideoStats(activePc, 'inbound')
   // Fetched from a main-process file rather than localStorage, which is
   // scoped to the Vite dev server's origin and would reset this identity
   // if the dev-server port ever shifted between runs.
@@ -204,6 +212,7 @@ export default function ControllerSession({
           // connection (if any) is no longer valid -- start over.
           pcRef.current?.close()
           pcRef.current = null
+          setActivePc(null)
           inputChannelRef.current = null
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, pairing')
@@ -253,6 +262,7 @@ export default function ControllerSession({
             onFileChannel: attachChannel
           })
           pcRef.current = pc
+          setActivePc(pc)
           pc.onconnectionstatechange = () => {
             setStatus(`connection: ${pc.connectionState}`)
             // Deliberately not auto-fullscreening here -- a small window
@@ -272,6 +282,7 @@ export default function ControllerSession({
             if (pc.connectionState === 'failed' && pcRef.current === pc) {
               pc.close()
               pcRef.current = null
+              setActivePc(null)
               inputChannelRef.current = null
               setConnectionType(null)
               if (videoRef.current) videoRef.current.srcObject = null
@@ -332,6 +343,15 @@ export default function ControllerSession({
           <div className="session-header__meta">{deviceId} · Press Esc to disconnect</div>
         </div>
         <div className="session-header__status">
+          {videoStats && videoStats.fps > 0 && (
+            <span
+              className="connection-type-badge"
+              title="What's actually being received -- not just what was requested"
+            >
+              {videoStats.fps}fps · {videoStats.width}×{videoStats.height} ·{' '}
+              {(videoStats.kbps / 1000).toFixed(1)} Mbps
+            </span>
+          )}
           {connectionType && (
             <span
               className="connection-type-badge"
