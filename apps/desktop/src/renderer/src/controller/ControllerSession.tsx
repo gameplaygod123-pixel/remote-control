@@ -50,7 +50,8 @@ export default function ControllerSession({
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const inputChannelRef = useRef<RTCDataChannel | null>(null)
   const lastMoveSentRef = useRef(0)
-  const { transfer, attachChannel, sendFiles, rejectDrop } = useFileTransferChannel()
+  const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
+    useFileTransferChannel()
 
   function handleDragOver(e: React.DragEvent<HTMLVideoElement>): void {
     e.preventDefault()
@@ -321,7 +322,7 @@ export default function ControllerSession({
         {!status.startsWith('connection') && (
           <span className="video-frame__empty">No video yet</span>
         )}
-        <TransferStatus transfer={transfer} />
+        <TransferStatus transfer={transfer} onCancel={cancelTransfer} />
       </div>
     </div>
   )

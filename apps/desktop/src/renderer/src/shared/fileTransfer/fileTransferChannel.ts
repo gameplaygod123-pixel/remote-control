@@ -39,12 +39,14 @@ const CHUNK_SIZE = 16 * 1024
 // other side has actually received.
 const BUFFERED_AMOUNT_LOW_THRESHOLD = 1024 * 1024
 
-type ControlMessage = { t: 'file-start'; name: string; size: number } | { t: 'file-end' }
+type ControlMessage =
+  { t: 'file-start'; name: string; size: number } | { t: 'file-end' } | { t: 'file-cancel' }
 
 export async function sendFileOverChannel(
   channel: RTCDataChannel,
   file: File,
-  onProgress: (sentBytes: number, totalBytes: number) => void
+  onProgress: (sentBytes: number, totalBytes: number) => void,
+  shouldCancel: () => boolean
 ): Promise<void> {
   channel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW_THRESHOLD
   const start: ControlMessage = { t: 'file-start', name: file.name, size: file.size }
@@ -75,6 +77,10 @@ export async function sendFileOverChannel(
 
   let offset = 0
   while (offset < buffer.byteLength) {
+    // Checked once per chunk rather than via some cancellation-token
+    // library -- cheap, and this loop is the only place sending actually
+    // happens, so there's nowhere else a cancel needs to interrupt.
+    if (shouldCancel()) throw new Error('cancelled')
     await waitForDrain()
     const chunk = buffer.slice(offset, offset + CHUNK_SIZE)
     channel.send(chunk)
@@ -89,11 +95,12 @@ export async function sendFileOverChannel(
 // Only one transfer in flight per direction at a time -- plenty for a
 // personal tool, and avoids needing per-chunk transfer IDs: channel
 // ordering guarantees every binary chunk between a file-start and the next
-// file-end belongs to that one transfer.
+// file-end (or file-cancel) belongs to that one transfer.
 export function createFileReceiver(handlers: {
   onStart: (name: string, size: number) => void
   onProgress: (receivedBytes: number, totalBytes: number) => void
   onComplete: (name: string, data: Uint8Array) => void
+  onCancel: () => void
 }): (event: MessageEvent) => void {
   let expectedName = ''
   let expectedSize = 0
@@ -119,6 +126,10 @@ export function createFileReceiver(handlers: {
         chunks = []
         received = 0
         handlers.onComplete(expectedName, combined)
+      } else if (message.t === 'file-cancel') {
+        chunks = []
+        received = 0
+        handlers.onCancel()
       }
       return
     }

@@ -5,6 +5,7 @@ export interface TransferState {
   direction: 'send' | 'receive'
   name: string
   progress: number // 0-100
+  totalBytes?: number
   done: boolean
   error?: string
 }
@@ -35,10 +36,21 @@ export function useFileTransferChannel(): {
   attachChannel: (channel: RTCDataChannel) => void
   sendFiles: (files: FileList | File[]) => void
   rejectDrop: (name: string, reason: string) => void
+  cancelTransfer: () => void
 } {
   const [transfer, setTransfer] = useState<TransferState | null>(null)
   const channelRef = useRef<RTCDataChannel | null>(null)
   const lastProgressAtRef = useRef(0)
+  // Only one send loop should ever be draining this queue at a time --
+  // sendFiles used to kick off a brand-new async loop on every call, so
+  // dropping a second file while the first was still sending would
+  // interleave both files' chunks on the same channel with no per-transfer
+  // ID to tell them apart, silently corrupting whichever one(s) the
+  // receiver was mid-assembling. New drops now just append to this queue;
+  // whichever loop is already running picks them up.
+  const sendQueueRef = useRef<File[]>([])
+  const sendingRef = useRef(false)
+  const cancelRequestedRef = useRef(false)
 
   // Only watches while a transfer is actually in flight (not done, no
   // error yet) -- cleared as soon as one ends, one way or another.
@@ -65,9 +77,9 @@ export function useFileTransferChannel(): {
     channel.binaryType = 'arraybuffer'
     channelRef.current = channel
     const receive = createFileReceiver({
-      onStart: (name) => {
+      onStart: (name, size) => {
         lastProgressAtRef.current = Date.now()
-        setTransfer({ direction: 'receive', name, progress: 0, done: false })
+        setTransfer({ direction: 'receive', name, progress: 0, totalBytes: size, done: false })
       },
       onProgress: (receivedBytes, totalBytes) => {
         lastProgressAtRef.current = Date.now()
@@ -84,6 +96,18 @@ export function useFileTransferChannel(): {
           setTransfer((prev) => (prev ? { ...prev, error: describeError(error) } : prev))
         }
         setTimeout(() => setTransfer(null), 3000)
+      },
+      // Either: the other side clicked Cancel while sending to us (nothing
+      // more is coming, drop what we'd assembled), or *we* sent this
+      // file-cancel ourselves and it looped back to our own idle receiver
+      // (harmless). Also flips cancelRequestedRef in case we're
+      // simultaneously the one sending -- otherwise a cancel triggered
+      // from the receiving side would clear the UI here but leave the
+      // send loop running in the background, still burning bandwidth on
+      // chunks nobody's assembling anymore.
+      onCancel: () => {
+        cancelRequestedRef.current = true
+        setTransfer(null)
       }
     })
     channel.onmessage = (event) => {
@@ -106,22 +130,31 @@ export function useFileTransferChannel(): {
     setTimeout(() => setTransfer(null), 4000)
   }, [])
 
-  const sendFiles = useCallback((files: FileList | File[]) => {
-    const channel = channelRef.current
-    if (!channel || channel.readyState !== 'open') return
-    const list = Array.from(files)
-
+  const drainSendQueue = useCallback((channel: RTCDataChannel) => {
     ;(async () => {
-      for (const file of list) {
+      while (sendQueueRef.current.length > 0) {
+        const file = sendQueueRef.current.shift()!
+        cancelRequestedRef.current = false
         lastProgressAtRef.current = Date.now()
-        setTransfer({ direction: 'send', name: file.name, progress: 0, done: false })
+        setTransfer({
+          direction: 'send',
+          name: file.name,
+          progress: 0,
+          totalBytes: file.size,
+          done: false
+        })
         try {
-          await sendFileOverChannel(channel, file, (sentBytes, totalBytes) => {
-            lastProgressAtRef.current = Date.now()
-            setTransfer((prev) =>
-              prev ? { ...prev, progress: Math.round((sentBytes / totalBytes) * 100) } : prev
-            )
-          })
+          await sendFileOverChannel(
+            channel,
+            file,
+            (sentBytes, totalBytes) => {
+              lastProgressAtRef.current = Date.now()
+              setTransfer((prev) =>
+                prev ? { ...prev, progress: Math.round((sentBytes / totalBytes) * 100) } : prev
+              )
+            },
+            () => cancelRequestedRef.current
+          )
           setTransfer((prev) => (prev ? { ...prev, progress: 100, done: true } : prev))
         } catch (error) {
           console.error('file-transfer send error:', error)
@@ -129,9 +162,33 @@ export function useFileTransferChannel(): {
         }
         await new Promise((resolve) => setTimeout(resolve, 2000))
       }
+      sendingRef.current = false
       setTransfer(null)
     })()
   }, [])
 
-  return { transfer, attachChannel, sendFiles, rejectDrop }
+  const sendFiles = useCallback(
+    (files: FileList | File[]) => {
+      const channel = channelRef.current
+      if (!channel || channel.readyState !== 'open') return
+      sendQueueRef.current.push(...Array.from(files))
+      if (sendingRef.current) return // already draining -- these get picked up automatically
+      sendingRef.current = true
+      drainSendQueue(channel)
+    },
+    [drainSendQueue]
+  )
+
+  // Works regardless of which direction is currently active: tells the
+  // other side to stop (it might be sending to us, or receiving from us)
+  // and clears our own state immediately rather than waiting for that
+  // message to round-trip.
+  const cancelTransfer = useCallback(() => {
+    if (!transfer || transfer.done) return
+    cancelRequestedRef.current = true
+    channelRef.current?.send(JSON.stringify({ t: 'file-cancel' }))
+    setTransfer(null)
+  }, [transfer])
+
+  return { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer }
 }

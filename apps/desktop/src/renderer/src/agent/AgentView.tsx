@@ -67,7 +67,8 @@ function AgentView(): React.JSX.Element {
   const clientRef = useRef<Awaited<ReturnType<typeof connectSignaling>> | null>(null)
   const nameRef = useRef(name)
   nameRef.current = name
-  const { transfer, attachChannel, sendFiles, rejectDrop } = useFileTransferChannel()
+  const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
+    useFileTransferChannel()
 
   function handleDragOver(e: React.DragEvent): void {
     e.preventDefault()
@@ -437,7 +438,7 @@ function AgentView(): React.JSX.Element {
           )}
         </div>
 
-        <TransferStatus transfer={transfer} />
+        <TransferStatus transfer={transfer} onCancel={cancelTransfer} />
 
         {trustedList.length > 0 && (
           <div className="field-group">

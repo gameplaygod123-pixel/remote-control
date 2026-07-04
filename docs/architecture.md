@@ -1221,6 +1221,53 @@ still be right just because it seemed sound. "A requested file or
 directory could not be found" -- was, quite literally, about a directory
 the whole time.
 
+## Follow-up hardening: concurrent-transfer guard, cancel, and file size
+
+Bug hunt over, user confirmed working end-to-end. Asked what else was
+worth improving before moving on -- code review of the file-transfer
+feature as a whole (not chasing a specific bug report this time) surfaced
+one real latent correctness bug plus two requested UX additions.
+
+**The real bug**: `sendFiles` had no re-entrancy guard. The documented
+assumption ("only one transfer in flight per direction at a time") was
+never actually enforced -- dropping a second file while the first was
+still sending would start a *second* concurrent call into
+`sendFileOverChannel` on the same channel, interleaving both files'
+binary chunks with no per-transfer ID to tell them apart. The receiver
+(`createFileReceiver`) tracks exactly one transfer's state via closures,
+so the second file's `file-start` arriving mid-stream would silently
+reset that state, discarding whatever of the first file had arrived and
+corrupting the second file's assembly with leftover chunks from the
+first -- with **no error at all**, unlike every bug found so far in this
+feature. Fixed with a queue: `useFileTransferChannel.ts`'s `sendFiles` now
+always just appends to `sendQueueRef`, and only kicks off `drainSendQueue`
+if nothing is already draining it -- new drops during an active send get
+picked up by the same loop once it's free, never run concurrently.
+
+**Cancel button**: `sendFileOverChannel` takes a `shouldCancel: () =>
+boolean` callback, checked once per chunk -- cheap, and the loop is the
+only place sending happens. `cancelTransfer()` in the hook sets that flag
+*and* sends a new `file-cancel` control message immediately, regardless of
+which direction is currently active (if we're receiving, this tells the
+sender to stop; if we're sending, our own loop notices `shouldCancel()` on
+its next iteration). `createFileReceiver` handles an incoming
+`file-cancel` by resetting its state and calling a new `onCancel` handler.
+One subtlety: that `onCancel` handler *also* sets `cancelRequestedRef`,
+not just `setTransfer(null)` -- otherwise cancelling while receiving would
+clear the UI locally but leave the other side's send loop running
+unnoticed in the background, still burning bandwidth on chunks nobody's
+assembling anymore.
+
+**File size display**: `TransferState` gained an optional `totalBytes`,
+set from `file.size` (sending) or the `file-start` message's `size`
+(receiving). `TransferStatus.tsx` formats it as e.g. "(2.4 MB of 100 MB)"
+next to the percentage, via a small `formatBytes()` helper.
+
+Extended the standalone chunking test with a second scenario exercising
+cancellation end-to-end (a fake sender aborts mid-transfer via
+`shouldCancel`, a fake receiver confirms it sees the resulting
+`file-cancel` message and fires `onCancel`) -- both scenarios pass.
+
 ## Running locally
 
 Root of the repo:
