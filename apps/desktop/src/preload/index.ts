@@ -63,6 +63,14 @@ const api = {
   },
   chooseMode: (mode: AppMode): void => {
     ipcRenderer.send('choose-mode', mode)
+  },
+  agentIdentity: {
+    getDeviceId: (): Promise<string> => ipcRenderer.invoke('agent-identity:get-device-id'),
+    getName: (): Promise<string> => ipcRenderer.invoke('agent-identity:get-name'),
+    setName: (name: string): Promise<void> => ipcRenderer.invoke('agent-identity:set-name', name),
+    getPin: (): Promise<string> => ipcRenderer.invoke('agent-identity:get-pin'),
+    setPin: (pin: string): Promise<void> => ipcRenderer.invoke('agent-identity:set-pin', pin),
+    regeneratePin: (): Promise<string> => ipcRenderer.invoke('agent-identity:regenerate-pin')
   }
 }
 

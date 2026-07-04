@@ -30,6 +30,14 @@ import {
   revokeController
 } from './trustedControllers'
 import { getOrCreateControllerId } from './controllerIdentity'
+import {
+  getOrCreateDeviceId as getOrCreateAgentDeviceId,
+  getName as getAgentName,
+  setName as setAgentName,
+  getOrCreatePin,
+  setPin as setAgentPin,
+  regeneratePin as regenerateAgentPin
+} from './agentIdentity'
 import { getSavedMode, saveMode, type AppMode } from './appModeConfig'
 import {
   getCachedPin,
@@ -292,6 +300,18 @@ app.whenReady().then(async () => {
   ipcMain.handle('controller-memory:clear-cached-pin', (_event, deviceId: string) => clearCachedPin(deviceId))
   ipcMain.handle('controller-memory:get-last-device', () => getLastDevice())
   ipcMain.handle('controller-memory:set-last-device-id', (_event, deviceId: string) => setLastDeviceId(deviceId))
+
+  // The agent's own identity: device ID, display name, and pairing PIN, all
+  // persisted to a file instead of the old renderer-localStorage/VITE_PIN
+  // approach. getOrCreatePin seeds from the legacy VITE_PIN env var (if the
+  // launcher script still sets one) only on the very first run after
+  // updating, so an already-paired setup doesn't get a surprise new PIN.
+  ipcMain.handle('agent-identity:get-device-id', () => getOrCreateAgentDeviceId())
+  ipcMain.handle('agent-identity:get-name', () => getAgentName())
+  ipcMain.handle('agent-identity:set-name', (_event, name: string) => setAgentName(name))
+  ipcMain.handle('agent-identity:get-pin', () => getOrCreatePin(process.env.VITE_PIN))
+  ipcMain.handle('agent-identity:set-pin', (_event, pin: string) => setAgentPin(pin))
+  ipcMain.handle('agent-identity:regenerate-pin', () => regenerateAgentPin())
 
   // Grant getUserMedia/getDisplayMedia requests from the renderer (needed for screen capture).
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {

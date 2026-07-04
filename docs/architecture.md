@@ -740,6 +740,56 @@ x64 `libnut.node`.
   install -> first-launch -> pick-a-mode -> works flow hasn't been run
   end-to-end on Windows).
 
+## Settings: user-set/resettable PIN, no more hardcoded PIN in git
+
+The launcher scripts (`start-agent.bat`, `start-agent-background.bat`) used
+to set `VITE_PIN=807302` -- a real, working PIN, committed in plaintext.
+That was an acceptable trade-off only while the repo stayed private; going
+public (a prerequisite for the planned GitHub-Releases auto-update feature)
+would have exposed it to anyone.
+
+Replaced the whole mechanism instead of just rotating the value:
+
+- `apps/desktop/src/main/agentIdentity.ts` -- new main-process file store
+  (`userData/agent-identity.json`), same pattern as
+  `trustedControllers.ts`/`controllerIdentity.ts`/`controllerMemory.ts`.
+  Holds `deviceId`, `name`, and `pin`. `getOrCreateDeviceId()` migrates the
+  device ID off renderer localStorage too (same port-drift risk class
+  flagged earlier for the agent side, fixed here as part of the same
+  sweep). `getOrCreatePin(legacyFixedPin?)` seeds from the old `VITE_PIN`
+  env var *only* if no persisted PIN file exists yet, then the file wins
+  forever after -- but since the env var line is now deleted from the
+  launcher scripts in this same change, that seeding path won't actually
+  fire for the real Windows install; see the transition note below.
+- New IPC surface (`agent-identity:*`) and `window.api.agentIdentity.*` in
+  the preload, mirroring the existing trusted/controllerMemory shape.
+- `AgentView.tsx`: the PIN field in the credential grid is now an editable
+  input (was a static `<span>`), plus a "generate a new one" link for a
+  one-click reset. Both call into `agentIdentity` and then update local
+  state -- since `pin` is a dependency of the connect effect, changing it
+  tears down and re-establishes the signaling connection with a fresh
+  `register-agent` (the server only checks the PIN hash captured at
+  register time, so anything less would leave the server still accepting
+  the old PIN). This intentionally drops any live paired session, which is
+  the right behavior for a credential-rotation action. Device name and
+  device ID were also moved off `localStorage` onto the same IPC calls,
+  closing out that latent risk.
+- `start-agent.bat`/`start-agent-background.bat`: the `VITE_PIN=807302`
+  line is deleted outright, not just changed to a placeholder -- the whole
+  point was to stop a real secret from living in a committed file.
+
+**One-time transition on the real Windows machine**: since the env var
+line is gone in the same commit that adds the persisted-PIN file, the
+first `update-agent.bat` + restart after this change will generate a
+brand-new random PIN (no persisted file exists yet, no env var to seed
+from). This invalidates the Mac's cached PIN for that device, which will
+surface as an "incorrect pin" on next connect and clear itself from
+auto-connect. Fix is exactly the new feature: open the Agent window, read
+the new PIN or just type a memorable one into the PIN field, and re-enter
+it once on the Mac's device list. Deliberately not more automated than
+that -- a manual one-time step here is simpler and more obviously correct
+than migration logic for a case that only ever happens once.
+
 ## Running locally
 
 Root of the repo:

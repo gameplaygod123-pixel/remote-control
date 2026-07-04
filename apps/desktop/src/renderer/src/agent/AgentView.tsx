@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { connectSignaling } from '../shared/signaling/signalingClient'
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
-import { SIGNALING_URL, AGENT_TOKEN, FIXED_PIN } from '../shared/config'
+import { SIGNALING_URL, AGENT_TOKEN } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import CopyButton from '../shared/components/CopyButton'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
@@ -39,40 +39,41 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
   }
 }
 
-const DEVICE_ID_KEY = 'remote-control-device-id'
-const DEVICE_NAME_KEY = 'remote-control-device-name'
-
-function getOrCreateDeviceId(): string {
-  const existing = localStorage.getItem(DEVICE_ID_KEY)
-  if (existing) return existing
-  const id = String(Math.floor(100_000_000 + Math.random() * 900_000_000))
-  localStorage.setItem(DEVICE_ID_KEY, id)
-  return id
-}
-
-function getStoredName(): string {
-  return localStorage.getItem(DEVICE_NAME_KEY) ?? ''
-}
-
-function generatePin(): string {
-  return String(Math.floor(100_000 + Math.random() * 900_000))
-}
-
 const THUMBNAIL_INTERVAL_MS = 4000
 
 function AgentView(): React.JSX.Element {
-  const [deviceId] = useState(getOrCreateDeviceId)
-  const [pin] = useState(() => FIXED_PIN ?? generatePin())
+  // deviceId/name/pin all live in a main-process file (see agentIdentity.ts)
+  // rather than renderer localStorage or a VITE_PIN env var -- the latter
+  // meant a real PIN sitting in plaintext inside a launcher script that
+  // gets committed to git. Null until the initial IPC round-trip resolves.
+  const [deviceId, setDeviceId] = useState<string | null>(null)
+  const [pin, setPinValue] = useState<string | null>(null)
+  const [pinDraft, setPinDraft] = useState('')
+  const [pinSaved, setPinSaved] = useState(false)
   const [status, setStatus] = useState('connecting to signaling server')
   const [incomingRequest, setIncomingRequest] = useState(false)
   const [pendingControllerId, setPendingControllerId] = useState<string | null>(null)
   const [trustedList, setTrustedList] = useState<{ id: string; trustedAt: number }[]>([])
-  const [name, setName] = useState(getStoredName)
-  const [nameDraft, setNameDraft] = useState(name)
+  const [name, setName] = useState('')
+  const [nameDraft, setNameDraft] = useState('')
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<Awaited<ReturnType<typeof connectSignaling>> | null>(null)
   const nameRef = useRef(name)
   nameRef.current = name
+
+  useEffect(() => {
+    Promise.all([
+      window.api.agentIdentity.getDeviceId(),
+      window.api.agentIdentity.getName(),
+      window.api.agentIdentity.getPin()
+    ]).then(([id, storedName, storedPin]) => {
+      setDeviceId(id)
+      setName(storedName)
+      setNameDraft(storedName)
+      setPinValue(storedPin)
+      setPinDraft(storedPin)
+    })
+  }, [])
 
   // Renaming re-sends only a lightweight set-device-name message, never a
   // fresh register-agent -- re-registering would reset the whole record on
@@ -82,8 +83,37 @@ function AgentView(): React.JSX.Element {
     const trimmed = nameDraft.trim()
     setName(trimmed)
     setNameDraft(trimmed)
-    localStorage.setItem(DEVICE_NAME_KEY, trimmed)
+    window.api.agentIdentity.setName(trimmed)
     clientRef.current?.send({ type: 'set-device-name', deviceId, name: trimmed })
+  }
+
+  // Unlike renaming, a PIN change is a dependency of the connect effect
+  // below, so updating it here tears down and re-establishes the signaling
+  // connection with a fresh register-agent -- the server only checks the
+  // PIN hash it captured at register time, so anything less would save the
+  // new PIN locally while the server kept accepting the old one. This also
+  // drops any currently-paired session, which is the right behavior for a
+  // credential-rotation action.
+  function broadcastPinChange(nextPin: string): void {
+    setPinValue(nextPin)
+    setPinDraft(nextPin)
+    setPinSaved(true)
+    setTimeout(() => setPinSaved(false), 2000)
+  }
+
+  function commitPinDraft(): void {
+    const trimmed = pinDraft.trim()
+    if (!trimmed || trimmed === pin) {
+      setPinDraft(pin ?? '')
+      return
+    }
+    window.api.agentIdentity.setPin(trimmed)
+    broadcastPinChange(trimmed)
+  }
+
+  async function handleRegeneratePin(): Promise<void> {
+    const nextPin = await window.api.agentIdentity.regeneratePin()
+    broadcastPinChange(nextPin)
   }
 
   // A correct PIN alone no longer opens the session -- the person at this
@@ -119,6 +149,12 @@ function AgentView(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    if (!deviceId || !pin) return undefined // wait for identity to load from disk
+    // Narrowed copies for use inside nested closures below -- TS doesn't
+    // carry the null-check narrowing above through into those callbacks.
+    const agentDeviceId = deviceId
+    const agentPin = pin
+
     let pc: RTCPeerConnection | undefined
     let client: Awaited<ReturnType<typeof connectSignaling>> | undefined
     let cancelled = false
@@ -130,7 +166,7 @@ function AgentView(): React.JSX.Element {
     const thumbnailInterval = setInterval(async () => {
       if (cancelled || pc?.connectionState === 'connected') return
       const image = await window.api.agent.captureThumbnail()
-      if (image) client?.send({ type: 'device-thumbnail', deviceId, image })
+      if (image) client?.send({ type: 'device-thumbnail', deviceId: agentDeviceId, image })
     }, THUMBNAIL_INTERVAL_MS)
 
     async function start(): Promise<void> {
@@ -146,8 +182,8 @@ function AgentView(): React.JSX.Element {
           client!.send({
             type: 'register-agent',
             token: AGENT_TOKEN,
-            deviceId,
-            pin,
+            deviceId: agentDeviceId,
+            pin: agentPin,
             name: nameRef.current
           })
         }
@@ -174,7 +210,7 @@ function AgentView(): React.JSX.Element {
           setStatus(message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`)
         } else if (message.type === 'connection-request') {
           if (await window.api.trusted.isTrusted(message.controllerId)) {
-            transport.send({ type: 'connection-response', deviceId, accept: true })
+            transport.send({ type: 'connection-response', deviceId: agentDeviceId, accept: true })
           } else {
             setPendingControllerId(message.controllerId)
             setIncomingRequest(true)
@@ -190,7 +226,7 @@ function AgentView(): React.JSX.Element {
           setIncomingRequest(false)
           pc?.close()
           setStatus('paired, starting screen share')
-          pc = createPeerConnection(transport, deviceId, {
+          pc = createPeerConnection(transport, agentDeviceId, {
             createInputChannel: true,
             onInputChannel: (channel) => {
               channel.onmessage = (event) => {
@@ -229,7 +265,7 @@ function AgentView(): React.JSX.Element {
 
           const offer = await pc.createOffer()
           await pc.setLocalDescription(offer)
-          transport.send({ type: 'sdp-offer', deviceId, sdp: offer.sdp })
+          transport.send({ type: 'sdp-offer', deviceId: agentDeviceId, sdp: offer.sdp })
         } else if (message.type === 'sdp-answer' && pc) {
           await pc.setRemoteDescription({ type: 'answer', sdp: message.sdp })
         } else if (message.type === 'ice-candidate' && pc) {
@@ -241,7 +277,13 @@ function AgentView(): React.JSX.Element {
         }
       })
 
-      transport.send({ type: 'register-agent', token: AGENT_TOKEN, deviceId, pin, name: nameRef.current })
+      transport.send({
+        type: 'register-agent',
+        token: AGENT_TOKEN,
+        deviceId: agentDeviceId,
+        pin: agentPin,
+        name: nameRef.current
+      })
     }
 
     start().catch((error) => setStatus(`error: ${String(error)}`))
@@ -254,6 +296,14 @@ function AgentView(): React.JSX.Element {
       client?.close()
     }
   }, [deviceId, pin])
+
+  if (deviceId === null || pin === null) {
+    return (
+      <div className="app-shell">
+        <p className="app-subtitle">Loading...</p>
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -305,10 +355,23 @@ function AgentView(): React.JSX.Element {
         <div className="credential-box">
           <div className="credential-label">PIN</div>
           <div className="credential-value-row">
-            <span className="credential-value">{pin}</span>
+            <input
+              className="field-input credential-pin-input"
+              value={pinDraft}
+              onChange={(e) => setPinDraft(e.target.value)}
+              onBlur={commitPinDraft}
+              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+            />
             <CopyButton value={pin} />
           </div>
-          <div className="credential-hint">{FIXED_PIN ? 'fixed' : 'changes on restart'}</div>
+          <div className="credential-hint">
+            {pinSaved ? 'saved' : 'set your own, or '}
+            {!pinSaved && (
+              <button className="credential-pin-regenerate" onClick={handleRegeneratePin}>
+                generate a new one
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

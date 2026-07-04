@@ -46,6 +46,14 @@ declare global {
         setLastDeviceId: (deviceId: string) => Promise<void>
       }
       chooseMode: (mode: AppMode) => void
+      agentIdentity: {
+        getDeviceId: () => Promise<string>
+        getName: () => Promise<string>
+        setName: (name: string) => Promise<void>
+        getPin: () => Promise<string>
+        setPin: (pin: string) => Promise<void>
+        regeneratePin: () => Promise<string>
+      }
     }
   }
 }
