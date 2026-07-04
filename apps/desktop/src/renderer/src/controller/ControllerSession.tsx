@@ -30,10 +30,12 @@ const PAIR_RETRY_DELAY_MS = 3000
 export default function ControllerSession({
   deviceId,
   pin,
+  name,
   onBack
 }: {
   deviceId: string
   pin: string
+  name?: string
   onBack: () => void
 }): React.JSX.Element {
   const [status, setStatus] = useState('connecting to signaling server')
@@ -45,6 +47,12 @@ export default function ControllerSession({
   // scoped to the Vite dev server's origin and would reset this identity
   // if the dev-server port ever shifted between runs.
   const [controllerId, setControllerId] = useState<string | null>(null)
+  // Editable from this side too, not just the agent's own UI -- lets you
+  // rename a device, or just jot a quick note ("downloading game") to
+  // recognize it later in the Computers list. Sent as the same
+  // set-device-name message the agent itself uses; the server doesn't
+  // check who sent it, so this "just works".
+  const [nameDraft, setNameDraft] = useState(name ?? '')
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -52,6 +60,12 @@ export default function ControllerSession({
   const lastMoveSentRef = useRef(0)
   const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
     useFileTransferChannel()
+
+  function commitName(): void {
+    const trimmed = nameDraft.trim()
+    setNameDraft(trimmed)
+    clientRef.current?.send({ type: 'set-device-name', deviceId, name: trimmed })
+  }
 
   function handleDragOver(e: React.DragEvent<HTMLVideoElement>): void {
     e.preventDefault()
@@ -289,22 +303,31 @@ export default function ControllerSession({
   return (
     <div className="session-shell">
       <div className="session-header">
-        <button className="btn btn--ghost" onClick={goBack} style={{ padding: '8px 14px' }}>
+        <button className="btn btn--ghost session-header__back" onClick={goBack}>
           ← Back
         </button>
-        <div>
-          <div className="app-title">{deviceId}</div>
-          <div className="app-subtitle">Press Esc to disconnect</div>
+        <div className="session-header__info">
+          <input
+            className="session-header__name-input"
+            value={nameDraft}
+            placeholder={deviceId}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          />
+          <div className="session-header__meta">{deviceId} · Press Esc to disconnect</div>
         </div>
-        {connectionType && (
-          <span
-            className="connection-type-badge"
-            title="Affects file transfer speed -- relay is shared/bandwidth-limited"
-          >
-            {connectionType === 'relay' ? 'via relay' : 'direct connection'}
-          </span>
-        )}
-        <StatusPill status={status} />
+        <div className="session-header__status">
+          {connectionType && (
+            <span
+              className="connection-type-badge"
+              title="Affects file transfer speed -- relay is shared/bandwidth-limited"
+            >
+              {connectionType === 'relay' ? 'via relay' : 'direct connection'}
+            </span>
+          )}
+          <StatusPill status={status} />
+        </div>
       </div>
 
       <div className="session-video-area">

@@ -6,6 +6,7 @@ import { AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
 interface ActiveDevice {
   deviceId: string
   pin: string
+  name?: string
 }
 
 // If VITE_DEVICE_ID/VITE_PIN are set (the single-device launcher scripts),
@@ -28,9 +29,9 @@ function ControllerView(): React.JSX.Element {
     })
   }, [])
 
-  function handleConnect(deviceId: string, pin: string): void {
+  function handleConnect(deviceId: string, pin: string, name?: string): void {
     window.api.controllerMemory.setLastDeviceId(deviceId)
-    setActiveDevice({ deviceId, pin })
+    setActiveDevice({ deviceId, pin, name })
   }
 
   if (!checkedLastDevice) {
@@ -46,6 +47,7 @@ function ControllerView(): React.JSX.Element {
       <ControllerSession
         deviceId={activeDevice.deviceId}
         pin={activeDevice.pin}
+        name={activeDevice.name}
         onBack={() => setActiveDevice(null)}
       />
     )

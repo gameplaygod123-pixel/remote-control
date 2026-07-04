@@ -33,7 +33,7 @@ function MonitorIcon(): React.JSX.Element {
 export default function DeviceListView({
   onConnect
 }: {
-  onConnect: (deviceId: string, pin: string) => void
+  onConnect: (deviceId: string, pin: string, name?: string) => void
 }): React.JSX.Element {
   const [devices, setDevices] = useState<Device[]>([])
   const [status, setStatus] = useState('connecting to signaling server')
@@ -117,20 +117,20 @@ export default function DeviceListView({
     }
   }, [])
 
-  async function handleConnectClick(deviceId: string): Promise<void> {
+  async function handleConnectClick(deviceId: string, name?: string): Promise<void> {
     const cached = await window.api.controllerMemory.getCachedPin(deviceId)
     if (cached) {
-      onConnect(deviceId, cached)
+      onConnect(deviceId, cached, name)
     } else {
       setPinPromptFor(deviceId)
       setPinInput('')
     }
   }
 
-  async function submitPin(): Promise<void> {
+  async function submitPin(name?: string): Promise<void> {
     if (!pinPromptFor || !pinInput) return
     await window.api.controllerMemory.setCachedPin(pinPromptFor, pinInput)
-    onConnect(pinPromptFor, pinInput)
+    onConnect(pinPromptFor, pinInput, name)
   }
 
   // Offline-only, matching the server's guard (removeDevice ignores the
@@ -234,9 +234,13 @@ export default function DeviceListView({
                       value={pinInput}
                       autoFocus
                       onChange={(e) => setPinInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && submitPin()}
+                      onKeyDown={(e) => e.key === 'Enter' && submitPin(device.name)}
                     />
-                    <button className="dl-btn" style={{ width: 'auto', padding: '0 14px' }} onClick={submitPin}>
+                    <button
+                      className="dl-btn"
+                      style={{ width: 'auto', padding: '0 14px' }}
+                      onClick={() => submitPin(device.name)}
+                    >
                       Go
                     </button>
                   </div>
@@ -244,13 +248,16 @@ export default function DeviceListView({
                   <button
                     className="dl-btn"
                     disabled={!device.online}
-                    onClick={() => handleConnectClick(device.deviceId)}
+                    onClick={() => handleConnectClick(device.deviceId, device.name)}
                   >
                     Connect
                   </button>
                 )}
                 {!device.online && pinPromptFor !== device.deviceId && (
-                  <button className="dl-card__remove" onClick={() => handleRemoveDevice(device.deviceId)}>
+                  <button
+                    className="dl-card__remove"
+                    onClick={() => handleRemoveDevice(device.deviceId)}
+                  >
                     Remove
                   </button>
                 )}

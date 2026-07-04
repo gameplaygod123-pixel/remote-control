@@ -1268,6 +1268,37 @@ cancellation end-to-end (a fake sender aborts mid-transfer via
 `shouldCancel`, a fake receiver confirms it sees the resulting
 `file-cancel` message and fires `onCancel`) -- both scenarios pass.
 
+## Session header redesign + rename-from-controller
+
+Complaint: the session header (shown while actively controlling a
+device) just displayed the raw numeric Device ID with no name, and its
+layout looked cluttered -- Back button, ID+subtitle, connection badge,
+and status pill all crammed together with `justify-content` left at its
+flex default.
+
+- **Layout**: `.session-header` now has three explicit zones --
+  `.session-header__back` (fixed), `.session-header__info` (flexible,
+  takes remaining space), `.session-header__status` (fixed, connection
+  badge + status pill grouped together on the right) -- instead of four
+  loose children with no structure.
+- **Name display + inline rename**: the device's name is now the primary
+  heading, editable directly via a borderless `<input>` that only shows
+  its border on hover/focus (same interaction pattern as the Agent's own
+  "Device name" field), with the raw Device ID demoted to small subtitle
+  text. Renaming from the controller sends the *same* `set-device-name`
+  message the agent itself uses to rename itself -- the signaling server
+  never checked which side sent it, so this worked with zero server
+  changes. Doubles as a way to leave yourself a note ("downloading
+  game") rather than strictly a hostname.
+- **Threading the name through**: `DeviceListView`'s `onConnect` callback
+  gained an optional third `name` parameter (passed from the already-known
+  `device.name` when connecting from the discovered list), threaded through
+  `ControllerView`'s `ActiveDevice` state into a new `name` prop on
+  `ControllerSession`. Manual "Add device" and last-device auto-connect
+  paths don't know a name in advance, so they just fall through to
+  showing the Device ID as the input's placeholder -- same UI, nothing
+  broken, just an empty starting point to type into.
+
 ## Running locally
 
 Root of the repo:

@@ -486,6 +486,54 @@
   flex-shrink: 0;
 }
 
+.session-header__back {
+  flex-shrink: 0;
+  padding: 8px 14px;
+}
+
+.session-header__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-header__name-input {
+  display: block;
+  width: 100%;
+  max-width: 360px;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ev-c-text-1);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin: 0 0 0 -6px;
+  outline: none;
+}
+
+.session-header__name-input:hover {
+  border-color: var(--panel-border);
+}
+
+.session-header__name-input:focus {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.session-header__meta {
+  font-size: 12px;
+  color: var(--ev-c-text-3);
+  margin-top: 2px;
+}
+
+.session-header__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .session-video-area {
   position: relative;
   flex: 1;
