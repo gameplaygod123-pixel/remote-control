@@ -6,8 +6,13 @@
 // may not exactly match (e.g. resize, differing scale factors).
 export type MouseButton = 'left' | 'right' | 'middle'
 
+// `seq` on 'move': moves travel over an unordered/no-retransmit channel
+// (see peerConnection.ts), so a stale position can physically arrive after
+// a newer one -- the agent uses the sequence number to drop it instead of
+// jerking the cursor backwards. Optional so an older controller build
+// (no seq) still works against a newer agent.
 export type RemoteInputMessage =
-  | { t: 'move'; x: number; y: number }
+  | { t: 'move'; x: number; y: number; seq?: number }
   | { t: 'down'; button: MouseButton }
   | { t: 'up'; button: MouseButton }
   | { t: 'wheel'; dy: number }

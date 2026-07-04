@@ -1,4 +1,12 @@
-import { mouse, keyboard, screen, Point, Button, Key } from '@nut-tree-fork/nut-js'
+import {
+  mouse,
+  keyboard,
+  screen,
+  Point,
+  Button,
+  Key,
+  providerRegistry
+} from '@nut-tree-fork/nut-js'
 import { CODE_TO_KEY } from './keyMap'
 
 // Injects mouse/keyboard input on the agent (target) machine.
@@ -20,6 +28,23 @@ export async function clickMouse(button: 'left' | 'right' = 'left'): Promise<voi
 // network latency. The remote keystrokes are already paced by how fast the
 // person is actually typing, so nut.js doesn't need to add its own pacing.
 keyboard.config.autoDelayMs = 0
+
+// The line above only kills nut.js's *JS-level* sleep. Its keyboard class
+// constructor ALSO pushed the 300ms default down into the native libnut
+// binary via setKeyboardDelay(300) at module load -- a per-key-event sleep
+// inside the native layer that config changes afterward never touch. Left
+// alone, every keydown/keyup (and every typed character) still blocks the
+// native worker for 300ms, so fast typing backs up into a visible queue.
+if (providerRegistry.hasKeyboard()) providerRegistry.getKeyboard().setKeyboardDelay(0)
+
+// Same story for the mouse: nut.js sleeps mouse.config.autoDelayMs (default
+// 100ms) *before* every pressButton/releaseButton/scroll -- meaning every
+// remote click paid ~100ms down + ~100ms up of pure added latency, and each
+// wheel tick another 100ms. Remote input is already paced by the human on
+// the other end; nut.js's own pacing (meant for scripted automation) only
+// adds lag here. (Native mouse delay is already 0 -- nut.js's mouse
+// constructor sets that itself, unlike the keyboard one.)
+mouse.config.autoDelayMs = 0
 
 export async function typeText(text: string): Promise<void> {
   await keyboard.type(text)

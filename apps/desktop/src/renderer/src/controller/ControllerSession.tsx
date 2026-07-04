@@ -66,7 +66,9 @@ export default function ControllerSession({
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const inputChannelRef = useRef<RTCDataChannel | null>(null)
+  const moveChannelRef = useRef<RTCDataChannel | null>(null)
   const lastMoveSentRef = useRef(0)
+  const moveSeqRef = useRef(0)
   const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
     useFileTransferChannel()
 
@@ -114,9 +116,23 @@ export default function ControllerSession({
   const INPUT_BUFFERED_AMOUNT_THRESHOLD = 16 * 1024
 
   function sendInput(message: RemoteInputMessage): void {
+    // Moves prefer the unordered/no-retransmit channel (see
+    // peerConnection.ts) -- one lost packet then costs nothing instead of
+    // stalling everything behind a retransmit. Every move gets a sequence
+    // number (shared counter with the reliable pre-click move below) so the
+    // agent can drop any that arrive out of order. Falls back to the
+    // reliable channel against an older agent that never opened one.
+    if (message.t === 'move') {
+      const stamped = { ...message, seq: ++moveSeqRef.current }
+      const moveChannel = moveChannelRef.current
+      const channel = moveChannel?.readyState === 'open' ? moveChannel : inputChannelRef.current
+      if (!channel || channel.readyState !== 'open') return
+      if (channel.bufferedAmount > INPUT_BUFFERED_AMOUNT_THRESHOLD) return
+      channel.send(JSON.stringify(stamped))
+      return
+    }
     const channel = inputChannelRef.current
     if (!channel || channel.readyState !== 'open') return
-    if (message.t === 'move' && channel.bufferedAmount > INPUT_BUFFERED_AMOUNT_THRESHOLD) return
     channel.send(JSON.stringify(message))
   }
 
@@ -140,6 +156,17 @@ export default function ControllerSession({
     const button = buttonFromEvent(e)
     if (!button) return
     e.preventDefault()
+    // Click position must not depend on the *unreliable* move channel: if
+    // the last throttled move was dropped, the click would land wherever
+    // the cursor previously was. Send the exact press position over the
+    // reliable channel, ordered right before the 'down' -- stamped from the
+    // same seq counter so the agent won't later apply an older in-flight
+    // move on top of it.
+    const pos = videoRelativePosition(e.currentTarget, e.clientX, e.clientY)
+    const channel = inputChannelRef.current
+    if (pos && channel?.readyState === 'open') {
+      channel.send(JSON.stringify({ t: 'move', x: pos.x, y: pos.y, seq: ++moveSeqRef.current }))
+    }
     sendInput({ t: 'down', button })
   }
 
@@ -229,6 +256,7 @@ export default function ControllerSession({
           pcRef.current = null
           setActivePc(null)
           inputChannelRef.current = null
+          moveChannelRef.current = null
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, pairing')
           client.send({ type: 'pair-request', deviceId, pin, controllerId })
@@ -274,6 +302,9 @@ export default function ControllerSession({
             onInputChannel: (channel) => {
               inputChannelRef.current = channel
             },
+            onMoveChannel: (channel) => {
+              moveChannelRef.current = channel
+            },
             onFileChannel: attachChannel
           })
           pcRef.current = pc
@@ -299,6 +330,7 @@ export default function ControllerSession({
               pcRef.current = null
               setActivePc(null)
               inputChannelRef.current = null
+              moveChannelRef.current = null
               setConnectionType(null)
               if (videoRef.current) videoRef.current.srcObject = null
               setTimeout(() => {
@@ -307,6 +339,28 @@ export default function ControllerSession({
             }
           }
           pc.ontrack = (event) => {
+            // Chromium's adaptive jitter buffer holds decoded frames back
+            // (easily 50-200ms worth) to smooth over network jitter --
+            // great for one-way playback, pure added glass-to-glass lag
+            // for remote control, where Parsec-class tools render each
+            // frame the moment it's decodable. Ask for zero buffering and
+            // let the occasional jitter artifact through instead; both
+            // properties are Chromium-specific (the older hint is seconds,
+            // the newer target is ms) so set whichever this build knows.
+            const receiver = event.receiver as RTCRtpReceiver & {
+              jitterBufferTarget?: number | null
+              playoutDelayHint?: number | null
+            }
+            try {
+              receiver.jitterBufferTarget = 0
+            } catch {
+              /* older Chromium without the attribute -- fine */
+            }
+            try {
+              receiver.playoutDelayHint = 0
+            } catch {
+              /* removed in newer Chromium -- fine */
+            }
             if (videoRef.current) videoRef.current.srcObject = event.streams[0]
           }
         } else if (message.type === 'sdp-offer' && pcRef.current) {
@@ -335,6 +389,7 @@ export default function ControllerSession({
       clientRef.current?.close()
       pcRef.current?.close()
       inputChannelRef.current = null
+      moveChannelRef.current = null
       window.api.window.setFullScreen(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

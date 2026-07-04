@@ -40,6 +40,14 @@ export interface PeerConnectionOptions {
   // regardless of which side created them.
   createInputChannel?: boolean
   onInputChannel?: (channel: RTCDataChannel) => void
+  // Mouse moves ride a second, unordered/no-retransmit channel: a reliable
+  // ordered channel turns one lost packet into head-of-line blocking, where
+  // every queued move (and the click behind it) waits out a retransmit
+  // round-trip. A move that never arrives is superseded ~16ms later by the
+  // next one anyway, so retransmitting stale positions only adds lag --
+  // this is the same tradeoff native remote-desktop tools (Parsec) make.
+  // Clicks/keys stay on the reliable "input" channel; they must never drop.
+  onMoveChannel?: (channel: RTCDataChannel) => void
   // Separate channel for file transfer -- kept off the "input" channel so a
   // large file being sent doesn't head-of-line-block mouse/keyboard delivery
   // (data channels preserve order by default). Bidirectional just like
@@ -70,11 +78,15 @@ export function createPeerConnection(
 
   pc.ondatachannel = (event) => {
     if (event.channel.label === 'input') options.onInputChannel?.(event.channel)
+    else if (event.channel.label === 'input-moves') options.onMoveChannel?.(event.channel)
     else if (event.channel.label === 'file-transfer') options.onFileChannel?.(event.channel)
   }
 
   if (options.createInputChannel) {
     options.onInputChannel?.(pc.createDataChannel('input'))
+    options.onMoveChannel?.(
+      pc.createDataChannel('input-moves', { ordered: false, maxRetransmits: 0 })
+    )
   }
   if (options.createFileChannel) {
     options.onFileChannel?.(pc.createDataChannel('file-transfer'))

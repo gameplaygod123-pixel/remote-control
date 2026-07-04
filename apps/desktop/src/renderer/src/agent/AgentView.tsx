@@ -46,6 +46,52 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
   }
 }
 
+// Input messages now arrive on two channels (reliable "input" + unordered
+// "input-moves"), and each injection is an async IPC hop -- so injection
+// needs its own serialization instead of relying on channel order. This
+// queue (a) keeps move->down ordering intact by draining everything through
+// one loop, (b) collapses consecutive queued moves into just the newest one
+// so a burst can never build a backlog of stale positions (the old cause of
+// the cursor visibly "replaying" a drag), and (c) uses the moves' sequence
+// numbers to drop any move the unordered channel delivered late, rather
+// than jerking the cursor backwards. State is module-level like
+// cachedScreenSize; resetInputQueue() clears it when a new session's
+// channels attach (a new controller restarts its seq counter at 0).
+let inputQueue: RemoteInputMessage[] = []
+let inputDraining = false
+let lastMoveSeq = -1
+
+function resetInputQueue(): void {
+  inputQueue = []
+  lastMoveSeq = -1
+}
+
+function enqueueRemoteInput(message: RemoteInputMessage): void {
+  if (message.t === 'move') {
+    if (message.seq !== undefined) {
+      if (message.seq <= lastMoveSeq) return // out-of-order stale move
+      lastMoveSeq = message.seq
+    }
+    const last = inputQueue[inputQueue.length - 1]
+    if (last?.t === 'move') {
+      inputQueue[inputQueue.length - 1] = message // newest position supersedes
+    } else {
+      inputQueue.push(message)
+    }
+  } else {
+    inputQueue.push(message)
+  }
+  if (inputDraining) return
+  inputDraining = true
+  void (async () => {
+    while (inputQueue.length > 0) {
+      const next = inputQueue.shift()!
+      await handleRemoteInput(next).catch(() => {})
+    }
+    inputDraining = false
+  })()
+}
+
 const THUMBNAIL_INTERVAL_MS = 4000
 
 function AgentView(): React.JSX.Element {
@@ -261,12 +307,17 @@ function AgentView(): React.JSX.Element {
           setIncomingRequest(false)
           pc?.close()
           setStatus('paired, starting screen share')
+          const onInputMessage = (event: MessageEvent): void => {
+            enqueueRemoteInput(JSON.parse(event.data) as RemoteInputMessage)
+          }
           pc = createPeerConnection(transport, agentDeviceId, {
             createInputChannel: true,
             onInputChannel: (channel) => {
-              channel.onmessage = (event) => {
-                handleRemoteInput(JSON.parse(event.data) as RemoteInputMessage)
-              }
+              resetInputQueue() // fresh session -- controller seq restarts at 0
+              channel.onmessage = onInputMessage
+            },
+            onMoveChannel: (channel) => {
+              channel.onmessage = onInputMessage
             },
             createFileChannel: true,
             onFileChannel: attachChannel
