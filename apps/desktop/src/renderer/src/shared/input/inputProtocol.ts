@@ -30,8 +30,15 @@ export type RemoteInputMessage =
 // Excluded whenever Ctrl/Alt/Meta is held -- that's a shortcut (Ctrl+C),
 // not text entry, and must go through the physical-key hold path instead
 // so the modifier combo is real on the agent's OS.
+//
+// Backquote (`~) is also excluded even though it produces a length-1 key:
+// on Windows with a Thai layout it's the standard Thai/English toggle, so
+// it has to arrive as a *physical key press* for the toggle to fire --
+// sent as typed text, the remote machine just receives a ` character and
+// the language never switches. When the toggle isn't configured, a
+// physical Grave press still types `/~ natively, so nothing is lost.
 export function isPrintableKey(e: KeyboardEvent): boolean {
-  return e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey
+  return e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && e.code !== 'Backquote'
 }
 
 // The window-level keydown/keyup listeners that forward keys to the

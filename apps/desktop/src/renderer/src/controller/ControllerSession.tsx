@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { connectSignaling, SignalingClient } from '../shared/signaling/signalingClient'
+import { resolveSignalingUrl } from '../shared/signaling/resolveSignalingUrl'
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
-import { SIGNALING_URL } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
@@ -248,7 +248,7 @@ export default function ControllerSession({
 
     async function connect(): Promise<void> {
       setStatus('connecting to signaling server')
-      const client = await connectSignaling(SIGNALING_URL, {
+      const client = await connectSignaling(resolveSignalingUrl, {
         onDisconnect: () => setStatus('disconnected, reconnecting...'),
         onReconnect: () => {
           // The server forgets pairing on disconnect, and the old peer

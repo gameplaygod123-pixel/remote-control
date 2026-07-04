@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { connectSignaling } from '../shared/signaling/signalingClient'
+import { resolveSignalingUrl } from '../shared/signaling/resolveSignalingUrl'
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
-import { SIGNALING_URL, AGENT_TOKEN } from '../shared/config'
+import { AGENT_TOKEN } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import CopyButton from '../shared/components/CopyButton'
 import UpdateBadge from '../shared/components/UpdateBadge'
@@ -249,7 +250,7 @@ function AgentView(): React.JSX.Element {
     }, THUMBNAIL_INTERVAL_MS)
 
     async function start(): Promise<void> {
-      client = await connectSignaling(SIGNALING_URL, {
+      client = await connectSignaling(resolveSignalingUrl, {
         onDisconnect: () => setStatus('disconnected, reconnecting...'),
         onReconnect: () => {
           // The server forgets registration/pairing on disconnect, and the

@@ -46,3 +46,17 @@ This builds the Windows installer and publishes it straight to GitHub
 Releases (live, not draft -- see `electron-builder.yml`). Anyone with the
 app installed gets it automatically within 6 hours, or immediately if they
 click "Check for updates" in the app.
+
+## When the signaling tunnel URL changes
+
+Installed builds (v1.13.0+) fetch the current signaling URL from
+`signaling-url.json` at this repo's root on every (re)connect, so a
+Cloudflare quick-tunnel restart does NOT require a rebuild or re-release:
+
+1. Edit `signaling-url.json` with the new `wss://...` URL
+2. Commit and push to `main`
+
+Every machine picks it up automatically on its next reconnect attempt
+(raw.githubusercontent.com caches for ~5 minutes, so allow a few minutes).
+The `VITE_SIGNALING_URL` baked at build time is now only the fallback for
+when GitHub itself is unreachable -- still set it when releasing.

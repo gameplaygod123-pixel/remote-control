@@ -30,8 +30,15 @@ const RECONNECT_MAX_DELAY_MS = 30_000
 // the Phase 1 IPC-relay transport, so createPeerConnection() and the
 // pairing/SDP message handlers don't need to change when swapping one for
 // the other.
+//
+// `url` can be a resolver function instead of a fixed string -- it's then
+// re-invoked on every reconnect attempt, so a signaling URL that changed
+// while this client was already running (a restarted Cloudflare quick
+// tunnel; see resolveSignalingUrl.ts) gets picked up without an app
+// restart. A long-lived tray agent depends on this to ever find its way
+// back after the tunnel moves.
 export function connectSignaling(
-  url: string,
+  url: string | (() => Promise<string>),
   options: ConnectSignalingOptions = {}
 ): Promise<SignalingClient> {
   const handlers: Array<(message: unknown) => void> = []
@@ -56,8 +63,10 @@ export function connectSignaling(
   }
 
   return new Promise((resolve, reject) => {
-    function connectOnce(): void {
-      const socket = new WebSocket(url)
+    async function connectOnce(): Promise<void> {
+      const target = typeof url === 'string' ? url : await url()
+      if (stopped) return // close() may have been called while resolving
+      const socket = new WebSocket(target)
       ws = socket
 
       socket.addEventListener('open', () => {
@@ -84,7 +93,7 @@ export function connectSignaling(
 
         if (!settled) {
           settled = true
-          reject(new Error(`failed to connect to ${url}`))
+          reject(new Error(`failed to connect to ${target}`))
           return
         }
 
@@ -92,12 +101,12 @@ export function connectSignaling(
           options.onDisconnect?.()
           reconnectTimer = setTimeout(() => {
             reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_DELAY_MS)
-            connectOnce()
+            void connectOnce()
           }, reconnectDelay)
         }
       })
     }
 
-    connectOnce()
+    void connectOnce()
   })
 }

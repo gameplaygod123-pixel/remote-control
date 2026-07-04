@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { connectSignaling, SignalingClient } from '../shared/signaling/signalingClient'
+import { resolveSignalingUrl } from '../shared/signaling/resolveSignalingUrl'
 import { SignalingMessage } from '../shared/protocol'
-import { SIGNALING_URL } from '../shared/config'
 import { classify } from '../shared/components/StatusPill'
 import UpdateBadge from '../shared/components/UpdateBadge'
 import SwitchModeLink from '../shared/components/SwitchModeLink'
@@ -78,7 +78,7 @@ export default function DeviceListView({
       setLastUpdated(new Date())
     }
 
-    connectSignaling(SIGNALING_URL, {
+    connectSignaling(resolveSignalingUrl, {
       onDisconnect: () => setStatus('disconnected, reconnecting...'),
       onReconnect: () => {
         setStatus('reconnected')
