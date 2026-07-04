@@ -65,6 +65,7 @@ const api = {
   chooseMode: (mode: AppMode): void => {
     ipcRenderer.send('choose-mode', mode)
   },
+  resetMode: (): Promise<void> => ipcRenderer.invoke('app-mode:reset'),
   agentIdentity: {
     getDeviceId: (): Promise<string> => ipcRenderer.invoke('agent-identity:get-device-id'),
     getName: (): Promise<string> => ipcRenderer.invoke('agent-identity:get-name'),

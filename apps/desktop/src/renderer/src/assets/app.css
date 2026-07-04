@@ -518,3 +518,25 @@
   cursor: default;
   opacity: 0.75;
 }
+
+.mode-switch-link {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 1000;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(20, 20, 24, 0.75);
+  color: #9c8a7c;
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+}
+
+.mode-switch-link:hover {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #f0e6dc;
+}

@@ -736,6 +736,31 @@ it, since only one mode ever runs from a given install, and nesting would
 have created a chicken-and-egg problem (needing to know the mode, chosen
 via a file *inside* userData, before userData's own path could be set).
 
+### Bug found live: delete + reinstall skips the mode picker
+
+User uninstalled and reinstalled to test a fresh setup, expecting the
+mode picker to show again -- it didn't, silently landing back in Agent
+mode. Cause: `getSavedMode()` reads `userData/app-mode.json`, and NSIS's
+default uninstaller does **not** delete `userData` (`%APPDATA%\Personal
+Remote`) -- nothing in `electron-builder.yml` sets
+`deleteAppDataOnUninstall`. So a reinstall finds the old saved choice and
+skips `promptForMode()` entirely, same as a normal update would (correctly
+-- you don't want an update to re-ask this). The picker only shows on a
+machine that has genuinely never run the app before.
+
+Deliberately did **not** make uninstall wipe `userData` -- that would
+throw away trust/PIN/device-id on every reinstall, which is worse for the
+common case (reinstalling to pick up a fix, not to switch roles) than the
+rarer case (actually wanting to switch Agent/Controller). Instead added an
+explicit, user-initiated escape hatch: `resetMode()` in
+`appModeConfig.ts` deletes just `app-mode.json` (not trust/PIN/anything
+else), wired to a small "Switch mode" link (bottom-left corner,
+`SwitchModeLink.tsx`, opposite `UpdateBadge`) on both `AgentView` and the
+device list. Clicking it confirms via a native `dialog.showMessageBox`
+(explains that trust/PIN survive, only the mode choice resets) before
+`app.relaunch()` + `app.exit()`, which brings the app back through
+`promptForMode()` on the next launch.
+
 ### Building the actual installer
 
 Genuinely uncertain going in whether this would work at all: nut.js's

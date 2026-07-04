@@ -8,7 +8,8 @@ import {
   clipboard,
   Tray,
   Menu,
-  nativeImage
+  nativeImage,
+  dialog
 } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -38,7 +39,7 @@ import {
   setPin as setAgentPin,
   regeneratePin as regenerateAgentPin
 } from './agentIdentity'
-import { getSavedMode, saveMode, type AppMode } from './appModeConfig'
+import { getSavedMode, saveMode, resetMode, type AppMode } from './appModeConfig'
 import { initAutoUpdater } from './updater'
 import {
   getCachedPin,
@@ -252,6 +253,29 @@ app.whenReady().then(async () => {
   ipcMain.on('ping', () => console.log('pong'))
 
   ipcMain.handle('get-mode', (): AppMode => appMode)
+
+  // Explicit escape hatch for the "deleted and reinstalled, mode picker
+  // never showed again" case -- uninstalling doesn't clear userData, so
+  // getSavedMode() above would otherwise keep finding the old choice
+  // forever. Confirms first since it force-restarts the app.
+  ipcMain.handle('app-mode:reset', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      type: 'warning' as const,
+      title: 'Switch mode',
+      message: 'Switch this install between Controller and Agent mode?',
+      detail:
+        'The app will restart and ask you to choose again. Saved trust/PIN/device settings are kept either way, not deleted.',
+      buttons: ['Switch mode', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    }
+    const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+    if (response !== 0) return
+    resetMode()
+    app.relaunch()
+    app.exit()
+  })
 
   ipcMain.handle('input:move', (_event, x: number, y: number) => moveMouse(x, y))
   ipcMain.handle('input:click', (_event, button: 'left' | 'right') => clickMouse(button))

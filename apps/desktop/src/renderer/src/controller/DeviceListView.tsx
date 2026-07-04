@@ -4,6 +4,7 @@ import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
 import { classify } from '../shared/components/StatusPill'
 import UpdateBadge from '../shared/components/UpdateBadge'
+import SwitchModeLink from '../shared/components/SwitchModeLink'
 import '../assets/deviceList.css'
 
 interface Device {
@@ -248,6 +249,7 @@ export default function DeviceListView({
       </div>
 
       <UpdateBadge />
+      <SwitchModeLink />
     </div>
   )
 }

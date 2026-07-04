@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 
 export type AppMode = 'agent' | 'controller'
 
@@ -24,4 +24,12 @@ export function getSavedMode(): AppMode | null {
 
 export function saveMode(mode: AppMode): void {
   writeFileSync(filePath(), JSON.stringify({ mode }))
+}
+
+// Uninstalling doesn't remove this (or any other userData file) by
+// default -- a delete-and-reinstall cycle otherwise silently skips the
+// first-run mode picker since getSavedMode() still finds the old choice.
+// This is the escape hatch: an explicit in-app "switch mode" action.
+export function resetMode(): void {
+  if (existsSync(filePath())) unlinkSync(filePath())
 }
