@@ -66,6 +66,16 @@ export function setDeviceThumbnail(deviceId: string, image: string): void {
   if (agent) agent.thumbnail = image;
 }
 
+// Only removes an offline device -- an online one has a live ws/controllerWs
+// that a list-cleanup action shouldn't silently sever. Returns false (no-op)
+// if the device doesn't exist or is currently online.
+export function removeDevice(deviceId: string): boolean {
+  const agent = agents.get(deviceId);
+  if (!agent || agent.online) return false;
+  agents.delete(deviceId);
+  return true;
+}
+
 export function listDevices(): DeviceInfo[] {
   return [...agents.entries()].map(([deviceId, agent]) => ({
     deviceId,

@@ -16,6 +16,7 @@ import {
   setDeviceThumbnail,
   setPendingController,
   takePendingController,
+  removeDevice,
 } from "./pairing.js";
 
 const port = Number(process.env.PORT ?? 8080);
@@ -181,6 +182,15 @@ wss.on("connection", (socket) => {
         break;
       }
 
+      case "remove-device": {
+        if (removeDevice(message.deviceId)) {
+          for (const controllerWs of getSubscribedControllers()) {
+            send(controllerWs, { type: "device-removed", deviceId: message.deviceId });
+          }
+        }
+        break;
+      }
+
       case "ping":
         send(socket, { type: "pong" });
         break;
@@ -192,6 +202,7 @@ wss.on("connection", (socket) => {
       case "device-status-changed":
       case "connection-request":
       case "pairing-pending":
+      case "device-removed":
         // Server-to-client only; ignore if a client somehow sends one.
         break;
     }

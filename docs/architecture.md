@@ -964,6 +964,35 @@ customized away from scaffolding in earlier work.
   is untouched and still used by `ChooseModeView` and `ControllerView`'s
   brief loading state -- neither was part of this complaint.
 
+## Removing stale devices from the Computers list
+
+The device list is a live view of the signaling server's in-memory agent
+roster, which only clears on server restart (see `pairing.ts`'s note on
+why that's an acceptable trade-off for a personal relay) -- old test
+devices from earlier development sessions (`883429247`, `835540922`, etc.)
+just accumulate forever otherwise, since they'll never come back online to
+naturally get cleaned up. Added an explicit remove action:
+
+- New protocol messages (`packages/protocol/src/messages.ts`):
+  `RemoveDeviceMessage` (controller -> server) and `DeviceRemovedMessage`
+  (server -> every subscribed controller, so all open device lists drop it
+  live, not just the one that clicked Remove).
+- `pairing.ts`'s `removeDevice(deviceId)` only deletes the record if the
+  device is currently **offline** -- silently a no-op otherwise. Removing
+  a live/reachable device as a side effect of a list-cleanup click would
+  be surprising; if you actually want to stop a device from being
+  reachable, that's an agent-side decision (quit the agent), not a
+  controller-side list edit.
+- `DeviceListView.tsx`: a small "Remove" text link under the Connect
+  button, shown only for offline cards (matches the server's guard, so it
+  never appears to silently fail). Doesn't optimistically update local
+  state -- waits for the server's `device-removed` broadcast, consistent
+  with how renaming/thumbnails already work here.
+- The signaling server runs via `tsx watch` (see `server/signaling`'s
+  `dev` script), so this took effect immediately on save with no manual
+  restart -- confirmed via `lsof -i :8080` showing a freshly-spawned
+  process right after editing.
+
 ## Running locally
 
 Root of the repo:

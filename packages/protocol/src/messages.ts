@@ -138,6 +138,24 @@ export const PairingPendingMessage = z.object({
   type: z.literal("pairing-pending"),
 });
 
+// Lets a controller clear an old/unused entry out of the "Computers" list
+// -- e.g. a test device from earlier development that will never come
+// back online. Only takes effect for an offline device; the server
+// silently ignores it for a currently-online one rather than disconnecting
+// it as a side effect of a list-cleanup action.
+export const RemoveDeviceMessage = z.object({
+  type: z.literal("remove-device"),
+  deviceId: z.string(),
+});
+
+// Pushed to every subscribed controller once a device is actually removed,
+// so every open "Computers" list drops it live instead of only the one
+// that clicked Remove.
+export const DeviceRemovedMessage = z.object({
+  type: z.literal("device-removed"),
+  deviceId: z.string(),
+});
+
 export const SignalingMessage = z.discriminatedUnion("type", [
   RegisterAgentMessage,
   RegisterResultMessage,
@@ -156,6 +174,8 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   ConnectionRequestMessage,
   ConnectionResponseMessage,
   PairingPendingMessage,
+  RemoveDeviceMessage,
+  DeviceRemovedMessage,
 ]);
 
 export type SignalingMessage = z.infer<typeof SignalingMessage>;

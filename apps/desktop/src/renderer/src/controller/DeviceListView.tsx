@@ -73,6 +73,11 @@ export default function DeviceListView({
       setLastUpdated(new Date())
     }
 
+    function applyRemoval(deviceId: string): void {
+      setDevices((prev) => prev.filter((d) => d.deviceId !== deviceId))
+      setLastUpdated(new Date())
+    }
+
     connectSignaling(SIGNALING_URL, {
       onDisconnect: () => setStatus('disconnected, reconnecting...'),
       onReconnect: () => {
@@ -97,6 +102,8 @@ export default function DeviceListView({
             applyStatusChange(message.deviceId, message.online, message.name)
           } else if (message.type === 'device-thumbnail') {
             applyThumbnail(message.deviceId, message.image)
+          } else if (message.type === 'device-removed') {
+            applyRemoval(message.deviceId)
           }
         })
 
@@ -124,6 +131,13 @@ export default function DeviceListView({
     if (!pinPromptFor || !pinInput) return
     await window.api.controllerMemory.setCachedPin(pinPromptFor, pinInput)
     onConnect(pinPromptFor, pinInput)
+  }
+
+  // Offline-only, matching the server's guard (removeDevice ignores the
+  // request for a currently-online device) -- a device that's still
+  // reachable shouldn't disappear just because someone clicked cleanup.
+  function handleRemoveDevice(deviceId: string): void {
+    clientRef.current?.send({ type: 'remove-device', deviceId })
   }
 
   async function submitAddDevice(): Promise<void> {
@@ -233,6 +247,11 @@ export default function DeviceListView({
                     onClick={() => handleConnectClick(device.deviceId)}
                   >
                     Connect
+                  </button>
+                )}
+                {!device.online && pinPromptFor !== device.deviceId && (
+                  <button className="dl-card__remove" onClick={() => handleRemoveDevice(device.deviceId)}>
+                    Remove
                   </button>
                 )}
               </div>
