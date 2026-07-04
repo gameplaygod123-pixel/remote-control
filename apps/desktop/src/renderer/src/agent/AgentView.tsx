@@ -181,6 +181,10 @@ function AgentView(): React.JSX.Element {
             setPendingControllerId(message.controllerId)
             setIncomingRequest(true)
             setStatus('incoming connection request')
+            // The window may be hidden in the tray (auto-started at boot,
+            // or minimized earlier) -- an untrusted connection needs a
+            // human decision, so it has to actually be seen.
+            window.api.window.show()
           }
         } else if (message.type === 'pair-result' && message.ok) {
           // A re-pair can arrive while an old (e.g. failed) peer connection

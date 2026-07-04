@@ -541,6 +541,67 @@ skip the prompt for it going forward.
   regressions, prompt still renders correctly with the new required
   field) via another isolated local triple.
 
+## Auto-start at boot + system tray (Windows agent, Parsec-style)
+
+The user wants the Windows agent to behave like Parsec's host app: start
+automatically when Windows logs in, live in the system tray, and not
+force a window in front of you just to sit there running.
+
+- `main/index.ts`: agent-mode windows now get a real `Tray` icon (16x16,
+  from the same app icon) with a context menu ("Show Personal Remote
+  Agent" / "Quit"). Closing the window (`X` button, Cmd/Alt+F4, etc.)
+  calls `event.preventDefault()` and hides it instead of quitting --
+  standard Electron "minimize to tray" idiom. Only the tray menu's Quit
+  (which sets a module-level `isQuitting` flag before `app.quit()`) can
+  actually end the process. Controller mode is untouched -- this is
+  agent-only, gated on `appMode === 'agent'`.
+- A `START_HIDDEN=1` env var (read once at module load as `startHidden`)
+  makes the window start hidden entirely -- tray icon only, no window
+  flash -- for the auto-start-at-boot path specifically. Manual launches
+  (`start-agent.bat`/`start-agent-silent.vbs`, no env var set) still show
+  the window normally, since seeing Device ID/PIN/trusted-devices during
+  setup or troubleshooting is the point of launching it by hand.
+- New `window:show` IPC lets the renderer un-hide itself: when a
+  `connection-request` arrives from an *untrusted* controller (the one
+  case that genuinely needs a human decision), `AgentView.tsx` calls
+  `window.api.window.show()` before showing the Accept/Reject card --
+  otherwise a request could arrive while the window is hidden in the tray
+  and nobody would ever see the prompt. Trusted-controller auto-accepts
+  don't need this, since there's no human decision to surface.
+- Windows auto-start scripts (repo root, following the existing
+  `start-agent.bat`/`.vbs` pattern rather than Electron's
+  `app.setLoginItemSettings()` -- the app isn't packaged yet (Phase 6),
+  so there's no stable installed .exe path for that API to point at):
+  - `start-agent-background.bat` -- same as `start-agent.bat` plus
+    `START_HIDDEN=1`, and deliberately has **no** trailing `pause` (unlike
+    `start-agent.bat`) since this always runs with its console hidden --
+    a `pause` nobody can ever see or respond to would just leave a
+    zombie `cmd.exe` in Task Manager after the agent quits.
+  - `start-agent-background.vbs` -- silent (no console) wrapper around
+    the above, same `WScript.Shell.Run(..., 0, False)` technique as
+    `start-agent-silent.vbs`.
+  - `enable-autostart.vbs` -- run once by the user; drops a shortcut to
+    `start-agent-background.vbs` (with the real app icon via
+    `IconLocation`) into the Windows Startup folder
+    (`WshShell.SpecialFolders("Startup")`). Undo by deleting it from
+    `shell:startup`.
+- **Verification status**: typecheck clean. Visually confirmed on Mac
+  (Tray API is cross-platform) that the tray icon appears correctly and
+  the window displays normally on a manual (non-hidden) launch. The
+  close-to-tray interception itself was not fully confirmed interactively
+  -- the live test was interrupted (a test window unexpectedly appearing
+  on the user's own screen understandably needed an explanation first;
+  see the session transcript). Given `win.on('close', ...)` with
+  `event.preventDefault()` is a standard, well-documented Electron pattern
+  (not novel/fragile code like the WebRTC or nut.js integration work),
+  and the surrounding logic typechecks and follows the same structure
+  already proven for `window:set-fullscreen`, this is believed correct
+  but not independently confirmed end-to-end. Recommended: verify for
+  real on the Windows agent -- close the window and confirm it survives
+  in the tray, click the tray icon to bring it back, and try
+  `enable-autostart.vbs` + a real reboot to confirm the hidden auto-start
+  path.
+
 ## Running locally
 
 Root of the repo:

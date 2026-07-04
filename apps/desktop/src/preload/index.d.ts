@@ -27,6 +27,7 @@ declare global {
       }
       window: {
         setFullScreen: (value: boolean) => Promise<void>
+        show: () => Promise<void>
       }
     }
   }

@@ -37,7 +37,8 @@ const api = {
   },
   window: {
     setFullScreen: (value: boolean): Promise<void> =>
-      ipcRenderer.invoke('window:set-fullscreen', value)
+      ipcRenderer.invoke('window:set-fullscreen', value),
+    show: (): Promise<void> => ipcRenderer.invoke('window:show')
   }
 }
 

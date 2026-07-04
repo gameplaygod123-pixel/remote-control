@@ -1,4 +1,15 @@
-import { app, shell, BrowserWindow, ipcMain, session, desktopCapturer, clipboard } from 'electron'
+import {
+  app,
+  shell,
+  BrowserWindow,
+  ipcMain,
+  session,
+  desktopCapturer,
+  clipboard,
+  Tray,
+  Menu,
+  nativeImage
+} from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -36,7 +47,18 @@ const loopbackTest = process.env.LOOPBACK_TEST === '1'
 // this validates each side in isolation before wiring them together (Phase 5).
 const inputTest = process.env.INPUT_TEST === '1'
 
-function createBrowserWindow(searchParams?: string): BrowserWindow {
+// Set by start-agent-background.bat (the auto-start-at-boot launcher) so
+// the agent comes up tray-only, like Parsec's host app, instead of
+// popping a window every time Windows logs in. Manual launches (plain
+// start-agent.bat/.vbs) still show the window normally.
+const startHidden = process.env.START_HIDDEN === '1'
+
+// Not null/undefined once the agent's tray icon exists -- Quit in its
+// context menu is the only thing allowed to actually close the window
+// rather than hiding it (see setupAgentTray below).
+let isQuitting = false
+
+function createBrowserWindow(searchParams?: string, hidden = false): BrowserWindow {
   const win = new BrowserWindow({
     width: 900,
     height: 670,
@@ -50,7 +72,7 @@ function createBrowserWindow(searchParams?: string): BrowserWindow {
   })
 
   win.on('ready-to-show', () => {
-    win.show()
+    if (!hidden) win.show()
   })
 
   win.webContents.setWindowOpenHandler((details) => {
@@ -74,8 +96,46 @@ function createBrowserWindow(searchParams?: string): BrowserWindow {
 }
 
 function createWindow(): void {
-  const win = createBrowserWindow()
+  const win = createBrowserWindow(undefined, appMode === 'agent' && startHidden)
   win.setTitle(`Personal Remote - ${appMode}`)
+
+  if (appMode === 'agent') setupAgentTray(win)
+}
+
+// Parsec-style background operation: the agent needs to keep running (and
+// stay reachable for pairing) even when nobody's looking at its window, so
+// closing the window hides it instead of quitting. Only the tray menu's
+// "Quit" can actually end the process.
+function setupAgentTray(win: BrowserWindow): void {
+  const trayIcon = nativeImage.createFromPath(icon).resize({ width: 16, height: 16 })
+  const tray = new Tray(trayIcon)
+  tray.setToolTip('Personal Remote Agent')
+
+  function showWindow(): void {
+    win.show()
+    win.focus()
+  }
+
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Show Personal Remote Agent', click: showWindow },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+  tray.on('click', showWindow)
+
+  win.on('close', (event) => {
+    if (isQuitting) return
+    event.preventDefault()
+    win.hide()
+  })
 }
 
 function createLoopbackWindows(): void {
@@ -158,6 +218,15 @@ app.whenReady().then(() => {
   // and back to windowed when returning to the device list.
   ipcMain.handle('window:set-fullscreen', (event, value: boolean) => {
     BrowserWindow.fromWebContents(event.sender)?.setFullScreen(value)
+  })
+
+  // Used by the agent to un-hide itself from the tray when an untrusted
+  // controller needs a human decision -- the window may have started
+  // hidden (auto-start at boot) or been minimized to tray earlier.
+  ipcMain.handle('window:show', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    win?.show()
+    win?.focus()
   })
 
   // Grant getUserMedia/getDisplayMedia requests from the renderer (needed for screen capture).
