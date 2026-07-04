@@ -55,6 +55,10 @@ export interface PeerConnectionOptions {
   // side's createDataChannel call actually created it.
   createFileChannel?: boolean
   onFileChannel?: (channel: RTCDataChannel) => void
+  // Clipboard text sync (see shared/clipboard/clipboardSync.ts). Its own
+  // channel for the same isolation reason as file-transfer: a big pasted
+  // text must never queue ahead of input events.
+  onClipboardChannel?: (channel: RTCDataChannel) => void
 }
 
 export function createPeerConnection(
@@ -80,6 +84,7 @@ export function createPeerConnection(
     if (event.channel.label === 'input') options.onInputChannel?.(event.channel)
     else if (event.channel.label === 'input-moves') options.onMoveChannel?.(event.channel)
     else if (event.channel.label === 'file-transfer') options.onFileChannel?.(event.channel)
+    else if (event.channel.label === 'clipboard') options.onClipboardChannel?.(event.channel)
   }
 
   if (options.createInputChannel) {
@@ -90,6 +95,11 @@ export function createPeerConnection(
   }
   if (options.createFileChannel) {
     options.onFileChannel?.(pc.createDataChannel('file-transfer'))
+  }
+  // Piggybacks on createInputChannel (the agent is the offerer for both) --
+  // no separate flag needed until some session wants input without clipboard.
+  if (options.createInputChannel) {
+    options.onClipboardChannel?.(pc.createDataChannel('clipboard'))
   }
 
   return pc

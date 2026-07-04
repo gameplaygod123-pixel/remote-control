@@ -9,6 +9,7 @@ import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferCh
 import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
 import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
 import { useVideoStats } from '../shared/webrtc/useVideoStats'
+import { attachClipboardChannel } from '../shared/clipboard/clipboardSync'
 import {
   RemoteInputMessage,
   isPrintableKey,
@@ -305,7 +306,8 @@ export default function ControllerSession({
             onMoveChannel: (channel) => {
               moveChannelRef.current = channel
             },
-            onFileChannel: attachChannel
+            onFileChannel: attachChannel,
+            onClipboardChannel: attachClipboardChannel
           })
           pcRef.current = pc
           setActivePc(pc)

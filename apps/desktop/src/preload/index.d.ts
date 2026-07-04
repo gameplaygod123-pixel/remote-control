@@ -23,6 +23,7 @@ declare global {
       }
       clipboard: {
         write: (text: string) => Promise<void>
+        read: () => Promise<string>
       }
       agent: {
         captureThumbnail: () => Promise<string | null>

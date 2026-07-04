@@ -52,7 +52,11 @@ export type { AppMode }
 // such env var, so its mode is instead chosen once on first launch (see
 // promptForMode below) and persisted via appModeConfig.
 const envMode: AppMode | null =
-  process.env.APP_MODE === 'agent' ? 'agent' : process.env.APP_MODE === 'controller' ? 'controller' : null
+  process.env.APP_MODE === 'agent'
+    ? 'agent'
+    : process.env.APP_MODE === 'controller'
+      ? 'controller'
+      : null
 
 if (envMode) {
   // Dev/test convenience: nest userData by mode so an agent and controller
@@ -266,7 +270,9 @@ app.whenReady().then(async () => {
       defaultId: 1,
       cancelId: 1
     }
-    const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+    const { response } = win
+      ? await dialog.showMessageBox(win, options)
+      : await dialog.showMessageBox(options)
     if (response !== 0) return
     resetMode()
     app.relaunch()
@@ -277,8 +283,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('input:click', (_event, button: 'left' | 'right') => clickMouse(button))
   ipcMain.handle('input:type', (_event, text: string) => typeText(text))
   ipcMain.handle('input:get-position', () => getMousePosition())
-  ipcMain.handle('input:mouse-button', (_event, button: 'left' | 'right' | 'middle', down: boolean) =>
-    mouseButtonToggle(button, down)
+  ipcMain.handle(
+    'input:mouse-button',
+    (_event, button: 'left' | 'right' | 'middle', down: boolean) => mouseButtonToggle(button, down)
   )
   ipcMain.handle('input:scroll', (_event, deltaY: number) => scrollMouse(deltaY))
   ipcMain.handle('input:key', (_event, code: string, down: boolean) => keyToggle(code, down))
@@ -301,6 +308,9 @@ app.whenReady().then(async () => {
   // navigator.clipboard.writeText() can be flaky in Electron depending on
   // document focus; the native clipboard module always works.
   ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(text))
+  // Read side of clipboard sync -- polled by the renderer while a session
+  // is connected (see shared/clipboard/clipboardSync.ts).
+  ipcMain.handle('clipboard:read', () => clipboard.readText())
 
   // Writes a file received over the WebRTC file-transfer data channel to
   // this machine's Downloads folder -- the renderer can't write to disk
@@ -337,12 +347,18 @@ app.whenReady().then(async () => {
   // Same file-based persistence rationale as trusted/controllerId above --
   // lets the controller jump straight back into its last session on next
   // launch instead of always landing on the device picker.
-  ipcMain.handle('controller-memory:get-cached-pin', (_event, deviceId: string) => getCachedPin(deviceId))
+  ipcMain.handle('controller-memory:get-cached-pin', (_event, deviceId: string) =>
+    getCachedPin(deviceId)
+  )
   ipcMain.handle('controller-memory:set-cached-pin', (_event, deviceId: string, pin: string) =>
     setCachedPin(deviceId, pin)
   )
-  ipcMain.handle('controller-memory:clear-cached-pin', (_event, deviceId: string) => clearCachedPin(deviceId))
-  ipcMain.handle('controller-memory:set-last-device-id', (_event, deviceId: string) => setLastDeviceId(deviceId))
+  ipcMain.handle('controller-memory:clear-cached-pin', (_event, deviceId: string) =>
+    clearCachedPin(deviceId)
+  )
+  ipcMain.handle('controller-memory:set-last-device-id', (_event, deviceId: string) =>
+    setLastDeviceId(deviceId)
+  )
 
   // The agent's own identity: device ID, display name, and pairing PIN, all
   // persisted to a file instead of the old renderer-localStorage/VITE_PIN

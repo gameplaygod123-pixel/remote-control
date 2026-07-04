@@ -12,6 +12,7 @@ import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferCh
 import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
 import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
 import { useVideoStats } from '../shared/webrtc/useVideoStats'
+import { attachClipboardChannel } from '../shared/clipboard/clipboardSync'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
 
 // Cached after the first remote input message -- the agent's screen doesn't
@@ -320,7 +321,8 @@ function AgentView(): React.JSX.Element {
               channel.onmessage = onInputMessage
             },
             createFileChannel: true,
-            onFileChannel: attachChannel
+            onFileChannel: attachChannel,
+            onClipboardChannel: attachClipboardChannel
           })
           setActivePc(pc)
           pc.onconnectionstatechange = () => {
