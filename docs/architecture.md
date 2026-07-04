@@ -1451,6 +1451,62 @@ Mac keyboards as Fn-modified F-keys) -> `Key.AudioMute` / `AudioVolDown`
   guarding it with a confirmation while a session is active -- not done
   without the user confirming they actually want that trade-off.
 
+## Comparing against Parsec's own stats readout
+
+User shared a screenshot of Parsec's status bar (`Decode 5.56ms · Encode
+4.82ms · Network 12.14ms · Bitrate 54.31Mbps · Hardware H.265 2560x1440
+...`) and asked whether we could borrow from it. Important caveat stated
+up front: **Parsec isn't built on WebRTC at all** -- it's a custom
+streaming protocol with its own encoder pipeline, which is how it gets
+H.265 hardware encoding and full control over transport. This app uses
+Chromium's built-in WebRTC stack (`getDisplayMedia` + `RTCPeerConnection`)
+for zero custom native networking code, which comes with a real ceiling:
+**Chromium's WebRTC implementation doesn't support H.265 at all**, so
+that specific part of Parsec's setup isn't reachable here without
+replacing the whole transport layer -- a project on a totally different
+scale, not something to take on for this.
+
+What *is* achievable within the existing WebRTC architecture, picked as
+the three most realistic wins:
+
+- **Prefer H.264 over Chromium's default codec choice** (`AgentView.tsx`,
+  right before `createOffer()`): `RTCRtpSender.getCapabilities('video')`
+  lists what's actually available, and if H.264 is present,
+  `videoTransceiver.setCodecPreferences()` puts it first. H.264 gets
+  hardware encode/decode via Chromium's WebRTC stack on both macOS
+  (VideoToolbox) and Windows (Media Foundation), unlike the
+  often-software-only VP8 Chromium otherwise defaults to for a
+  `getDisplayMedia` stream. This is the closest equivalent to Parsec's
+  "Hardware H.265" line that's reachable without a custom encoder.
+  Degrades harmlessly to no-op if H.264 isn't in the capability list for
+  some reason.
+- **Raised the bitrate ceiling again**, 6Mbps -> 15Mbps. WebRTC's own
+  congestion control still pulls this down automatically if the real
+  network path can't sustain it -- raising the ceiling only matters (and
+  only helps) when more bandwidth is actually available, so there's no
+  real downside to being more generous here.
+- **Extended `useVideoStats.ts`** to match Parsec's readout more closely:
+  `processingMs` (encode time on the agent / decode time on the
+  controller -- computed from `totalEncodeTime`/`totalDecodeTime` deltas
+  divided by the corresponding frame-count delta, so it reflects the last
+  second rather than a since-the-start average), `rttMs` (from the
+  active `candidate-pair` stat's `currentRoundTripTime`), and `codec`
+  (looked up via the RTP stat's `codecId` into the report's `codec`
+  entry). Wired into **both** `ControllerSession` (decode side) and, new
+  this round, `AgentView` (encode side) -- Parsec shows both halves in one
+  place because it controls the whole pipeline; here each side can only
+  measure its own half, so both screens now show their own badge.
+
+**On testing "how much % better"**: I can't run this app on the real
+Windows/Mac hardware over the real network myself to produce a before/
+after benchmark -- there's no automated way to reproduce actual capture,
+encode, and network conditions from here. The honest path is: the user
+reads the new stats badges (now showing decode/encode/network/codec, not
+just fps/resolution/bitrate as before) and reports the numbers back.
+Framed as absolute numbers to evaluate, not a clean %-improvement figure,
+since the *previous* badge didn't measure processing time or codec at
+all -- there's no prior number for those two to compare against.
+
 ## Running locally
 
 Root of the repo:

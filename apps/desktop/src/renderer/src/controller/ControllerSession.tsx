@@ -348,8 +348,10 @@ export default function ControllerSession({
               className="connection-type-badge"
               title="What's actually being received -- not just what was requested"
             >
+              Decode {videoStats.processingMs}ms · Network {videoStats.rttMs ?? '?'}ms ·{' '}
               {videoStats.fps}fps · {videoStats.width}×{videoStats.height} ·{' '}
               {(videoStats.kbps / 1000).toFixed(1)} Mbps
+              {videoStats.codec ? ` · ${videoStats.codec}` : ''}
             </span>
           )}
           {connectionType && (

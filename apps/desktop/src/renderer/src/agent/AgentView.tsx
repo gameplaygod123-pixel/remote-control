@@ -11,6 +11,7 @@ import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
 import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
 import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
+import { useVideoStats } from '../shared/webrtc/useVideoStats'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
 
 // Cached after the first remote input message -- the agent's screen doesn't
@@ -58,6 +59,11 @@ function AgentView(): React.JSX.Element {
   const [pinSaved, setPinSaved] = useState(false)
   const [status, setStatus] = useState('connecting to signaling server')
   const [connectionType, setConnectionType] = useState<ConnectionType | null>(null)
+  // Tracked as state (not just the effect's local `pc` variable) so
+  // useVideoStats' effect re-runs when the connection is actually
+  // replaced -- see the identical pattern/reasoning in ControllerSession.
+  const [activePc, setActivePc] = useState<RTCPeerConnection | null>(null)
+  const videoStats = useVideoStats(activePc, 'outbound')
   const [incomingRequest, setIncomingRequest] = useState(false)
   const [pendingControllerId, setPendingControllerId] = useState<string | null>(null)
   const [trustedList, setTrustedList] = useState<{ id: string; trustedAt: number }[]>([])
@@ -203,6 +209,7 @@ function AgentView(): React.JSX.Element {
           // old peer connection (if any) is no longer valid -- start over.
           pc?.close()
           pc = undefined
+          setActivePc(null)
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, registering')
           client!.send({
@@ -264,11 +271,13 @@ function AgentView(): React.JSX.Element {
             createFileChannel: true,
             onFileChannel: attachChannel
           })
+          setActivePc(pc)
           pc.onconnectionstatechange = () => {
             setStatus(`connection: ${pc!.connectionState}`)
             if (pc!.connectionState === 'connected') getConnectionType(pc!).then(setConnectionType)
             else if (pc!.connectionState === 'failed' || pc!.connectionState === 'closed') {
               setConnectionType(null)
+              setActivePc(null)
             }
           }
 
@@ -301,13 +310,15 @@ function AgentView(): React.JSX.Element {
             // conservative, especially over a TURN relay -- a stale/blurry
             // low-bitrate stream is easy to misread as network lag. Raising
             // the ceiling lets it settle on a sharper, more responsive
-            // stream sooner once real available bandwidth allows it.
+            // stream sooner once real available bandwidth allows it. Bumped
+            // again (6Mbps -> 15Mbps) after comparing against Parsec's own
+            // stats readout -- WebRTC's own congestion control still pulls
+            // this down automatically if the real path can't sustain it, so
+            // raising the ceiling only helps when bandwidth actually allows
+            // more, never hurts otherwise.
             const params = sender.getParameters()
             if (!params.encodings?.length) params.encodings = [{}]
-            // Bumped alongside the 1080p/60fps cap above -- more frames
-            // per second need more bitrate headroom to stay sharp instead
-            // of turning to mush under motion.
-            params.encodings[0].maxBitrate = 6_000_000
+            params.encodings[0].maxBitrate = 15_000_000
             // Under bandwidth pressure, WebRTC's default ('balanced') will
             // trade off *both* resolution and frame rate. For control feel,
             // a choppier-but-clear frame is worse than a softer-but-smooth
@@ -317,6 +328,23 @@ function AgentView(): React.JSX.Element {
             sender.setParameters(params).catch(() => {})
           })
           if (videoRef.current) videoRef.current.srcObject = stream
+
+          // Prefer H.264 over Chromium's default (often VP8, typically
+          // software-encoded) -- H.264 gets hardware encode/decode on both
+          // macOS (VideoToolbox) and Windows (Media Foundation) via
+          // Chromium's WebRTC stack, which is the closest this
+          // WebRTC-based app can get to what a native tool like Parsec
+          // does with a dedicated hardware encoder. No-ops harmlessly if
+          // H.264 isn't in this build's capability list.
+          const videoTransceiver = pc
+            .getTransceivers()
+            .find((t) => t.sender.track?.kind === 'video')
+          const capabilities = RTCRtpSender.getCapabilities('video')
+          const h264Codecs = capabilities?.codecs.filter((c) => c.mimeType === 'video/H264') ?? []
+          if (videoTransceiver && h264Codecs.length > 0 && capabilities) {
+            const otherCodecs = capabilities.codecs.filter((c) => c.mimeType !== 'video/H264')
+            videoTransceiver.setCodecPreferences([...h264Codecs, ...otherCodecs])
+          }
 
           const offer = await pc.createOffer()
           await pc.setLocalDescription(offer)
@@ -440,6 +468,17 @@ function AgentView(): React.JSX.Element {
           </div>
         </div>
 
+        {videoStats && videoStats.fps > 0 && (
+          <span
+            className="connection-type-badge"
+            title="What this machine is actually encoding and sending"
+          >
+            Encode {videoStats.processingMs}ms · Network {videoStats.rttMs ?? '?'}ms ·{' '}
+            {videoStats.fps}fps · {videoStats.width}×{videoStats.height} ·{' '}
+            {(videoStats.kbps / 1000).toFixed(1)} Mbps
+            {videoStats.codec ? ` · ${videoStats.codec}` : ''}
+          </span>
+        )}
         {connectionType && (
           <span
             className="connection-type-badge"

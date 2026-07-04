@@ -5,6 +5,13 @@ export interface VideoStats {
   width: number
   height: number
   kbps: number
+  // Encode time (outbound/agent) or decode time (inbound/controller) per
+  // frame, in ms -- Parsec's status bar shows both side by side since it
+  // controls the whole pipeline; this app only ever sees its own side, so
+  // whichever end renders this hook gets whichever half applies to it.
+  processingMs: number
+  rttMs: number | null
+  codec: string | null
 }
 
 // Shows what's actually happening on the wire (not what was asked for --
@@ -25,27 +32,74 @@ export function useVideoStats(
 
     let prevBytes = 0
     let prevTimestamp = 0
+    let prevProcessingTime = 0
+    let prevFrames = 0
 
     const interval = setInterval(() => {
       pc.getStats().then((report) => {
+        let rttMs: number | null = null
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let rtpEntry: any = null
+
         report.forEach((entry) => {
-          if (entry.type !== `${direction}-rtp` || entry.kind !== 'video') return
-          const bytes = direction === 'inbound' ? entry.bytesReceived : entry.bytesSent
-          const timestamp = entry.timestamp as number
-          // bits per ms and kbps (1000 bits/sec) are numerically the same
-          // unit, so this needs no further conversion.
-          let kbps = 0
-          if (prevTimestamp && timestamp > prevTimestamp && typeof bytes === 'number') {
-            kbps = Math.round(((bytes - prevBytes) * 8) / (timestamp - prevTimestamp))
+          if (
+            entry.type === 'candidate-pair' &&
+            entry.nominated &&
+            typeof entry.currentRoundTripTime === 'number'
+          ) {
+            rttMs = Math.round(entry.currentRoundTripTime * 1000)
           }
-          if (typeof bytes === 'number') prevBytes = bytes
-          prevTimestamp = timestamp
-          setStats({
-            fps: Math.round(entry.framesPerSecond ?? 0),
-            width: entry.frameWidth ?? 0,
-            height: entry.frameHeight ?? 0,
-            kbps
-          })
+          if (entry.type === `${direction}-rtp` && entry.kind === 'video') {
+            rtpEntry = entry
+          }
+        })
+
+        if (!rtpEntry) return
+
+        const bytes = direction === 'inbound' ? rtpEntry.bytesReceived : rtpEntry.bytesSent
+        const timestamp = rtpEntry.timestamp as number
+        const totalProcessingTime =
+          direction === 'inbound' ? rtpEntry.totalDecodeTime : rtpEntry.totalEncodeTime
+        const frames = direction === 'inbound' ? rtpEntry.framesDecoded : rtpEntry.framesEncoded
+
+        // bits per ms and kbps (1000 bits/sec) are numerically the same
+        // unit, so this needs no further conversion.
+        let kbps = 0
+        if (prevTimestamp && timestamp > prevTimestamp && typeof bytes === 'number') {
+          kbps = Math.round(((bytes - prevBytes) * 8) / (timestamp - prevTimestamp))
+        }
+        // Both totals are cumulative since the stream started -- averaging
+        // over just the last interval (rather than since the start) keeps
+        // this responsive to what's happening *right now*.
+        let processingMs = 0
+        if (
+          typeof totalProcessingTime === 'number' &&
+          typeof frames === 'number' &&
+          frames > prevFrames
+        ) {
+          processingMs = Math.round(
+            ((totalProcessingTime - prevProcessingTime) / (frames - prevFrames)) * 1000
+          )
+        }
+
+        if (typeof bytes === 'number') prevBytes = bytes
+        prevTimestamp = timestamp
+        if (typeof totalProcessingTime === 'number') prevProcessingTime = totalProcessingTime
+        if (typeof frames === 'number') prevFrames = frames
+
+        const codecEntry = rtpEntry.codecId ? report.get(rtpEntry.codecId) : undefined
+        const codec = codecEntry?.mimeType
+          ? String(codecEntry.mimeType).replace('video/', '')
+          : null
+
+        setStats({
+          fps: Math.round(rtpEntry.framesPerSecond ?? 0),
+          width: rtpEntry.frameWidth ?? 0,
+          height: rtpEntry.frameHeight ?? 0,
+          kbps,
+          processingMs,
+          rttMs,
+          codec
         })
       })
     }, 1000)
