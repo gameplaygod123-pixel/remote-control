@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type { UpdaterStatus } from '../main/updater'
 
 type AppMode = 'agent' | 'controller'
 
@@ -53,6 +54,11 @@ declare global {
         getPin: () => Promise<string>
         setPin: (pin: string) => Promise<void>
         regeneratePin: () => Promise<string>
+      }
+      updater: {
+        checkNow: () => Promise<void>
+        restartNow: () => Promise<void>
+        onStatus: (handler: (status: UpdaterStatus) => void) => void
       }
     }
   }

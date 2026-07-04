@@ -5,6 +5,7 @@ import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL, AGENT_TOKEN } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import CopyButton from '../shared/components/CopyButton'
+import UpdateBadge from '../shared/components/UpdateBadge'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
 
 // Cached after the first remote input message -- the agent's screen doesn't
@@ -404,6 +405,8 @@ function AgentView(): React.JSX.Element {
           </div>
         </div>
       )}
+
+      <UpdateBadge />
     </div>
   )
 }

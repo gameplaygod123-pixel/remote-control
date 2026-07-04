@@ -492,3 +492,29 @@
   height: 100%;
   object-fit: contain;
 }
+
+.update-badge {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 1000;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(20, 20, 24, 0.75);
+  color: #f0e6dc;
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+}
+
+.update-badge:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.update-badge:disabled {
+  cursor: default;
+  opacity: 0.75;
+}

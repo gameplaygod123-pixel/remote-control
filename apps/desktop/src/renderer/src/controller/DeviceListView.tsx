@@ -3,6 +3,7 @@ import { connectSignaling, SignalingClient } from '../shared/signaling/signaling
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
 import { classify } from '../shared/components/StatusPill'
+import UpdateBadge from '../shared/components/UpdateBadge'
 import '../assets/deviceList.css'
 
 interface Device {
@@ -245,6 +246,8 @@ export default function DeviceListView({
         </span>
         <span>{lastUpdated ? `อัปเดตล่าสุด ${formatTime(lastUpdated)}` : ''}</span>
       </div>
+
+      <UpdateBadge />
     </div>
   )
 }

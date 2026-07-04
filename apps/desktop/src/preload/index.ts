@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { UpdaterStatus } from '../main/updater'
 
 type AppMode = 'agent' | 'controller'
 
@@ -71,6 +72,13 @@ const api = {
     getPin: (): Promise<string> => ipcRenderer.invoke('agent-identity:get-pin'),
     setPin: (pin: string): Promise<void> => ipcRenderer.invoke('agent-identity:set-pin', pin),
     regeneratePin: (): Promise<string> => ipcRenderer.invoke('agent-identity:regenerate-pin')
+  },
+  updater: {
+    checkNow: (): Promise<void> => ipcRenderer.invoke('updater:check-now'),
+    restartNow: (): Promise<void> => ipcRenderer.invoke('updater:restart-now'),
+    onStatus: (handler: (status: UpdaterStatus) => void): void => {
+      ipcRenderer.on('updater:status', (_event, status) => handler(status))
+    }
   }
 }
 

@@ -826,6 +826,26 @@ from Phase 6). Until the repo goes public, none of this auto-update
 wiring actually does anything at runtime; it's just in place for when it
 does.
 
+### Manual "check for updates" control
+
+The periodic background check (every 6h) is too slow for iterating on a
+personal build -- publish a release, then want to grab it immediately
+without waiting or needing to fully restart the app. Added:
+
+- `updater.ts` now broadcasts a typed `UpdaterStatus` to every window over
+  `updater:status`, and exposes `updater:check-now` / `updater:restart-now`
+  IPC handlers (both registered even in dev mode, so the button never
+  throws -- in dev they just report back "packaged build only").
+- `UpdateBadge.tsx` -- a small fixed-position pill (bottom-right corner,
+  self-styled so it reads over both app themes) showing the current state
+  (`Check for updates` / `Checking...` / `Downloading...` /
+  `Restart to install vX`) and triggering the matching action on click.
+- Deliberately **not** rendered inside `ControllerSession` (the fullscreen
+  remote-video view) -- a fixed corner button sitting on top of the video
+  would eat clicks meant for that corner of the *remote* screen. Only
+  rendered in `AgentView` and `DeviceListView`, where there's no
+  interactive remote content underneath it.
+
 ## Running locally
 
 Root of the repo:
