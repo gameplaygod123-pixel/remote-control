@@ -894,6 +894,20 @@ immediately with no extra step. Verified the published asset
 confirming the feed is actually usable by an installed app with no
 credentials.
 
+**Known flaky quirk**: `pnpm release:win` has twice thrown a GitHub API
+error (visible as a raw HTTP response dump, e.g. rate-limit headers) right
+after `overwrite published file` / `already exists on GitHub`, non-
+deterministically. Checking the actual release afterward showed it can go
+either way -- fully published, or missing `latest.yml`/`.blockmap`
+(uploaded the .exe but not the rest). If the command exits non-zero, don't
+assume the release is broken *or* fine -- always check with
+`gh release view vX.Y.Z --repo gameplaygod123-pixel/remote-control` and
+count the assets (should be exactly 3: the `.exe`, its `.blockmap`, and
+`latest.yml`). If assets are missing, just re-run `pnpm electron-builder
+--win --publish always` (skips the rebuild, reuses the existing
+`dist/` output) -- it detects what's already uploaded and finishes the
+rest.
+
 ### Manual "check for updates" control
 
 The periodic background check (every 6h) is too slow for iterating on a
