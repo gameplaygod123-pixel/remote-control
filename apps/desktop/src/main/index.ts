@@ -101,7 +101,15 @@ function createBrowserWindow(searchParams?: string, hidden = false): BrowserWind
     icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      // The agent is designed to live hidden in the tray (auto-start at
+      // boot, or the person at the machine clicking X mid-session), and
+      // Chromium throttles hidden windows hard -- which stalls the screen
+      // capture pipeline, so the controller's video froze the instant the
+      // agent window was closed to tray, reading as "mouse stopped
+      // working". The stream and input must keep flowing at full rate
+      // regardless of window visibility.
+      backgroundThrottling: false
     }
   })
 
