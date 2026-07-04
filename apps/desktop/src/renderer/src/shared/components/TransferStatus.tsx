@@ -10,13 +10,15 @@ export default function TransferStatus({
   const verb = transfer.direction === 'send' ? 'Sending' : 'Receiving'
 
   return (
-    <div className="transfer-status">
+    <div className={`transfer-status${transfer.error ? ' is-error' : ''}`}>
       <div className="transfer-status__label">
-        {transfer.done
-          ? `Saved "${transfer.name}" to Downloads`
-          : `${verb} "${transfer.name}"... ${transfer.progress}%`}
+        {transfer.error
+          ? `"${transfer.name}": ${transfer.error}`
+          : transfer.done
+            ? `Saved "${transfer.name}" to Downloads`
+            : `${verb} "${transfer.name}"... ${transfer.progress}%`}
       </div>
-      {!transfer.done && (
+      {!transfer.done && !transfer.error && (
         <div className="transfer-status__bar">
           <div className="transfer-status__fill" style={{ width: `${transfer.progress}%` }} />
         </div>

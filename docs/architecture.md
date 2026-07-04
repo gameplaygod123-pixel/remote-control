@@ -1043,6 +1043,42 @@ never touch the relay, same trust model as video/input.
   touch `packages/protocol/src/messages.ts` or the signaling server, which
   only ever relay SDP/ICE/pairing and never see file contents.
 
+### First real test: stuck at 0%, and no error handling anywhere to explain why
+
+User's first real test (a 3.8MB file) showed both ends frozen at "...0%"
+with no indication of whether it was slow, stuck, or dead.
+
+**Verified the algorithm itself is correct** before looking anywhere else:
+wrote a standalone test (no Electron, no real WebRTC) using a fake
+data-channel pair that feeds `sendFileOverChannel`'s output straight into
+`createFileReceiver` -- sent a real 3.8MB buffer through the exact same
+chunking code the app uses, and the received bytes matched the original
+byte-for-byte, with progress correctly reaching 100% on both sides. This
+ruled out a logic bug in the chunking/reassembly itself.
+
+The real problem: **zero error handling anywhere in the send/receive
+path**. `sendFiles`'s loop had no try/catch, so a `channel.send()` throwing
+(dropped channel, closed connection mid-transfer, any WebRTC hiccup) would
+silently die, leaving the UI frozen at whatever percentage it last
+reached -- indistinguishable from "still going, just slow." Fixed in
+`useFileTransferChannel.ts`:
+
+- try/catch around both the send loop and the receive handler, setting a
+  new `error` field on `TransferState` instead of leaving state stuck.
+- A stall watchdog: tracks the timestamp of the last progress event: if
+  15 seconds pass with no movement, the transfer is marked failed
+  (`"stalled -- no response from the other side"`) even if the underlying
+  promise never actually resolves/rejects on its own (e.g. hung forever on
+  a `bufferedamountlow` event that'll never fire because the channel died)
+  -- gives up on tracking it rather than displaying nothing useful forever.
+- `TransferStatus.tsx` renders an `.is-error` state (red-tinted) instead
+  of the progress bar when this happens.
+
+Whether the original test was a genuine stall (network/TURN-relay hiccup)
+or just still in progress when the screenshot was taken is unresolved --
+this at least guarantees the *next* attempt either completes or shows a
+concrete reason instead of an ambiguous frozen "0%".
+
 ## Running locally
 
 Root of the repo:

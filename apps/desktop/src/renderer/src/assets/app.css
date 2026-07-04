@@ -597,6 +597,11 @@
   backdrop-filter: blur(8px);
 }
 
+.transfer-status.is-error {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--err);
+}
+
 .transfer-status__label {
   margin-bottom: 6px;
 }
