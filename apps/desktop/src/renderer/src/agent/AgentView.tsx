@@ -209,7 +209,9 @@ function AgentView(): React.JSX.Element {
         const message = parsed.data
 
         if (message.type === 'register-result') {
-          setStatus(message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`)
+          setStatus(
+            message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`
+          )
         } else if (message.type === 'connection-request') {
           if (await window.api.trusted.isTrusted(message.controllerId)) {
             transport.send({ type: 'connection-response', deviceId: agentDeviceId, accept: true })
@@ -301,114 +303,129 @@ function AgentView(): React.JSX.Element {
 
   if (deviceId === null || pin === null) {
     return (
-      <div className="app-shell">
+      <div className="agent-shell">
         <p className="app-subtitle">Loading...</p>
       </div>
     )
   }
 
   return (
-    <div className="app-shell">
-      <div className="app-header">
-        <div className="app-icon">🖥️</div>
-        <div>
-          <div className="app-title">Personal Remote Agent</div>
-          <div className="app-subtitle">Give these to the controller to connect</div>
+    <div className="agent-shell">
+      <div className="agent-titlebar">
+        <div className="agent-dots">
+          <span />
+          <span />
+          <span />
         </div>
+        <div className="agent-titletext">Personal Remote — Agent</div>
       </div>
 
-      {incomingRequest && (
-        <div className="connection-request">
-          <div className="connection-request__title">Incoming connection request</div>
-          <p className="connection-request__body">
-            Someone entered the correct PIN and wants to connect to this computer.
-          </p>
-          <div className="connection-request__actions">
-            <button className="btn" onClick={handleAccept}>
-              Accept
-            </button>
-            <button className="btn btn--ghost" onClick={handleReject}>
-              Reject
-            </button>
+      <div className="agent-body">
+        <div className="app-header">
+          <div className="app-icon">🖥️</div>
+          <div>
+            <div className="app-title">Personal Remote Agent</div>
+            <div className="app-subtitle">Give these to the controller to connect</div>
           </div>
         </div>
-      )}
 
-      <div className="field-group">
-        <label className="field-label">Device name</label>
-        <input
-          className="field-input"
-          placeholder="e.g. Bedroom PC"
-          value={nameDraft}
-          onChange={(e) => setNameDraft(e.target.value)}
-          onBlur={commitName}
-          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-        />
-      </div>
-
-      <div className="credential-grid">
-        <div className="credential-box">
-          <div className="credential-label">Device ID</div>
-          <div className="credential-value-row">
-            <span className="credential-value">{deviceId}</span>
-            <CopyButton value={deviceId} />
-          </div>
-        </div>
-        <div className="credential-box">
-          <div className="credential-label">PIN</div>
-          <div className="credential-value-row">
-            <input
-              className="field-input credential-pin-input"
-              value={pinDraft}
-              onChange={(e) => setPinDraft(e.target.value)}
-              onBlur={commitPinDraft}
-              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-            />
-            <CopyButton value={pin} />
-          </div>
-          <div className="credential-hint">
-            {pinSaved ? 'saved' : 'set your own, or '}
-            {!pinSaved && (
-              <button className="credential-pin-regenerate" onClick={handleRegeneratePin}>
-                generate a new one
+        {incomingRequest && (
+          <div className="connection-request">
+            <div className="connection-request__title">Incoming connection request</div>
+            <p className="connection-request__body">
+              Someone entered the correct PIN and wants to connect to this computer.
+            </p>
+            <div className="connection-request__actions">
+              <button className="btn" onClick={handleAccept}>
+                Accept
               </button>
-            )}
+              <button className="btn btn--ghost" onClick={handleReject}>
+                Reject
+              </button>
+            </div>
           </div>
-        </div>
-      </div>
+        )}
 
-      <StatusPill status={status} />
-
-      <div className="video-frame">
-        <video ref={videoRef} autoPlay muted />
-        {!status.includes('connection') && <span className="video-frame__empty">Not sharing yet</span>}
-      </div>
-
-      {trustedList.length > 0 && (
         <div className="field-group">
-          <label className="field-label">Trusted devices (skip the approval prompt)</label>
-          <div className="trusted-list">
-            {trustedList.map((c) => (
-              <div key={c.id} className="trusted-list__row">
-                <span className="trusted-list__id">{c.id.slice(0, 8)}</span>
-                <span className="trusted-list__date">
-                  trusted {new Date(c.trustedAt).toLocaleDateString()}
-                </span>
-                <button
-                  className="trusted-list__revoke"
-                  onClick={() => handleRevoke(c.id)}
-                  title="Forget this device -- it'll need approval again next time"
-                >
-                  Remove
+          <label className="field-label">Device name</label>
+          <input
+            className="field-input"
+            placeholder="e.g. Bedroom PC"
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          />
+        </div>
+
+        <div className="credential-grid">
+          <div className="credential-box">
+            <div className="credential-label">Device ID</div>
+            <div className="credential-value-row">
+              <span className="credential-value">{deviceId}</span>
+              <CopyButton value={deviceId} />
+            </div>
+          </div>
+          <div className="credential-box">
+            <div className="credential-label">PIN</div>
+            <div className="credential-value-row">
+              <input
+                className="field-input credential-pin-input"
+                value={pinDraft}
+                onChange={(e) => setPinDraft(e.target.value)}
+                onBlur={commitPinDraft}
+                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+              />
+              <CopyButton value={pin} />
+            </div>
+            <div className="credential-hint">
+              {pinSaved ? 'saved' : 'set your own, or '}
+              {!pinSaved && (
+                <button className="credential-pin-regenerate" onClick={handleRegeneratePin}>
+                  generate a new one
                 </button>
-              </div>
-            ))}
+              )}
+            </div>
           </div>
         </div>
-      )}
 
-      <UpdateBadge />
-      <SwitchModeLink />
+        <StatusPill status={status} />
+
+        <div className="video-frame">
+          <video ref={videoRef} autoPlay muted />
+          {!status.includes('connection') && (
+            <span className="video-frame__empty">Not sharing yet</span>
+          )}
+        </div>
+
+        {trustedList.length > 0 && (
+          <div className="field-group">
+            <label className="field-label">Trusted devices (skip the approval prompt)</label>
+            <div className="trusted-list">
+              {trustedList.map((c) => (
+                <div key={c.id} className="trusted-list__row">
+                  <span className="trusted-list__id">{c.id.slice(0, 8)}</span>
+                  <span className="trusted-list__date">
+                    trusted {new Date(c.trustedAt).toLocaleDateString()}
+                  </span>
+                  <button
+                    className="trusted-list__revoke"
+                    onClick={() => handleRevoke(c.id)}
+                    title="Forget this device -- it'll need approval again next time"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="agent-footer">
+        <SwitchModeLink />
+        <UpdateBadge />
+      </div>
     </div>
   )
 }

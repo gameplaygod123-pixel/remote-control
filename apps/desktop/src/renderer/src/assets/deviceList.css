@@ -311,3 +311,9 @@
   font-size: 12px;
   color: var(--dl-text-dim);
 }
+
+.dl-footer-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}

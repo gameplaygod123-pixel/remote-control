@@ -5,7 +5,7 @@
 // the actual restart happen in the main process (window.api.resetMode).
 export default function SwitchModeLink(): React.JSX.Element {
   return (
-    <button className="mode-switch-link" onClick={() => window.api.resetMode()}>
+    <button className="footer-link" onClick={() => window.api.resetMode()}>
       Switch mode
     </button>
   )

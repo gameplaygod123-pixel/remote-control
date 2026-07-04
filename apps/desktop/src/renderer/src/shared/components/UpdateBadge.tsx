@@ -3,9 +3,11 @@ import type { UpdaterStatus } from '../../../../main/updater'
 
 // A small always-present control so a new release can be picked up on
 // demand -- e.g. right after publishing one -- instead of waiting for the
-// periodic background check or a restart. Fixed-position and
-// self-contained (own colors) so it reads fine over both the default
-// app.css theme (Agent) and the dark-brown device list theme (Controller).
+// periodic background check or a restart. Meant to be rendered inside
+// each screen's own footer bar (not fixed-position) -- the shared
+// `.footer-link` class uses `color: inherit` so it reads correctly in
+// both the default app.css theme (Agent) and the dark-brown device list
+// theme (Controller) without needing per-theme overrides.
 export default function UpdateBadge(): React.JSX.Element {
   const [status, setStatus] = useState<UpdaterStatus | null>(null)
 
@@ -44,7 +46,7 @@ export default function UpdateBadge(): React.JSX.Element {
 
   return (
     <button
-      className="update-badge"
+      className="footer-link"
       onClick={handleClick}
       disabled={busy}
       title={status?.state === 'error' ? status.message : undefined}

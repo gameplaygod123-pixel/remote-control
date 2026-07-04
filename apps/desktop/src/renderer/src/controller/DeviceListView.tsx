@@ -242,14 +242,17 @@ export default function DeviceListView({
       </div>
 
       <div className="dl-footer">
-        <span>
-          online: {onlineCount} · offline: {devices.length - onlineCount}
-        </span>
-        <span>{lastUpdated ? `อัปเดตล่าสุด ${formatTime(lastUpdated)}` : ''}</span>
+        <div className="dl-footer-group">
+          <span>
+            online: {onlineCount} · offline: {devices.length - onlineCount}
+          </span>
+          <SwitchModeLink />
+        </div>
+        <div className="dl-footer-group">
+          <UpdateBadge />
+          <span>{lastUpdated ? `อัปเดตล่าสุด ${formatTime(lastUpdated)}` : ''}</span>
+        </div>
       </div>
-
-      <UpdateBadge />
-      <SwitchModeLink />
     </div>
   )
 }

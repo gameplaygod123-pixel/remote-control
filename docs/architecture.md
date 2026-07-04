@@ -928,6 +928,42 @@ without waiting or needing to fully restart the app. Added:
   rendered in `AgentView` and `DeviceListView`, where there's no
   interactive remote content underneath it.
 
+## Agent view: full-bleed layout + footer buttons that don't overlap content
+
+Two visual complaints from a real screenshot: (1) the floating
+`UpdateBadge`/`SwitchModeLink` corner pills sat directly on top of the
+device list's own footer text, visibly clipping it (`online: 4` read as
+`ffline: 4`); (2) `AgentView` was still using the **unmodified
+electron-vite starter template's** `.app-shell` -- a small `max-width:
+460px` card, centered by `body`/`#root` flex rules in `main.css`, floating
+over that template's decorative `wavy-lines.svg` background. Never
+customized away from scaffolding in earlier work.
+
+- **Footer buttons**: `UpdateBadge`/`SwitchModeLink` no longer carry their
+  own `position: fixed` pill styling. Replaced with one shared
+  `.footer-link` class (plain text-button, `color: inherit`, no
+  background/border) meant to be rendered *inside* each screen's existing
+  footer bar rather than floating on top of it. `.dl-footer` already sets
+  a text color on itself, so `color: inherit` picks that up automatically
+  in the device list; `.agent-footer` (new, see below) does the same for
+  the agent screen. `DeviceListView`'s footer is now two `.dl-footer-group`
+  clusters (left: online/offline count + Switch mode; right: update status
+  + last-updated time) instead of two bare `<span>`s with the buttons
+  floating separately on top.
+- **Full-bleed agent shell**: new `.agent-shell` (`position: fixed; inset:
+  0`, solid `#171210` background matching the device list's base color for
+  consistency) replaces `.app-shell` for `AgentView` specifically --
+  same technique `.dl-shell` already used to escape the starter
+  template's centering. Structure now mirrors the device list: a slim
+  draggable `.agent-titlebar` (dots + "Personal Remote — Agent"), a
+  scrollable `.agent-body` (the existing header/credentials/video/trusted-
+  list content, now capped at `max-width: 640px` and centered *within* the
+  full-bleed shell so text doesn't stretch uncomfortably wide on a large
+  window, while the window chrome itself still fills edge-to-edge), and an
+  `.agent-footer` bar holding Switch mode / Up to date. `.app-shell` itself
+  is untouched and still used by `ChooseModeView` and `ControllerView`'s
+  brief loading state -- neither was part of this complaint.
+
 ## Running locally
 
 Root of the repo:
