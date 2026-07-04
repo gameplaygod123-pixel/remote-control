@@ -9,6 +9,7 @@ import UpdateBadge from '../shared/components/UpdateBadge'
 import SwitchModeLink from '../shared/components/SwitchModeLink'
 import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
+import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
 
 // Cached after the first remote input message -- the agent's screen doesn't
@@ -55,6 +56,7 @@ function AgentView(): React.JSX.Element {
   const [pinDraft, setPinDraft] = useState('')
   const [pinSaved, setPinSaved] = useState(false)
   const [status, setStatus] = useState('connecting to signaling server')
+  const [connectionType, setConnectionType] = useState<ConnectionType | null>(null)
   const [incomingRequest, setIncomingRequest] = useState(false)
   const [pendingControllerId, setPendingControllerId] = useState<string | null>(null)
   const [trustedList, setTrustedList] = useState<{ id: string; trustedAt: number }[]>([])
@@ -252,7 +254,13 @@ function AgentView(): React.JSX.Element {
             createFileChannel: true,
             onFileChannel: attachChannel
           })
-          pc.onconnectionstatechange = () => setStatus(`connection: ${pc!.connectionState}`)
+          pc.onconnectionstatechange = () => {
+            setStatus(`connection: ${pc!.connectionState}`)
+            if (pc!.connectionState === 'connected') getConnectionType(pc!).then(setConnectionType)
+            else if (pc!.connectionState === 'failed' || pc!.connectionState === 'closed') {
+              setConnectionType(null)
+            }
+          }
 
           // frameRate: without an explicit ask, Chromium's screen-capture
           // default can be quite conservative (sometimes ~5fps), which reads
@@ -403,6 +411,14 @@ function AgentView(): React.JSX.Element {
           </div>
         </div>
 
+        {connectionType && (
+          <span
+            className="connection-type-badge"
+            title="Affects file transfer speed -- relay is shared/bandwidth-limited"
+          >
+            {connectionType === 'relay' ? 'via relay' : 'direct connection'}
+          </span>
+        )}
         <StatusPill status={status} />
 
         <div className="video-frame">

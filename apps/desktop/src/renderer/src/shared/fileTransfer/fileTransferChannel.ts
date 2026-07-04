@@ -5,16 +5,22 @@
 // sends, whichever side has createFileReceiver attached to onmessage receives --
 // same channel object works either way once open, like the input channel does.
 
-// Small enough to stay well under typical SCTP/data-channel message limits
-// across browsers, large enough to not spend most of the transfer on
-// per-chunk overhead.
-const CHUNK_SIZE = 16 * 1024
+// Chromium's data-channel implementation comfortably handles messages well
+// above this; 64KB cuts the number of send()/onmessage round-trips (and
+// their per-message JS overhead) roughly 4x versus a more conservative
+// 16KB without meaningfully risking hitting any real message-size ceiling.
+// Note this is very unlikely to be the actual bottleneck for a slow
+// transfer -- see connectionType.ts for the more likely culprit (TURN
+// relay bandwidth).
+const CHUNK_SIZE = 64 * 1024
 
 // Pause sending once this much is buffered locally, resuming on
 // `bufferedamountlow` -- without this, blasting a large file into `send()`
 // as fast as possible can balloon memory/latency far ahead of what the
-// other side has actually received.
-const BUFFERED_AMOUNT_LOW_THRESHOLD = 1024 * 1024
+// other side has actually received. Scaled up alongside CHUNK_SIZE so this
+// still allows a healthy number of in-flight chunks rather than throttling
+// after just a handful.
+const BUFFERED_AMOUNT_LOW_THRESHOLD = 4 * 1024 * 1024
 
 type ControlMessage = { t: 'file-start'; name: string; size: number } | { t: 'file-end' }
 

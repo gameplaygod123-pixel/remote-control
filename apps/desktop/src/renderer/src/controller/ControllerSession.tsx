@@ -6,7 +6,12 @@ import { SIGNALING_URL } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
-import { RemoteInputMessage, isPrintableKey, videoRelativePosition } from '../shared/input/inputProtocol'
+import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
+import {
+  RemoteInputMessage,
+  isPrintableKey,
+  videoRelativePosition
+} from '../shared/input/inputProtocol'
 
 // Mousemove fires far more often than the remote side needs to react to --
 // this caps how frequently position updates cross the data channel without
@@ -31,6 +36,10 @@ export default function ControllerSession({
   onBack: () => void
 }): React.JSX.Element {
   const [status, setStatus] = useState('connecting to signaling server')
+  // Diagnostic for "why is a file transfer slow" -- 'relay' means traffic
+  // is passing through the free TURN server (shared, bandwidth-limited)
+  // rather than a direct path between the two machines.
+  const [connectionType, setConnectionType] = useState<ConnectionType | null>(null)
   // Fetched from a main-process file rather than localStorage, which is
   // scoped to the Vite dev server's origin and would reset this identity
   // if the dev-server port ever shifted between runs.
@@ -194,7 +203,8 @@ export default function ControllerSession({
               }, PAIR_RETRY_DELAY_MS)
               return
             }
-            if (message.reason === 'incorrect pin') window.api.controllerMemory.clearCachedPin(deviceId)
+            if (message.reason === 'incorrect pin')
+              window.api.controllerMemory.clearCachedPin(deviceId)
             setStatus(`pairing failed: ${message.reason}`)
             return
           }
@@ -213,6 +223,7 @@ export default function ControllerSession({
             setStatus(`connection: ${pc.connectionState}`)
             if (pc.connectionState === 'connected') {
               window.api.window.setFullScreen(true)
+              getConnectionType(pc).then(setConnectionType)
             }
             // Covers the case where the *agent's* signaling connection drops
             // and reconnects while ours stays up the whole time -- we'd never
@@ -224,6 +235,7 @@ export default function ControllerSession({
               pc.close()
               pcRef.current = null
               inputChannelRef.current = null
+              setConnectionType(null)
               if (videoRef.current) videoRef.current.srcObject = null
               setTimeout(() => {
                 transport.send({ type: 'pair-request', deviceId, pin, controllerId })
@@ -274,6 +286,14 @@ export default function ControllerSession({
           <div className="app-title">{deviceId}</div>
           <div className="app-subtitle">Press Esc to disconnect</div>
         </div>
+        {connectionType && (
+          <span
+            className="connection-type-badge"
+            title="Affects file transfer speed -- relay is shared/bandwidth-limited"
+          >
+            {connectionType === 'relay' ? 'via relay' : 'direct connection'}
+          </span>
+        )}
         <StatusPill status={status} />
       </div>
 
@@ -289,7 +309,9 @@ export default function ControllerSession({
           onDragOver={handleDragOver}
           onDrop={handleDrop}
         />
-        {!status.startsWith('connection') && <span className="video-frame__empty">No video yet</span>}
+        {!status.startsWith('connection') && (
+          <span className="video-frame__empty">No video yet</span>
+        )}
         <TransferStatus transfer={transfer} />
       </div>
     </div>

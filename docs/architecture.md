@@ -1079,6 +1079,39 @@ or just still in progress when the screenshot was taken is unresolved --
 this at least guarantees the *next* attempt either completes or shows a
 concrete reason instead of an ambiguous frozen "0%".
 
+### User asked for a faster transfer -- added a diagnostic instead of guessing
+
+Before changing anything, worth being honest: the chunking code itself was
+already verified correct and reasonably efficient (see above). The much
+more likely explanation for a slow transfer is the **connection path**,
+not this app's protocol -- if the two machines can't reach each other
+directly (common between two home networks/CGNAT), traffic falls back to
+the free Open Relay Project TURN server, which is a shared public demo
+service with real bandwidth limits that have nothing to do with this
+app's code.
+
+- New `shared/webrtc/connectionType.ts`: `getConnectionType(pc)` inspects
+  `RTCPeerConnection.getStats()` for the selected/nominated
+  `candidate-pair`, and checks whether either side's candidate is of type
+  `relay`. Both `AgentView` and `ControllerSession` call this once
+  `connectionState` becomes `'connected'` and show a small badge next to
+  the status pill: "via relay" or "direct connection".
+- Also bumped `CHUNK_SIZE` 16KB -> 64KB and
+  `BUFFERED_AMOUNT_LOW_THRESHOLD` 1MB -> 4MB in `fileTransferChannel.ts` --
+  a legitimate, if modest, improvement (fewer send()/onmessage round-trips
+  per file) that's very unlikely to be the dominant factor if the
+  connection is relayed, but there's no reason not to take a free win
+  regardless of what the diagnostic shows.
+- Re-ran the standalone chunking/reassembly test (see above) after the
+  chunk-size change to confirm it's still byte-exact.
+
+Next real step once the user reports back what the badge shows: if it
+says "via relay", the honest options are accepting the free tier's
+limits, or self-hosting a real coturn TURN server on a small VPS (already
+flagged as the natural upgrade path in the original plan's known-risks
+section) -- not something fixable by changing this app's own protocol
+code further.
+
 ## Running locally
 
 Root of the repo:
