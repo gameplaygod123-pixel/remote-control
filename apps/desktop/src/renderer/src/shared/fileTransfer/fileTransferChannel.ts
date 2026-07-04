@@ -34,6 +34,15 @@ export async function sendFileOverChannel(
   const start: ControlMessage = { t: 'file-start', name: file.name, size: file.size }
   channel.send(JSON.stringify(start))
 
+  // Read the whole file into memory *immediately*, before any of the
+  // network-paced backpressure delay below -- a `File` picked up from a
+  // drag-and-drop isn't guaranteed to stay readable indefinitely (seen on
+  // Windows: `file.slice(...).arrayBuffer()` failing partway through a
+  // slow transfer with a NotFoundError, as if the underlying OS-level
+  // reference had gone stale). Once read into a plain ArrayBuffer, the
+  // data has no such dependency and can be chunked/paced freely.
+  const buffer = await file.arrayBuffer()
+
   function waitForDrain(): Promise<void> {
     if (channel.bufferedAmount <= BUFFERED_AMOUNT_LOW_THRESHOLD) return Promise.resolve()
     return new Promise((resolve) => {
@@ -49,12 +58,12 @@ export async function sendFileOverChannel(
   }
 
   let offset = 0
-  while (offset < file.size) {
+  while (offset < buffer.byteLength) {
     await waitForDrain()
-    const chunk = await file.slice(offset, offset + CHUNK_SIZE).arrayBuffer()
+    const chunk = buffer.slice(offset, offset + CHUNK_SIZE)
     channel.send(chunk)
     offset += chunk.byteLength
-    onProgress(offset, file.size)
+    onProgress(offset, buffer.byteLength)
   }
 
   const end: ControlMessage = { t: 'file-end' }

@@ -1144,6 +1144,43 @@ of a generic hardcoded string like "failed to send" -- important because
 this is a packaged app with no accessible devtools console, so the
 in-app error banner is the only diagnostic channel available at all.
 
+### That error-visibility fix immediately paid off: real bug #2
+
+The very next retry (still the same 3.8MB "Dungeon" file, v1.5.1) surfaced
+a *different*, more specific error thanks to `describeError()`: `"A
+requested file or directory could not be found at the time an operation
+was processed."` -- verbatim the browser's standard `DOMException`
+message for `NotFoundError`, not a generic string I wrote. Without the
+previous fix this would have been indistinguishable from any other
+silent/generic failure.
+
+**Root cause**: `sendFileOverChannel` was calling
+`file.slice(offset, offset + CHUNK_SIZE).arrayBuffer()` *per chunk*,
+spread out across the whole transfer (~232 calls for this file at 16KB
+chunks, each potentially delayed by `waitForDrain()`'s backpressure wait).
+A `File` obtained from a drag-and-drop isn't guaranteed to stay readable
+for an extended period this way -- on Windows in particular, the
+underlying OS-level file reference backing the `File` object apparently
+went stale partway through, and the browser reports that as
+`NotFoundError` when a subsequent `slice().arrayBuffer()` call tries to
+read from it.
+
+**Fix**: read the entire file into memory *once*, immediately, via a
+single `await file.arrayBuffer()` right after sending `file-start` --
+before any backpressure-related delay has a chance to occur. Chunking now
+happens via plain `ArrayBuffer.prototype.slice()` on that already-read
+buffer, which has no dependency on any external OS file handle and can
+never go stale mid-transfer. Re-verified byte-exact with the standalone
+test (updated its fake File to also implement a direct `.arrayBuffer()`
+method matching the real `File`/`Blob` interface).
+
+This is the second real, reproducible bug found in two consecutive
+manual tests -- both only diagnosable *because* the previous fix added
+real error-message visibility instead of a generic string or silent
+freeze. Worth remembering as a pattern: for a packaged app with no
+devtools access, investing in "show the real error" pays for itself
+almost immediately.
+
 ## Running locally
 
 Root of the repo:
