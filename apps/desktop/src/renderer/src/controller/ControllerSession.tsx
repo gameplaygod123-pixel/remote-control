@@ -11,6 +11,7 @@ import { getConnectionType, type ConnectionType } from '../shared/webrtc/connect
 import {
   RemoteInputMessage,
   isPrintableKey,
+  isEditableTarget,
   videoRelativePosition
 } from '../shared/input/inputProtocol'
 
@@ -146,6 +147,11 @@ export default function ControllerSession({
   // combos and held state are real on the agent's OS.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
+      // The device-name field is a real local <input> in this same
+      // window -- without this check, typing into it (or into any future
+      // local field) gets hijacked and forwarded to the remote machine
+      // instead, making local text entry look completely broken.
+      if (isEditableTarget(e.target)) return
       if (e.code === 'Escape') return
       e.preventDefault()
       if (isPrintableKey(e)) {
@@ -156,6 +162,7 @@ export default function ControllerSession({
       sendInput({ t: 'keydown', code: e.code })
     }
     function handleKeyUp(e: KeyboardEvent): void {
+      if (isEditableTarget(e.target)) return
       if (e.code === 'Escape' || isPrintableKey(e)) return
       e.preventDefault()
       sendInput({ t: 'keyup', code: e.code })
@@ -170,6 +177,9 @@ export default function ControllerSession({
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
+      // Escape while editing the name field should just blur/cancel the
+      // edit, not disconnect the whole session.
+      if (isEditableTarget(e.target)) return
       if (e.key === 'Escape') goBack()
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -245,8 +255,12 @@ export default function ControllerSession({
           pcRef.current = pc
           pc.onconnectionstatechange = () => {
             setStatus(`connection: ${pc.connectionState}`)
+            // Deliberately not auto-fullscreening here -- a small window
+            // is sometimes exactly what's wanted (e.g. keeping the remote
+            // screen visible alongside other work); the OS's own
+            // fullscreen control (green button / Ctrl+Cmd+F on macOS)
+            // still works whenever fullscreen is actually wanted.
             if (pc.connectionState === 'connected') {
-              window.api.window.setFullScreen(true)
               getConnectionType(pc).then(setConnectionType)
             }
             // Covers the case where the *agent's* signaling connection drops

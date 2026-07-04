@@ -42,13 +42,7 @@ import {
 import { getSavedMode, saveMode, resetMode, type AppMode } from './appModeConfig'
 import { initAutoUpdater } from './updater'
 import { saveToDownloads } from './fileTransfer'
-import {
-  getCachedPin,
-  setCachedPin,
-  clearCachedPin,
-  getLastDevice,
-  setLastDeviceId
-} from './controllerMemory'
+import { getCachedPin, setCachedPin, clearCachedPin, setLastDeviceId } from './controllerMemory'
 
 export type { AppMode }
 
@@ -348,7 +342,6 @@ app.whenReady().then(async () => {
     setCachedPin(deviceId, pin)
   )
   ipcMain.handle('controller-memory:clear-cached-pin', (_event, deviceId: string) => clearCachedPin(deviceId))
-  ipcMain.handle('controller-memory:get-last-device', () => getLastDevice())
   ipcMain.handle('controller-memory:set-last-device-id', (_event, deviceId: string) => setLastDeviceId(deviceId))
 
   // The agent's own identity: device ID, display name, and pairing PIN, all

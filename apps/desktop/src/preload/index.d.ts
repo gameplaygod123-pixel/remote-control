@@ -44,7 +44,6 @@ declare global {
         getCachedPin: (deviceId: string) => Promise<string | undefined>
         setCachedPin: (deviceId: string, pin: string) => Promise<void>
         clearCachedPin: (deviceId: string) => Promise<void>
-        getLastDevice: () => Promise<{ deviceId: string; pin: string } | null>
         setLastDeviceId: (deviceId: string) => Promise<void>
       }
       chooseMode: (mode: AppMode) => void

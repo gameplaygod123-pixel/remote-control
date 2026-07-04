@@ -58,8 +58,6 @@ const api = {
       ipcRenderer.invoke('controller-memory:set-cached-pin', deviceId, pin),
     clearCachedPin: (deviceId: string): Promise<void> =>
       ipcRenderer.invoke('controller-memory:clear-cached-pin', deviceId),
-    getLastDevice: (): Promise<{ deviceId: string; pin: string } | null> =>
-      ipcRenderer.invoke('controller-memory:get-last-device'),
     setLastDeviceId: (deviceId: string): Promise<void> =>
       ipcRenderer.invoke('controller-memory:set-last-device-id', deviceId)
   },

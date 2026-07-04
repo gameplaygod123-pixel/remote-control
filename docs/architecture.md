@@ -1299,6 +1299,50 @@ flex default.
   showing the Device ID as the input's placeholder -- same UI, nothing
   broken, just an empty starting point to type into.
 
+## Three bugs from the name-field feature, one real regression underneath
+
+User tried the new inline rename field immediately: couldn't type into it
+at all, and separately asked to remove two auto-behaviors (auto-connect
+to the last device on launch, auto-fullscreen on every successful
+connection) that turned out to actively fight the new field.
+
+**The real bug**: `ControllerSession` already had a `window`-level
+`keydown`/`keyup` listener pair whose whole job is to capture every
+keystroke in this window and forward it to the remote agent as remote
+input (that's how typing during a session reaches the controlled
+machine). Adding a real local `<input>` into this same window without
+teaching that listener to leave it alone meant every keystroke aimed at
+the name field got `preventDefault()`-ed and shipped off to the remote
+machine instead of updating local state -- from the user's side, the
+field was just inert. Fixed with a new shared helper,
+`isEditableTarget()` in `inputProtocol.ts` (checks `instanceof
+HTMLInputElement || HTMLTextAreaElement`), checked first thing in both
+the remote-forwarding handler and the separate Escape-to-disconnect
+handler -- the latter needed the same fix for a related reason: pressing
+Escape while editing the name (e.g. to cancel) was disconnecting the
+whole session instead of just leaving the field.
+
+**The two auto-behaviors**, now both removed as unwanted rather than
+buggy:
+
+- `ControllerView.tsx` no longer calls `controllerMemory.getLastDevice()`
+  on mount to auto-populate `activeDevice` -- landing straight into a
+  session (and, combined with the next point, straight into fullscreen)
+  on every launch was the opposite of "let me pick a device." Removed the
+  whole read path along with its now-dead IPC handler
+  (`controller-memory:get-last-device`) and preload exposure -- confirmed
+  via `grep` that nothing else called it before deleting. Left
+  `setLastDeviceId` in place (still called on every connect) since it's
+  cheap and harmless to keep recording even without a current reader.
+- `ControllerSession.tsx`'s `pc.onconnectionstatechange` no longer calls
+  `window.api.window.setFullScreen(true)` when a connection succeeds --
+  a small window is sometimes exactly what's wanted (e.g. keeping an eye
+  on the remote screen while doing something else locally). The OS's own
+  fullscreen control (green button / Ctrl+Cmd+F on macOS) still works
+  whenever fullscreen is actually wanted; `setFullScreen(false)` on
+  leaving a session is untouched, so that part of the cleanup still
+  happens correctly either way.
+
 ## Running locally
 
 Root of the repo:

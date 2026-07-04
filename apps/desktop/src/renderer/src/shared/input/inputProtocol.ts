@@ -29,6 +29,15 @@ export function isPrintableKey(e: KeyboardEvent): boolean {
   return e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey
 }
 
+// The window-level keydown/keyup listeners that forward keys to the
+// remote machine need to leave local UI elements (the device-name field,
+// any future text input in this same window) alone -- otherwise typing
+// into them gets hijacked and sent to the remote machine instead of
+// updating the local field.
+export function isEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+}
+
 // The video element is styled with object-fit: contain, so it letterboxes
 // when the element's aspect ratio doesn't exactly match the stream's --
 // this maps a raw client-coordinate click back to a 0..1 fraction of the

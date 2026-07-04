@@ -54,13 +54,3 @@ export function setLastDeviceId(deviceId: string): void {
   mem.lastDeviceId = deviceId
   writeAll(mem)
 }
-
-// Only returns a device to auto-connect to if its PIN is still cached --
-// no point jumping into a session that would just prompt for a PIN anyway.
-export function getLastDevice(): { deviceId: string; pin: string } | null {
-  const mem = readAll()
-  if (!mem.lastDeviceId) return null
-  const pin = mem.pins[mem.lastDeviceId]
-  if (!pin) return null
-  return { deviceId: mem.lastDeviceId, pin }
-}
