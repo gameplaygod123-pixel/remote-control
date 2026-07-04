@@ -48,6 +48,21 @@ const api = {
   },
   controllerId: {
     get: (): Promise<string> => ipcRenderer.invoke('controller:get-id')
+  },
+  controllerMemory: {
+    getCachedPin: (deviceId: string): Promise<string | undefined> =>
+      ipcRenderer.invoke('controller-memory:get-cached-pin', deviceId),
+    setCachedPin: (deviceId: string, pin: string): Promise<void> =>
+      ipcRenderer.invoke('controller-memory:set-cached-pin', deviceId, pin),
+    clearCachedPin: (deviceId: string): Promise<void> =>
+      ipcRenderer.invoke('controller-memory:clear-cached-pin', deviceId),
+    getLastDevice: (): Promise<{ deviceId: string; pin: string } | null> =>
+      ipcRenderer.invoke('controller-memory:get-last-device'),
+    setLastDeviceId: (deviceId: string): Promise<void> =>
+      ipcRenderer.invoke('controller-memory:set-last-device-id', deviceId)
+  },
+  chooseMode: (mode: AppMode): void => {
+    ipcRenderer.send('choose-mode', mode)
   }
 }
 

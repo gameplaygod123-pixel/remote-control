@@ -30,18 +30,33 @@ import {
   revokeController
 } from './trustedControllers'
 import { getOrCreateControllerId } from './controllerIdentity'
+import { getSavedMode, saveMode, type AppMode } from './appModeConfig'
+import {
+  getCachedPin,
+  setCachedPin,
+  clearCachedPin,
+  getLastDevice,
+  setLastDeviceId
+} from './controllerMemory'
+
+export type { AppMode }
 
 // Agent mode runs on the Windows target (captures screen, injects input).
 // Controller mode runs on the Mac (views the stream, sends input).
-// Selected via APP_MODE env var; defaults to controller for local dev.
-export type AppMode = 'agent' | 'controller'
-const appMode: AppMode = process.env.APP_MODE === 'agent' ? 'agent' : 'controller'
+// Set via APP_MODE env var for dev/test runs; a packaged install has no
+// such env var, so its mode is instead chosen once on first launch (see
+// promptForMode below) and persisted via appModeConfig.
+const envMode: AppMode | null =
+  process.env.APP_MODE === 'agent' ? 'agent' : process.env.APP_MODE === 'controller' ? 'controller' : null
 
-// Separate userData dirs so running an agent and a controller process at the
-// same time on one machine (as in local Phase 3/4 testing) don't collide on
-// the same Chromium profile storage. Real deployments run on separate
-// machines anyway, so this only matters for same-machine dev/testing.
-app.setPath('userData', join(app.getPath('userData'), appMode))
+if (envMode) {
+  // Dev/test convenience: nest userData by mode so an agent and controller
+  // process can run side by side on the same dev machine without
+  // colliding on the same Chromium profile storage. A real single-purpose
+  // install never needs this -- only one mode ever runs from it, chosen
+  // once via the first-launch picker.
+  app.setPath('userData', join(app.getPath('userData'), envMode))
+}
 
 // Phase 1 dev harness: opens a "source" (screen-capturing) window and a
 // "viewer" window in the same process, and relays WebRTC signaling messages
@@ -102,11 +117,27 @@ function createBrowserWindow(searchParams?: string, hidden = false): BrowserWind
   return win
 }
 
-function createWindow(): void {
+function createWindow(appMode: AppMode): void {
   const win = createBrowserWindow(undefined, appMode === 'agent' && startHidden)
   win.setTitle(`Personal Remote - ${appMode}`)
 
   if (appMode === 'agent') setupAgentTray(win)
+}
+
+// Shown once on a fresh install/first launch when no mode is known yet
+// (no APP_MODE env var, nothing saved from a previous run) -- lets a
+// packaged app be genuinely "install and go" without needing the person
+// to set an environment variable themselves. The choice is persisted via
+// saveMode() so this never shows again on the same install.
+function promptForMode(): Promise<AppMode> {
+  return new Promise((resolve) => {
+    const win = createBrowserWindow('role=choose-mode')
+    win.setTitle('Personal Remote - Setup')
+    ipcMain.once('choose-mode', (_event, mode: AppMode) => {
+      win.close()
+      resolve(mode)
+    })
+  })
 }
 
 // Parsec-style background operation: the agent needs to keep running (and
@@ -171,7 +202,7 @@ function createInputTestWindows(): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.personalremote.app')
 
@@ -179,6 +210,12 @@ app.whenReady().then(() => {
   // icon needs to be set separately. Only matters for dev (`pnpm dev`);
   // a packaged .app already gets its Dock icon from build/icon.icns.
   app.dock?.setIcon(icon)
+
+  // Resolve which mode this install actually runs as: an explicit env var
+  // (dev/test runs) wins, then a previously-saved choice, and only on a
+  // genuinely fresh install does this actually show the picker UI.
+  const appMode: AppMode = envMode ?? getSavedMode() ?? (await promptForMode())
+  if (!envMode) saveMode(appMode)
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -245,6 +282,17 @@ app.whenReady().then(() => {
   ipcMain.handle('trusted:revoke', (_event, id: string) => revokeController(id))
   ipcMain.handle('controller:get-id', () => getOrCreateControllerId())
 
+  // Same file-based persistence rationale as trusted/controllerId above --
+  // lets the controller jump straight back into its last session on next
+  // launch instead of always landing on the device picker.
+  ipcMain.handle('controller-memory:get-cached-pin', (_event, deviceId: string) => getCachedPin(deviceId))
+  ipcMain.handle('controller-memory:set-cached-pin', (_event, deviceId: string, pin: string) =>
+    setCachedPin(deviceId, pin)
+  )
+  ipcMain.handle('controller-memory:clear-cached-pin', (_event, deviceId: string) => clearCachedPin(deviceId))
+  ipcMain.handle('controller-memory:get-last-device', () => getLastDevice())
+  ipcMain.handle('controller-memory:set-last-device-id', (_event, deviceId: string) => setLastDeviceId(deviceId))
+
   // Grant getUserMedia/getDisplayMedia requests from the renderer (needed for screen capture).
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media')
@@ -264,7 +312,7 @@ app.whenReady().then(() => {
   function launchWindows(): void {
     if (loopbackTest) createLoopbackWindows()
     else if (inputTest) createInputTestWindows()
-    else createWindow()
+    else createWindow(appMode)
   }
 
   launchWindows()

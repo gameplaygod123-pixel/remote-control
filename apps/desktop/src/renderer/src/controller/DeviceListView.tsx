@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { connectSignaling, SignalingClient } from '../shared/signaling/signalingClient'
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
-import { getCachedPin, setCachedPin } from '../shared/devicePins'
 import { classify } from '../shared/components/StatusPill'
 import '../assets/deviceList.css'
 
@@ -101,8 +100,8 @@ export default function DeviceListView({
     }
   }, [])
 
-  function handleConnectClick(deviceId: string): void {
-    const cached = getCachedPin(deviceId)
+  async function handleConnectClick(deviceId: string): Promise<void> {
+    const cached = await window.api.controllerMemory.getCachedPin(deviceId)
     if (cached) {
       onConnect(deviceId, cached)
     } else {
@@ -111,9 +110,9 @@ export default function DeviceListView({
     }
   }
 
-  function submitPin(): void {
+  async function submitPin(): Promise<void> {
     if (!pinPromptFor || !pinInput) return
-    setCachedPin(pinPromptFor, pinInput)
+    await window.api.controllerMemory.setCachedPin(pinPromptFor, pinInput)
     onConnect(pinPromptFor, pinInput)
   }
 

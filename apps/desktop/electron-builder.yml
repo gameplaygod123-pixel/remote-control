@@ -13,6 +13,15 @@ asarUnpack:
   - resources/**
 win:
   executableName: PersonalRemote
+  # Most real Windows PCs are x64 -- default to that explicitly rather than
+  # whatever architecture happens to match the machine doing the building
+  # (electron-builder defaults to the host arch, which is arm64 when built
+  # from an Apple Silicon Mac -- wrong for the vast majority of Windows
+  # machines this would actually be installed on).
+  target:
+    - target: nsis
+      arch:
+        - x64
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

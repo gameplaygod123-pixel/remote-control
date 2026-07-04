@@ -3,7 +3,6 @@ import { connectSignaling, SignalingClient } from '../shared/signaling/signaling
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
-import { clearCachedPin } from '../shared/devicePins'
 import StatusPill from '../shared/components/StatusPill'
 import { RemoteInputMessage, isPrintableKey, videoRelativePosition } from '../shared/input/inputProtocol'
 
@@ -183,7 +182,7 @@ export default function ControllerSession({
               }, PAIR_RETRY_DELAY_MS)
               return
             }
-            if (message.reason === 'incorrect pin') clearCachedPin(deviceId)
+            if (message.reason === 'incorrect pin') window.api.controllerMemory.clearCachedPin(deviceId)
             setStatus(`pairing failed: ${message.reason}`)
             return
           }

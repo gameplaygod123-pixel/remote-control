@@ -642,6 +642,104 @@ typecheck + code review is reasonable confidence here. The real test is
 exactly the one that surfaced the bug: accept once, Quit from the tray,
 relaunch, reconnect, and confirm it does *not* ask again.
 
+## Mac auto-connect to last device
+
+Confirmed working after the trust-persistence fix, the user asked for the
+Mac controller to also jump straight back into its last session on
+launch (previously explicitly changed *away* from a hardcoded
+single-device auto-connect to default to the picker -- this is the
+proper successor: dynamic, based on whatever was last actually used, not
+one fixed device baked into a launcher script).
+
+- `main/controllerMemory.ts` -- same file-in-`userData` pattern as
+  `trustedControllers.ts`/`controllerIdentity.ts` (not renderer
+  localStorage, for the same port-drift reason). Tracks cached PINs per
+  device (migrated from the old renderer-local `shared/devicePins.ts`,
+  now deleted) plus a `lastDeviceId`. `getLastDevice()` only returns a
+  device if its PIN is *also* still cached -- no point auto-connecting
+  into something that would just prompt for a PIN anyway.
+- `ControllerView.tsx` checks `window.api.controllerMemory.getLastDevice()`
+  once on mount (behind a `checkedLastDevice` loading flag, to avoid a
+  flash of the device list before the IPC round-trip resolves) and, if
+  present, skips straight to `ControllerSession`. The env-var
+  (`VITE_DEVICE_ID`/`VITE_PIN`) auto-connect path from the old
+  single-device launcher scripts still takes priority if set, unchanged.
+  Pressing Back returns to the picker for that session only -- it doesn't
+  clear the remembered last-device, so relaunching still jumps back in.
+
+## Phase 6: packaging -- first-run mode picker + a real Windows installer
+
+The user asked for the app to be "install and go" on a new Windows
+machine: no environment variables, no editing a `.bat` file, no `pnpm`
+knowledge required -- just run an installer and pick "controller" or
+"agent" once.
+
+### First-run mode picker
+
+`APP_MODE` (the env var dev/test runs use) has no equivalent for a
+double-clicked installed `.exe` -- there's no convenient way to set an
+environment variable for it. Fixed by resolving the mode at startup from,
+in order: `APP_MODE` env var (dev) -> a previously saved choice
+(`main/appModeConfig.ts`, a file under `userData`) -> asking the person,
+shown once via a small `ChooseModeView.tsx` screen
+(`role=choose-mode`, created by a new `promptForMode()` in
+`main/index.ts` that resolves a Promise when the renderer calls
+`window.api.chooseMode(mode)`). The pick is saved immediately and never
+asked again on that install.
+
+This required restructuring `main/index.ts`'s bootstrap: `appMode` used
+to be a plain top-level `const` computed synchronously from the env var
+alone. It's now resolved *inside* `app.whenReady()` (which can `await`
+the picker), and `app.setPath('userData', ...)`'s mode-subfolder nesting
+-- previously always applied -- is now conditional on `envMode` actually
+being set. That nesting was originally a dev-only convenience (running an
+agent and a controller side by side on one dev machine without them
+sharing a Chromium profile); a real single-purpose install never needs
+it, since only one mode ever runs from a given install, and nesting would
+have created a chicken-and-egg problem (needing to know the mode, chosen
+via a file *inside* userData, before userData's own path could be set).
+
+### Building the actual installer
+
+Genuinely uncertain going in whether this would work at all: nut.js's
+native addon is platform-specific, and building a Windows target *from
+macOS* ("cross-compiling" in electron-builder's terms) could plausibly
+have failed outright if it required actually compiling native code for
+the target platform.
+
+**It works.** `@nut-tree-fork/libnut-win32` ships a **prebuilt** native
+binary (`libnut.node`, a real PE32+ x86-64 Windows DLL, confirmed via
+`file`) rather than requiring local compilation -- so electron-builder's
+Windows/NSIS target build is just packaging already-built files, which
+works fine from macOS with no Wine or Windows machine needed. Built and
+verified via `pnpm build:win` (from `apps/desktop`):
+`dist/desktop-1.0.0-setup.exe`, a genuine `PE32 executable ... Nullsoft
+Installer self-extracting archive` per `file`, ~98MB, containing a real
+x64 `libnut.node`.
+
+- `electron-builder.yml`'s `win.target` now explicitly pins `arch: [x64]`
+  -- electron-builder defaults to the *host* machine's architecture when
+  unspecified, which meant the very first build attempt produced an
+  **arm64** Windows installer (matching this Apple Silicon Mac, useless
+  for a typical x64 Windows PC) before this was caught and fixed.
+- The packaged app bundles all three platforms' `libnut.node` variants
+  (win32/linux/darwin, ~500KB each) rather than just the target one --
+  nut.js's own runtime `require()` picks the right one by `process.platform`
+  so this isn't a correctness problem, just a little unnecessary size.
+  Left as-is (not worth the added `files`/`asarUnpack` config complexity
+  for ~1MB on a 98MB installer).
+- `dist/` is already gitignored -- the installer itself isn't (and
+  shouldn't be) committed. Rebuild with `pnpm build:win` from
+  `apps/desktop` any time; the resulting `.exe` needs to be copied to the
+  Windows machine some other way (shared drive, cloud storage, USB) since
+  it's built here on the Mac.
+- Not yet verified: actually running the installer and the first-run mode
+  picker on a real Windows machine (only typechecked + built successfully
+  from the Mac side; the mode-picker screen itself was visually confirmed
+  in dev mode with a fresh isolated `--user-data-dir`, but the full
+  install -> first-launch -> pick-a-mode -> works flow hasn't been run
+  end-to-end on Windows).
+
 ## Running locally
 
 Root of the repo:

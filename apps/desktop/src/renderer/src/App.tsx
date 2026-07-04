@@ -5,6 +5,7 @@ import SourceView from './loopback/SourceView'
 import ViewerView from './loopback/ViewerView'
 import InjectorTestView from './dev-test/InjectorTestView'
 import CaptureTestView from './dev-test/CaptureTestView'
+import ChooseModeView from './setup/ChooseModeView'
 
 function App(): React.JSX.Element {
   const [mode, setMode] = useState<'agent' | 'controller' | null>(null)
@@ -18,6 +19,7 @@ function App(): React.JSX.Element {
   if (role === 'viewer') return <ViewerView />
   if (role === 'injector-test') return <InjectorTestView />
   if (role === 'capture-test') return <CaptureTestView />
+  if (role === 'choose-mode') return <ChooseModeView />
   if (mode === null) return <p>Loading...</p>
   return mode === 'agent' ? <AgentView /> : <ControllerView />
 }
