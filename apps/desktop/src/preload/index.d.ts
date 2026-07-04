@@ -29,6 +29,15 @@ declare global {
         setFullScreen: (value: boolean) => Promise<void>
         show: () => Promise<void>
       }
+      trusted: {
+        list: () => Promise<{ id: string; trustedAt: number }[]>
+        isTrusted: (id: string) => Promise<boolean>
+        trust: (id: string) => Promise<void>
+        revoke: (id: string) => Promise<void>
+      }
+      controllerId: {
+        get: () => Promise<string>
+      }
     }
   }
 }

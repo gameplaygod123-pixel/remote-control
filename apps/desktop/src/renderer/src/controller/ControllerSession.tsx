@@ -4,7 +4,6 @@ import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConn
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
 import { clearCachedPin } from '../shared/devicePins'
-import { getOrCreateControllerId } from '../shared/controllerId'
 import StatusPill from '../shared/components/StatusPill'
 import { RemoteInputMessage, isPrintableKey, videoRelativePosition } from '../shared/input/inputProtocol'
 
@@ -31,7 +30,10 @@ export default function ControllerSession({
   onBack: () => void
 }): React.JSX.Element {
   const [status, setStatus] = useState('connecting to signaling server')
-  const [controllerId] = useState(getOrCreateControllerId)
+  // Fetched from a main-process file rather than localStorage, which is
+  // scoped to the Vite dev server's origin and would reset this identity
+  // if the dev-server port ever shifted between runs.
+  const [controllerId, setControllerId] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -132,6 +134,11 @@ export default function ControllerSession({
   }, [])
 
   useEffect(() => {
+    window.api.controllerId.get().then(setControllerId)
+  }, [])
+
+  useEffect(() => {
+    if (!controllerId) return // wait for the id to load before pairing
     let cancelled = false
 
     async function connect(): Promise<void> {
@@ -243,7 +250,7 @@ export default function ControllerSession({
       window.api.window.setFullScreen(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceId, pin])
+  }, [deviceId, pin, controllerId])
 
   return (
     <div className="session-shell">

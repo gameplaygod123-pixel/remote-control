@@ -39,6 +39,15 @@ const api = {
     setFullScreen: (value: boolean): Promise<void> =>
       ipcRenderer.invoke('window:set-fullscreen', value),
     show: (): Promise<void> => ipcRenderer.invoke('window:show')
+  },
+  trusted: {
+    list: (): Promise<{ id: string; trustedAt: number }[]> => ipcRenderer.invoke('trusted:list'),
+    isTrusted: (id: string): Promise<boolean> => ipcRenderer.invoke('trusted:is-trusted', id),
+    trust: (id: string): Promise<void> => ipcRenderer.invoke('trusted:trust', id),
+    revoke: (id: string): Promise<void> => ipcRenderer.invoke('trusted:revoke', id)
+  },
+  controllerId: {
+    get: (): Promise<string> => ipcRenderer.invoke('controller:get-id')
   }
 }
 

@@ -23,6 +23,13 @@ import {
   keyToggle,
   getScreenSize
 } from './input/injector'
+import {
+  getTrustedControllers,
+  isTrustedController,
+  trustController,
+  revokeController
+} from './trustedControllers'
+import { getOrCreateControllerId } from './controllerIdentity'
 
 // Agent mode runs on the Windows target (captures screen, injects input).
 // Controller mode runs on the Mac (views the stream, sends input).
@@ -228,6 +235,15 @@ app.whenReady().then(() => {
     win?.show()
     win?.focus()
   })
+
+  // Persisted as a plain file (not renderer localStorage) so a Vite
+  // dev-server port change between runs can never make an agent forget
+  // who it already trusted, or a controller forget its own identity.
+  ipcMain.handle('trusted:list', () => getTrustedControllers())
+  ipcMain.handle('trusted:is-trusted', (_event, id: string) => isTrustedController(id))
+  ipcMain.handle('trusted:trust', (_event, id: string) => trustController(id))
+  ipcMain.handle('trusted:revoke', (_event, id: string) => revokeController(id))
+  ipcMain.handle('controller:get-id', () => getOrCreateControllerId())
 
   // Grant getUserMedia/getDisplayMedia requests from the renderer (needed for screen capture).
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {

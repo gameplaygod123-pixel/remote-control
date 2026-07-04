@@ -6,12 +6,6 @@ import { SIGNALING_URL, AGENT_TOKEN, FIXED_PIN } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
 import CopyButton from '../shared/components/CopyButton'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
-import {
-  getTrustedControllers,
-  isTrustedController,
-  trustController,
-  revokeController
-} from '../shared/trustedControllers'
 
 // Cached after the first remote input message -- the agent's screen doesn't
 // resize mid-session, and re-querying nut.js on every mousemove would add
@@ -72,7 +66,7 @@ function AgentView(): React.JSX.Element {
   const [status, setStatus] = useState('connecting to signaling server')
   const [incomingRequest, setIncomingRequest] = useState(false)
   const [pendingControllerId, setPendingControllerId] = useState<string | null>(null)
-  const [trustedList, setTrustedList] = useState(getTrustedControllers)
+  const [trustedList, setTrustedList] = useState<{ id: string; trustedAt: number }[]>([])
   const [name, setName] = useState(getStoredName)
   const [nameDraft, setNameDraft] = useState(name)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -98,11 +92,11 @@ function AgentView(): React.JSX.Element {
   // connection-request handler below) -- otherwise every reconnect from
   // the same, already-trusted Mac would ask again, which given how often
   // this app already auto-reconnects would get old fast.
-  function handleAccept(): void {
+  async function handleAccept(): Promise<void> {
     setIncomingRequest(false)
     if (pendingControllerId) {
-      trustController(pendingControllerId)
-      setTrustedList(getTrustedControllers())
+      await window.api.trusted.trust(pendingControllerId)
+      setTrustedList(await window.api.trusted.list())
     }
     setPendingControllerId(null)
     clientRef.current?.send({ type: 'connection-response', deviceId, accept: true })
@@ -115,10 +109,14 @@ function AgentView(): React.JSX.Element {
     clientRef.current?.send({ type: 'connection-response', deviceId, accept: false })
   }
 
-  function handleRevoke(id: string): void {
-    revokeController(id)
-    setTrustedList(getTrustedControllers())
+  async function handleRevoke(id: string): Promise<void> {
+    await window.api.trusted.revoke(id)
+    setTrustedList(await window.api.trusted.list())
   }
+
+  useEffect(() => {
+    window.api.trusted.list().then(setTrustedList)
+  }, [])
 
   useEffect(() => {
     let pc: RTCPeerConnection | undefined
@@ -175,7 +173,7 @@ function AgentView(): React.JSX.Element {
         if (message.type === 'register-result') {
           setStatus(message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`)
         } else if (message.type === 'connection-request') {
-          if (isTrustedController(message.controllerId)) {
+          if (await window.api.trusted.isTrusted(message.controllerId)) {
             transport.send({ type: 'connection-response', deviceId, accept: true })
           } else {
             setPendingControllerId(message.controllerId)

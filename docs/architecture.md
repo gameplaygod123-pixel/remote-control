@@ -602,6 +602,46 @@ force a window in front of you just to sit there running.
   `enable-autostart.vbs` + a real reboot to confirm the hidden auto-start
   path.
 
+### Bug found live: trust didn't survive fully quitting the agent
+
+Confirmed working end-to-end by the user (accept once, reconnects skip
+the prompt) -- but clicking "Quit" in the tray menu and starting the
+agent again required accepting all over. Root cause: `trustController()`
+and `getOrCreateControllerId()` originally lived in the *renderer* and
+used `localStorage`, which is scoped per-origin -- and this app's
+renderer loads from a Vite dev server (`http://localhost:PORT`), where
+`PORT` isn't actually fixed. If 5173 is still occupied when a process
+restarts (this project has hit that exact "Port 5173 is in use, trying
+another one" fallback more than once during development, including
+earlier in this same session), the new instance gets a different origin
+and a completely empty `localStorage` -- silently forgetting every
+trusted controller (and, in principle, the device ID/name/PIN cache too,
+though those happened not to be hit by the user's test).
+
+Fixed by moving both to the **main process**, persisted as plain files
+under `app.getPath('userData')` (`main/trustedControllers.ts`,
+`main/controllerIdentity.ts`) instead of renderer `localStorage`:
+`userData` is keyed only by the OS user profile and `appMode`, with no
+dependency on which port Vite happened to bind to. Exposed to the
+renderer via new IPC (`trusted:list`/`is-trusted`/`trust`/`revoke`,
+`controller:get-id`), all necessarily async now (`window.api.trusted.*`,
+`window.api.controllerId.get()`) since IPC always is -- `AgentView.tsx`'s
+trusted-list state is now fetched in a `useEffect` on mount rather than a
+synchronous `useState` initializer, and `ControllerSession.tsx`'s pairing
+effect waits for `controllerId` to load (a single IPC round-trip) before
+sending its first `pair-request`. The old renderer-side
+`shared/trustedControllers.ts` and `shared/controllerId.ts` were deleted
+outright rather than left as dead code.
+
+Not independently re-verified live after this change (avoided further
+same-machine UI testing after an earlier test window unexpectedly
+appeared on the user's screen mid-session and needed explaining -- see
+the session transcript). The fix itself is straightforward, well-trodden
+Electron main-process `fs` file I/O, structurally simple enough that
+typecheck + code review is reasonable confidence here. The real test is
+exactly the one that surfaced the bug: accept once, Quit from the tray,
+relaunch, reconnect, and confirm it does *not* ask again.
+
 ## Running locally
 
 Root of the repo:

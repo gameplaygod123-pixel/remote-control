@@ -1,18 +1,28 @@
-// Controllers the operator of this agent has already accepted at least
-// once. Trust lives here (the agent's own localStorage) rather than on the
-// signaling server, since the server's in-memory state resets on restart
-// and the whole point is for this to survive that -- the agent machine is
-// the one whose security decision this actually is.
-const STORAGE_KEY = 'remote-control-trusted-controllers'
+import { app } from 'electron'
+import { join } from 'path'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
 
+// Deliberately a plain file in the main process rather than the renderer's
+// localStorage: this app runs its renderer off a Vite dev server
+// (http://localhost:PORT), and localStorage is scoped per-origin -- if the
+// port ever shifts between runs (Vite falls back to another port whenever
+// the usual one is still occupied, which has happened more than once
+// during this project's development), the "same" agent would silently
+// see a completely empty trust list. A file keyed only by the OS user
+// profile has no such dependency.
 export interface TrustedController {
   id: string
   trustedAt: number
 }
 
+function filePath(): string {
+  return join(app.getPath('userData'), 'trusted-controllers.json')
+}
+
 function readAll(): TrustedController[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
+    if (!existsSync(filePath())) return []
+    const parsed = JSON.parse(readFileSync(filePath(), 'utf-8'))
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
@@ -20,7 +30,7 @@ function readAll(): TrustedController[] {
 }
 
 function writeAll(list: TrustedController[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
+  writeFileSync(filePath(), JSON.stringify(list))
 }
 
 export function getTrustedControllers(): TrustedController[] {
