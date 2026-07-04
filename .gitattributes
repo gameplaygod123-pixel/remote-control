@@ -1,2 +1,11 @@
 *.bat text eol=crlf
 *.vbs text eol=crlf
+
+# These two contain Thai text and have to be saved as UTF-16LE with a BOM
+# for Windows Script Host to render it correctly (plain UTF-8 -- what
+# every other file in this repo uses -- shows as mojibake in a VBScript
+# MsgBox). Git's text/eol handling operates on single-byte LF/CRLF and
+# would corrupt a UTF-16 file, so these need to be treated as opaque
+# binary instead of text.
+enable-autostart.vbs -text
+create-desktop-shortcuts.vbs -text
