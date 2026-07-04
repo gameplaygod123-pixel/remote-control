@@ -7,6 +7,8 @@ import StatusPill from '../shared/components/StatusPill'
 import CopyButton from '../shared/components/CopyButton'
 import UpdateBadge from '../shared/components/UpdateBadge'
 import SwitchModeLink from '../shared/components/SwitchModeLink'
+import TransferStatus from '../shared/components/TransferStatus'
+import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
 
 // Cached after the first remote input message -- the agent's screen doesn't
@@ -62,6 +64,16 @@ function AgentView(): React.JSX.Element {
   const clientRef = useRef<Awaited<ReturnType<typeof connectSignaling>> | null>(null)
   const nameRef = useRef(name)
   nameRef.current = name
+  const { transfer, attachChannel, sendFiles } = useFileTransferChannel()
+
+  function handleDragOver(e: React.DragEvent): void {
+    e.preventDefault()
+  }
+
+  function handleDrop(e: React.DragEvent): void {
+    e.preventDefault()
+    if (e.dataTransfer.files.length > 0) sendFiles(e.dataTransfer.files)
+  }
 
   useEffect(() => {
     Promise.all([
@@ -236,7 +248,9 @@ function AgentView(): React.JSX.Element {
               channel.onmessage = (event) => {
                 handleRemoteInput(JSON.parse(event.data) as RemoteInputMessage)
               }
-            }
+            },
+            createFileChannel: true,
+            onFileChannel: attachChannel
           })
           pc.onconnectionstatechange = () => setStatus(`connection: ${pc!.connectionState}`)
 
@@ -299,7 +313,7 @@ function AgentView(): React.JSX.Element {
       pc?.close()
       client?.close()
     }
-  }, [deviceId, pin])
+  }, [deviceId, pin, attachChannel])
 
   if (deviceId === null || pin === null) {
     return (
@@ -310,7 +324,7 @@ function AgentView(): React.JSX.Element {
   }
 
   return (
-    <div className="agent-shell">
+    <div className="agent-shell" onDragOver={handleDragOver} onDrop={handleDrop}>
       <div className="agent-titlebar">
         <div className="agent-dots">
           <span />
@@ -397,6 +411,8 @@ function AgentView(): React.JSX.Element {
             <span className="video-frame__empty">Not sharing yet</span>
           )}
         </div>
+
+        <TransferStatus transfer={transfer} />
 
         {trustedList.length > 0 && (
           <div className="field-group">

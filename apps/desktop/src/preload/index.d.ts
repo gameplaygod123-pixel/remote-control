@@ -61,6 +61,9 @@ declare global {
         restartNow: () => Promise<void>
         onStatus: (handler: (status: UpdaterStatus) => void) => void
       }
+      fileTransfer: {
+        save: (name: string, data: Uint8Array) => Promise<string>
+      }
     }
   }
 }

@@ -80,6 +80,10 @@ const api = {
     onStatus: (handler: (status: UpdaterStatus) => void): void => {
       ipcRenderer.on('updater:status', (_event, status) => handler(status))
     }
+  },
+  fileTransfer: {
+    save: (name: string, data: Uint8Array): Promise<string> =>
+      ipcRenderer.invoke('file-transfer:save', name, data)
   }
 }
 

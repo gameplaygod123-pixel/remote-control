@@ -41,6 +41,7 @@ import {
 } from './agentIdentity'
 import { getSavedMode, saveMode, resetMode, type AppMode } from './appModeConfig'
 import { initAutoUpdater } from './updater'
+import { saveToDownloads } from './fileTransfer'
 import {
   getCachedPin,
   setCachedPin,
@@ -305,6 +306,14 @@ app.whenReady().then(async () => {
   // navigator.clipboard.writeText() can be flaky in Electron depending on
   // document focus; the native clipboard module always works.
   ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(text))
+
+  // Writes a file received over the WebRTC file-transfer data channel to
+  // this machine's Downloads folder -- the renderer can't write to disk
+  // directly (no Node integration there), so the assembled bytes cross
+  // into the main process just for this one call.
+  ipcMain.handle('file-transfer:save', (_event, name: string, data: Uint8Array) =>
+    saveToDownloads(name, data)
+  )
 
   // Used by the controller to go fullscreen once a remote session connects,
   // and back to windowed when returning to the device list.

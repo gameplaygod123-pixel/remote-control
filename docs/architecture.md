@@ -993,6 +993,56 @@ naturally get cleaned up. Added an explicit remove action:
   restart -- confirmed via `lsof -i :8080` showing a freshly-spawned
   process right after editing.
 
+## Bidirectional file transfer (AnyDesk-style drag & drop)
+
+User asked after seeing AnyDesk's drag-a-file-onto-the-remote-screen
+feature. Built as peer-to-peer, not through the signaling server -- files
+never touch the relay, same trust model as video/input.
+
+- **New data channel, not the existing "input" one**: `peerConnection.ts`
+  gained `createFileChannel`/`onFileChannel` options, mirroring
+  `createInputChannel`/`onInputChannel` exactly (same offerer-creates-it,
+  bidirectional-once-open pattern). Deliberately a *separate* channel --
+  data channels preserve message order by default, so interleaving large
+  binary file chunks with real-time mouse/keyboard on the same channel
+  would head-of-line-block cursor movement for the duration of a transfer.
+  Both `AgentView` (`createFileChannel: true`) and `ControllerSession`
+  (receives via `onFileChannel`) wire it up, since either side can
+  initiate a send once the channel is open.
+- **Chunked transfer protocol** (`shared/fileTransfer/fileTransferChannel.ts`):
+  a JSON `file-start` (name + size) control message, then the file's bytes
+  as a sequence of 16KB binary `ArrayBuffer` messages, then a JSON
+  `file-end`. No per-chunk index/ID needed -- channel ordering guarantees
+  every binary message between one `file-start` and the next `file-end`
+  belongs to that transfer, which is enough for a personal tool that only
+  ever has one transfer in flight per direction at a time.
+  `bufferedAmountLowThreshold` + the `bufferedamountlow` event throttle
+  sending so a large file can't balloon `channel.bufferedAmount` far ahead
+  of what's actually been delivered.
+- **Receiving side never writes to disk directly** -- the renderer has no
+  Node/fs access, so the assembled `Uint8Array` crosses into the main
+  process via a new `file-transfer:save` IPC call
+  (`main/fileTransfer.ts`), which writes to `app.getPath('downloads')`,
+  de-duplicating an existing filename by appending `(1)`, `(2)`, etc.
+  (never overwrites), and fires a native `Notification` on completion --
+  important on the agent side especially, since nobody's typically
+  watching that window.
+- **Shared orchestration**: `useFileTransferChannel()` (a hook) and
+  `TransferStatus.tsx` (a small progress banner/bar) are used identically
+  by both `AgentView` and `ControllerSession` rather than duplicating
+  send/receive state machine logic per screen -- same channel, same
+  protocol, same UI, regardless of which side is sending.
+- **Drop targets**: the `<video>` element in `ControllerSession` (drop a
+  file onto the remote screen while it's fullscreen); the entire
+  `.agent-shell` in `AgentView` (no equivalent "video you're looking at"
+  there to scope it to). Progress renders as an overlay docked to the
+  bottom of the video in the controller session
+  (`.session-video-area .transfer-status`), and as a normal block under
+  the video-frame in the agent view.
+- Entirely peer-to-peer over the data channel -- deliberately does **not**
+  touch `packages/protocol/src/messages.ts` or the signaling server, which
+  only ever relay SDP/ICE/pairing and never see file contents.
+
 ## Running locally
 
 Root of the repo:

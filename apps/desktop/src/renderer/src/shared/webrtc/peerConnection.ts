@@ -15,8 +15,16 @@ export interface SignalTransport {
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:openrelay.metered.ca:80' },
-  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
   {
     urls: 'turn:openrelay.metered.ca:443?transport=tcp',
     username: 'openrelayproject',
@@ -32,6 +40,13 @@ export interface PeerConnectionOptions {
   // regardless of which side created them.
   createInputChannel?: boolean
   onInputChannel?: (channel: RTCDataChannel) => void
+  // Separate channel for file transfer -- kept off the "input" channel so a
+  // large file being sent doesn't head-of-line-block mouse/keyboard delivery
+  // (data channels preserve order by default). Bidirectional just like
+  // "input": either side can send() on it once open, regardless of which
+  // side's createDataChannel call actually created it.
+  createFileChannel?: boolean
+  onFileChannel?: (channel: RTCDataChannel) => void
 }
 
 export function createPeerConnection(
@@ -55,10 +70,14 @@ export function createPeerConnection(
 
   pc.ondatachannel = (event) => {
     if (event.channel.label === 'input') options.onInputChannel?.(event.channel)
+    else if (event.channel.label === 'file-transfer') options.onFileChannel?.(event.channel)
   }
 
   if (options.createInputChannel) {
     options.onInputChannel?.(pc.createDataChannel('input'))
+  }
+  if (options.createFileChannel) {
+    options.onFileChannel?.(pc.createDataChannel('file-transfer'))
   }
 
   return pc

@@ -4,6 +4,8 @@ import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConn
 import { SignalingMessage } from '../shared/protocol'
 import { SIGNALING_URL } from '../shared/config'
 import StatusPill from '../shared/components/StatusPill'
+import TransferStatus from '../shared/components/TransferStatus'
+import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
 import { RemoteInputMessage, isPrintableKey, videoRelativePosition } from '../shared/input/inputProtocol'
 
 // Mousemove fires far more often than the remote side needs to react to --
@@ -38,6 +40,16 @@ export default function ControllerSession({
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const inputChannelRef = useRef<RTCDataChannel | null>(null)
   const lastMoveSentRef = useRef(0)
+  const { transfer, attachChannel, sendFiles } = useFileTransferChannel()
+
+  function handleDragOver(e: React.DragEvent<HTMLVideoElement>): void {
+    e.preventDefault()
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLVideoElement>): void {
+    e.preventDefault()
+    if (e.dataTransfer.files.length > 0) sendFiles(e.dataTransfer.files)
+  }
 
   function goBack(): void {
     window.api.window.setFullScreen(false)
@@ -193,7 +205,8 @@ export default function ControllerSession({
           const pc = createPeerConnection(transport, deviceId, {
             onInputChannel: (channel) => {
               inputChannelRef.current = channel
-            }
+            },
+            onFileChannel: attachChannel
           })
           pcRef.current = pc
           pc.onconnectionstatechange = () => {
@@ -273,8 +286,11 @@ export default function ControllerSession({
           onMouseUp={handleMouseUp}
           onWheel={handleWheel}
           onContextMenu={(e) => e.preventDefault()}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
         />
         {!status.startsWith('connection') && <span className="video-frame__empty">No video yet</span>}
+        <TransferStatus transfer={transfer} />
       </div>
     </div>
   )
