@@ -316,15 +316,15 @@
 .dl-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 18px;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 22px;
   background: var(--dl-card-bg);
   border: 1px solid var(--dl-border);
 }
 
 .dl-thumb {
-  aspect-ratio: 16 / 11;
+  aspect-ratio: 16 / 10;
   border-radius: 10px;
   overflow: hidden;
   /* Transparent so a machine with no live preview shows just the monitor
@@ -352,7 +352,7 @@
 }
 
 .dl-name {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
 }
 
@@ -391,11 +391,12 @@
 
 .dl-btn {
   width: 100%;
-  padding: 12px 0;
-  border-radius: 12px;
+  padding: 14px 0;
+  /* Full-capsule pill to match the owner's mock (Connect button). */
+  border-radius: 999px;
   border: none;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
   background: var(--dl-accent);
