@@ -65,7 +65,7 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.0** — **light mode (Amber Light) + a sliding sun/moon
+Latest release: **v1.20.1** (device card: taller 16/11 thumbnail, Device ID line removed). v1.20.0 = **light mode (Amber Light) + a sliding sun/moon
 theme toggle** at the bottom of the controller sidebar. The whole controller
 shell themes through `--dl-*` tokens (deviceList.css); a
 `:root[data-theme='light'] .ctl-shell` block redefines them. Persisted per
