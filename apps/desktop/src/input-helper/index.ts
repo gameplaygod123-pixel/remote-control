@@ -252,7 +252,12 @@ function startSession(): void {
       return
     }
     if (currentSession?.session === mySession) currentSession.inputMessages += 1
-    if ((currentSession?.inputMessages ?? 0) % 25 === 1) {
+    // Kept as a permanent diagnostic (this log solved the session-flapping
+    // bug; packaged builds have no console) but sampled sparsely -- at
+    // 60 moves/sec, every-25th wrote ~2.4 lines/sec of active use, growing
+    // the file by MBs per hour. One line per 500 messages (~8s of movement)
+    // still proves input is flowing without turning the log into a firehose.
+    if ((currentSession?.inputMessages ?? 0) % 500 === 1) {
       log(mySession, `input message #${currentSession?.inputMessages}`)
     }
     enqueueRemoteInput(JSON.parse(event.data as string) as RemoteInputMessage)
