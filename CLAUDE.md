@@ -65,9 +65,8 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest full release: **v1.15.1**. Latest PRERELEASE: **v1.16.0**
-(clipboard-in-helper) — awaiting the owner's real-machine paired-session test
-before `gh release edit v1.16.0 --prerelease=false`.
+Latest release: **v1.16.0** (clipboard-in-helper; promoted 2026-07-06 after
+the owner's real-machine paired-session test passed).
 
 Working and verified on real hardware:
 - Latency ≈ Parsec (direct connection, ~11 ms network).
@@ -78,29 +77,25 @@ Working and verified on real hardware:
 - File transfer controller→agent (tested with a 580 MB file).
 - Auto-update via GitHub Releases; signaling self-heals via supervisor.
 
-In test (v1.16.0 prerelease):
-- **Clipboard sync in helper mode** — fixed and merged (branch
-  `fix/clipboard-in-helper`). Root cause of the v1.15.0 segfault: koffi's
-  `str16` is a POINTER type, so encode/decode stored a transient koffi buffer
-  pointer in clipboard memory instead of the text (→ dangling-pointer crash
-  AND cross-app paste never actually worked). Fix: inline UTF-16 code units
-  via `koffi.array('uint16', n)`, reads bounded by `GlobalSize`, chunked
-  string building, `OpenClipboard(null)`. Windows-side verified: 500
-  roundtrips + PowerShell cross-app both directions (Thai/Chinese) + 251-read
-  contention, zero crashes. Remaining gate: owner's real paired-session test
-  (Mac controller ↔ Windows agent, window hidden), then promote. NOTE: owner
-  also runs Parsec sometimes — its clipboard sync can mask ours in tests;
-  make sure Parsec is CLOSED when testing. Cosmetic nit for later: helper's
-  `clipboard.onopen` log is overwritten by runClipboardSync, never prints.
+Also working since v1.16.0:
+- **Clipboard sync survives the agent window hiding** — runs in the input
+  helper on the helper's pc (`clipboardNative.ts` + shared
+  `clipboardSyncCore.ts`). The v1.15.0 segfault's root cause: koffi's `str16`
+  is a POINTER type, so encode/decode stored a transient koffi buffer pointer
+  in clipboard memory instead of the text (→ dangling-pointer crash AND
+  cross-app paste never actually worked). Fix: inline UTF-16 code units via
+  `koffi.array('uint16', n)`, reads bounded by `GlobalSize`, chunked string
+  building, `OpenClipboard(null)`. NOTE for future clipboard tests: the owner
+  sometimes runs Parsec, whose clipboard sync masks ours — close it first.
+  Cosmetic nit for later: helper's `clipboard.onopen` log is overwritten by
+  runClipboardSync, never prints.
 
 ## Backlog (rough priority)
 
-1. Promote v1.16.0 after the owner's test passes
-   (`gh release edit v1.16.0 --prerelease=false`).
-2. Verify file transfer with the agent window actually hidden (works via the
+1. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
-3. Real AGENT_TOKEN (currently `dev-token-change-me`) — before family use.
-4. Computers-page search/sort; per-controller device visibility (family use).
-5. Known limitation: helper crash mid-session recovers input only at re-pair.
-6. No TURN relay (only matters for CGNAT↔CGNAT pairs).
-7. Mac installer (.dmg) — deferred by owner decision.
+2. Real AGENT_TOKEN (currently `dev-token-change-me`) — before family use.
+3. Computers-page search/sort; per-controller device visibility (family use).
+4. Known limitation: helper crash mid-session recovers input only at re-pair.
+5. No TURN relay (only matters for CGNAT↔CGNAT pairs).
+6. Mac installer (.dmg) — deferred by owner decision.
