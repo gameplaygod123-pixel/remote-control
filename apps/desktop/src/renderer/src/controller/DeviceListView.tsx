@@ -232,10 +232,7 @@ export default function DeviceListView({
                 <div className={`dl-thumb ${device.online ? '' : 'is-offline'}`}>
                   {device.thumbnail ? <img src={device.thumbnail} alt="" /> : <MonitorIcon />}
                 </div>
-                <div>
-                  <div className="dl-name">{device.name || device.deviceId}</div>
-                  {device.name && <div className="dl-id">{device.deviceId}</div>}
-                </div>
+                <div className="dl-name">{device.name || device.deviceId}</div>
                 <div className={`dl-status-row ${device.online ? 'is-ok' : ''}`}>
                   <span className={`dl-status-dot ${device.online ? 'is-ok' : 'is-idle'}`} />
                   {device.online ? 'online' : 'offline'}
