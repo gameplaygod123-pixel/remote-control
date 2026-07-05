@@ -65,9 +65,11 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.17.1** (CSP hotfix — see below; confirmed on the real
-Windows agent, which registered through the rotated tunnel minutes after
-updating). v1.17.0 = house token; v1.16.0 = clipboard-in-helper.
+Latest release: **v1.18.0** (UI: OS titlebar hidden, single app-drawn bar
+with centered title — start of the owner's UI-redesign push; shared
+`TitleBar` component; Windows uses titleBarOverlay whose 38px height must
+match `.app-titlebar`). v1.17.1 = CSP hotfix (confirmed on the real Windows
+agent); v1.17.0 = house token; v1.16.0 = clipboard-in-helper.
 
 Working and verified on real hardware:
 - Latency ≈ Parsec (direct connection, ~11 ms network).
