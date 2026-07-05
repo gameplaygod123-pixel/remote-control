@@ -65,7 +65,7 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.18.1** (UI pass 2: agent preview box removed, agent window fixed 680×700; controller stays resizable). v1.18.0 = titlebar (OS bar hidden, single app-drawn bar
+Latest release: **v1.18.2** (single-instance lock: relaunch surfaces the running window — the tray "bring it back" gesture). v1.18.1 = UI pass 2: agent preview box removed, agent window fixed 680×700; controller stays resizable). v1.18.0 = titlebar (OS bar hidden, single app-drawn bar
 with centered title — start of the owner's UI-redesign push; shared
 `TitleBar` component; Windows uses titleBarOverlay whose 38px height must
 match `.app-titlebar`). v1.17.1 = CSP hotfix (confirmed on the real Windows
