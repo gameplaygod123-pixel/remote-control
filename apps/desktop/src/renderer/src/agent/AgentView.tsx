@@ -417,10 +417,15 @@ function AgentView(): React.JSX.Element {
             // previous pairing before starting the fresh one.
             void window.api.inputHelper.stopSession()
             window.api.inputHelper.startSession()
+            // No clipboard channel on this (renderer-owned) video pc in helper
+            // mode -- clipboard sync runs inside the helper process alongside
+            // input, on the helper's own pc, so it survives this window being
+            // hidden to the tray (the renderer would be throttled). File
+            // transfer stays here: it's driven by drag-and-drop, which needs a
+            // visible window anyway.
             pc = createPeerConnection(transport, agentDeviceId, {
               createFileChannel: true,
-              onFileChannel: attachChannel,
-              onClipboardChannel: attachClipboardChannel
+              onFileChannel: attachChannel
             })
           } else {
             const onInputMessage = (event: MessageEvent): void => {
