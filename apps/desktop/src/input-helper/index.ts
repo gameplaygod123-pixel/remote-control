@@ -54,34 +54,18 @@ initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Debug', (leve
 // browser's global RTCPeerConnection; this process supplies its own via the
 // node-datachannel polyfill instead. Keep these two lists in sync by hand.
 //
-// TEMP diagnostic (helper-session-flapping investigation): NDC_ICE_SERVERS=
-// stun-only drops everything but the plain Google STUN server, to test
-// whether the openrelay STUN/TURN entries (particularly the
-// `?transport=tcp` one, whose credential-embedding + query-suffix combo
-// hasn't been confirmed to round-trip correctly through the polyfill's URL
-// rewriting) have anything to do with the observed failures.
-const FULL_ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:openrelay.metered.ca:80' },
-  {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
-  }
-]
-const STUN_ONLY_ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
-const ICE_SERVERS: RTCIceServer[] =
-  process.env.NDC_ICE_SERVERS === 'stun-only' ? STUN_ONLY_ICE_SERVERS : FULL_ICE_SERVERS
+// openrelay.metered.ca's STUN and TURN were both removed here (and in
+// peerConnection.ts) after a real 8-round packaged test's log proved them
+// non-functional: libjuice's own debug log showed which STUN server each
+// negotiation attempt picked (it isn't deterministic across attempts, even
+// with the same iceServers array) -- every attempt that picked
+// stun.l.google.com connected, every attempt that picked
+// openrelay.metered.ca sat in `connecting` until it timed out, 14/14 times,
+// no exceptions. TURN allocation against openrelay also failed every time it
+// was logged, and no `typ relay` candidate appears anywhere across the whole
+// (9500+ line) log -- the TURN relay fallback was never actually working
+// either. See docs/native-input-plan.md's stun-server-flapping addendum.
+const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
 
 // TEMP diagnostic: pulls the `typ host|srflx|relay` suffix out of a raw ICE
 // candidate string so the log says outright whether a server-reflexive/relay
@@ -191,7 +175,21 @@ function enqueueRemoteInput(message: RemoteInputMessage): void {
   void (async () => {
     while (inputQueue.length > 0) {
       const next = inputQueue.shift()!
-      await handleRemoteInput(next).catch(() => {})
+      await handleRemoteInput(next).catch((err) => {
+        // Was a bare .catch(() => {}) that silently swallowed every
+        // injection error -- see docs/native-input-plan.md's keyboard-
+        // injection-silent-failure addendum. Logging here is what would
+        // reveal whether keydown/keyup/text ever actually throws in real
+        // usage (isolated testing found no exception for any nut.js
+        // keyboard call under ELECTRON_RUN_AS_NODE -- ASCII, Thai text, and
+        // modifier combos all resolved cleanly -- so this may still log
+        // nothing even while real keyboard input silently fails to reach
+        // the OS, which would point at a delivery-level issue instead).
+        log(
+          currentSession?.session ?? sessionCounter,
+          `handleRemoteInput REJECTED for ${next.t}: ${err?.stack ?? err}`
+        )
+      })
     }
     inputDraining = false
   })()

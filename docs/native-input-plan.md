@@ -397,3 +397,146 @@ a real-hardware run with this build):**
   build + a real test round, same environment limitation as every prior
   round in this investigation -- this sandboxed dev environment cannot
   reliably run a packaged Electron build at all (see §10's addendum).
+
+## 12. Addendum: root cause found -- openrelay.metered.ca's STUN/TURN is dead
+
+Branch `fix/input-pc-retry` (same branch as §11). A real 8-round v1.14.2
+log (16 negotiation attempts across those rounds, retries included) with the
+Track-1 diagnostics from §11 active gave a 100%, zero-exception correlation:
+`IceTransport::IceTransport@109`'s own "Using STUN server X" line showed
+which of the two configured STUN entries libjuice picked for that specific
+attempt -- non-deterministically, even across retries within the same
+top-level session, with no correlation to session/attempt number or process
+age -- and:
+
+- Every attempt that picked `stun.l.google.com:19302`: connected. 6/6.
+- Every attempt that picked `openrelay.metered.ca:80`: sat in `connecting`
+  with `iceGatheringState=in-progress` until it timed out. 8/8, no exceptions.
+- `"TURN allocation failed"` is logged (even during a *good*, Google-STUN
+  session, where it didn't matter). Zero `typ relay` candidates appear
+  anywhere across the ~9500-line log. openrelay's TURN never once worked
+  either.
+
+This directly disproves the earlier "process holds some stale resource
+across pcs" theory from §10/§11 -- the exact same never-restarted process
+(one pid, no respawns, for the whole 8-round test) produced both outcomes,
+purely depending on which STUN server got picked for that one attempt.
+
+**Fix:** removed `openrelay.metered.ca` (STUN and both TURN entries) from
+`ICE_SERVERS` in both `input-helper/index.ts` and
+`shared/webrtc/peerConnection.ts`, leaving only
+`stun:stun.l.google.com:19302`. The `NDC_ICE_SERVERS=stun-only` diagnostic
+toggle from §11 is removed too -- the question it existed to answer is now
+answered, permanently, not situationally.
+
+Local regression check: a fresh negotiation now connects on attempt 1/3 with
+`iceServers=1`, gathers all 4 expected candidates (2 host + 2 srflx) and
+reaches `connected` in under a second, same as every previously-"good"
+session.
+
+**Known gap this reopens:** no working TURN relay exists anywhere in the app
+now (it didn't functionally exist before either, since it was already dead --
+this fix just makes that explicit and removes the dead weight from ICE
+gathering time). A genuinely restrictive-NAT/CGNAT pair that needs a relay
+to connect at all will still fail. If that turns out to matter in practice,
+it needs a real, verified-working TURN service (ideally self-hosted coturn),
+not another unverified free one.
+
+Also applied per this round's separate ask: the drain loop's
+`handleRemoteInput(next).catch(() => {})` in `input-helper/index.ts` no
+longer swallows injection errors silently -- it now logs the message type
+and full error/stack to the same file. See §13 for what testing this
+surfaced.
+
+## 13. Addendum: keyboard injection is silently broken in the helper (separate bug, confirmed locally)
+
+Reported from real usage of a build with the §12 fix: in a helper-backed
+session, the mouse works normally but **typing (Thai and English) and
+keyboard shortcuts don't work at all** -- silently, no error, same data
+channel the working mouse messages ride on.
+
+**Reproduced locally, conclusively, without needing real hardware:**
+
+- Isolated `@nut-tree-fork/nut-js` calls under `ELECTRON_RUN_AS_NODE=1`
+  (`keyboard.pressKey`/`releaseKey` for A/B/C, `keyboard.type` for ASCII,
+  single Thai characters, a full Thai string, and a Ctrl+C combo) **never
+  throw** -- ruling out a load/init failure of the keyboard provider and
+  ruling out anything Thai/Unicode-specific as the visible symptom.
+- But promise-resolving isn't the same as the OS receiving the keystroke.
+  Testing end to end -- focusing a real Notepad window, then injecting from
+  a separate `ELECTRON_RUN_AS_NODE` process and reading Notepad's actual
+  text back via `WM_GETTEXT` -- showed the truth: `keyboard.type("HELLO-
+  FROM-HELPER-TEST")` produced exactly `"---"` in Notepad (only the 3
+  hyphens landed; every letter silently vanished), and direct
+  `pressKey(Key.A/B/C)` + `releaseKey` -- the path `keyToggle()` uses for
+  both raw keydown/keyup *and* shortcuts -- produced **nothing at all**,
+  0 characters. Both fully match the reported symptom and required no
+  guessing: the injection call resolves successfully while doing nothing (or
+  next to nothing) at the OS level.
+- Mouse injection from the exact same process, same session, has been
+  reliably confirmed working throughout this entire investigation (every
+  earlier addendum's "connected" sessions had real mouse input flowing).
+  Same native module (`@nut-tree-fork/libnut` → `libnut-win32`) backs both
+  mouse and keyboard, so this isn't a "wrong/missing binary" problem --
+  keyboard injection specifically behaves differently for this process.
+- Two natural theories were tested and **both ruled out**:
+  1. *"Needs a Win32 message loop"* -- a real Electron process (not
+     `ELECTRON_RUN_AS_NODE`, `app.whenReady()` genuinely resolved, real
+     message pump running) but with **no `BrowserWindow` ever created**
+     still produced 0 characters for `pressKey`/`releaseKey`, identical to
+     the headless case.
+  2. *"Headless-Node-specific"* -- disproven by the same test: a real,
+     non-headless Electron process without a window fails exactly the same
+     way, so it isn't about `ELECTRON_RUN_AS_NODE` / lacking Node's own
+     event loop integration with Windows messages.
+
+  The common factor across both failing configurations is the same: **the
+  process has never created (and doesn't own) any window at all.** Whatever
+  libnut-win32's keyboard path needs -- most likely some window/thread
+  association Windows requires for injected keyboard input specifically
+  (mouse `SendInput` is coordinate-based and doesn't seem to need this;
+  keyboard likely needs to reach a specific thread's input queue, which may
+  require the calling thread/process to itself be window-owning) -- isn't
+  present in the pure-Node helper, and isn't fixed by giving that process a
+  full Electron runtime, only by giving it an actual window. No source is
+  shipped for `libnut-win32` (prebuilt binary only), so the exact internal
+  mechanism isn't directly inspectable from here.
+- **Not yet tested:** whether creating an actual `BrowserWindow` inside the
+  helper process (even permanently hidden, `show: false`, never shown) fixes
+  keyboard injection. This is the obvious next experiment, but it plausibly
+  reopens the *original* problem this whole architecture exists to solve --
+  §5-6's investigation already found that a window which starts hidden and
+  is never shown gets the exact same throttling treatment as one that's
+  shown and then hidden (that's why `ready-to-show`'s `--hidden` path has to
+  stealth-*show* rather than just never show). A hidden window inside the
+  helper process would be a separate throttling domain from the agent main
+  process's own window, so it's a genuinely open question whether it would
+  suffer the same fate or not -- not yet tested either way.
+
+**Fix candidates, not yet implemented (this needs a decision, not just a
+diagnosis -- see options below):**
+
+1. **Give the helper a real (permanently hidden) `BrowserWindow`.** Only
+   fixes this if such a window doesn't itself get throttled while hidden --
+   unverified per above. If it does get throttled, this reopens exactly the
+   bug the helper exists to fix, just scoped to the helper's own window
+   instead of the agent's.
+2. **Route keyboard specifically through the agent's main process instead of
+   the helper**, keeping mouse in the helper (confirmed working there).
+   The main-process injection path is the pre-existing, already-proven
+   renderer-fallback code (`ipcMain.handle('input:key', ...)` etc.) -- this
+   is guaranteed to work for keyboard, at the cost of reintroducing the
+   *original* window-hidden freeze, but **only for keyboard**, not mouse.
+   Net effect vs. the current (helper-everything) state: mouse stays fixed
+   in all cases; keyboard goes from "always silently broken in helper mode"
+   to "works whenever the window is visible, dies when hidden" -- worse than
+   the goal, better than today's helper-mode reality.
+3. **Find or build a different Windows keyboard-injection path** that
+   doesn't share whatever requirement `libnut-win32` has (e.g. calling
+   `SendInput` directly from a small native addon/FFI without going through
+   nut.js, if the raw Win32 call turns out not to need a window either --
+   not yet tested, would need its own isolated repro before trusting it).
+
+No fix implemented in this round for #13 -- reported for a decision on which
+candidate (or combination) to pursue, per this round's own instruction to
+investigate before changing code.

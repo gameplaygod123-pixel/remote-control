@@ -7,30 +7,21 @@ export interface SignalTransport {
   onMessage(handler: (message: unknown) => void): void
 }
 
-// Free-tier STUN + TURN. TURN (Open Relay Project's public demo relay) matters
-// once the two machines are on genuinely different networks: consumer
-// NATs/CGNAT often can't do direct P2P, so without a relay the connection
-// just hangs instead of falling back. Fine for personal use; swap for a
-// self-hosted coturn on a small VPS later if this free tier proves flaky.
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:openrelay.metered.ca:80' },
-  {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
-  }
-]
+// Open Relay Project's free STUN+TURN (openrelay.metered.ca) used to be here
+// too, meant as the TURN fallback for genuinely different-network pairs where
+// direct P2P can't punch through (consumer NATs/CGNAT). Removed after a real
+// packaged test's log (see input-helper/index.ts's ICE_SERVERS and
+// docs/native-input-plan.md's stun-server-flapping addendum) proved it
+// non-functional end to end: its STUN never got a response in 14/14 attempts
+// that picked it, its TURN allocation failed every time that was logged, and
+// no relay candidate ever appeared. That was diagnosed against the helper's
+// node-datachannel/libjuice stack specifically, not this Chromium one, but a
+// dead server is dead regardless of which ICE implementation queries it --
+// no reason to keep spending gathering time on it here either. If a
+// restrictive-NAT pair genuinely needs a TURN relay, this needs a real
+// (ideally self-hosted, e.g. coturn on a small VPS) replacement, not another
+// free service assumed to work without being verified end to end first.
+const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
 
 export interface PeerConnectionOptions {
   // Which signaling channel this PC's ICE candidates should be tagged with
