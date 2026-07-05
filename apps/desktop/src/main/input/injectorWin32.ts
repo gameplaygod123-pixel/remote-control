@@ -15,51 +15,59 @@ import { CODE_TO_VK } from './keyMapWin32'
 // Mouse injection is unaffected by any of this and stays on nut.js (see
 // injector.ts) -- only keyboard ever silently failed there.
 
-const user32 = koffi.load('user32.dll')
-
-koffi.struct('KEYBDINPUT', {
-  wVk: 'uint16',
-  wScan: 'uint16',
-  dwFlags: 'uint32',
-  time: 'uint32',
-  dwExtraInfo: 'uint64'
-})
-// INPUT is a tagged union (type + MOUSEINPUT|KEYBDINPUT|HARDWAREINPUT) that's
-// 40 bytes on x64 (8-byte header + 32-byte union, sized to the largest
-// member, MOUSEINPUT). _tail pads KEYBDINPUT's 24 bytes up to that same 32,
-// matching the real struct's layout byte-for-byte -- verified via hexdump
-// against the documented Win32 INPUT/KEYBDINPUT layout during the spike.
-koffi.struct('INPUT', {
-  type: 'uint32',
-  _pad: 'uint32',
-  ki: 'KEYBDINPUT',
-  _tail: 'uint64'
-})
-
-const SendInput = user32.func(
-  'uint32 SendInput(uint32 cInputs, _Inout_ INPUT *pInputs, int cbSize)'
-)
-
 const INPUT_KEYBOARD = 1
 const KEYEVENTF_EXTENDEDKEY = 0x0001
 const KEYEVENTF_KEYUP = 0x0002
 const KEYEVENTF_UNICODE = 0x0004
 
-const INPUT_SIZE = koffi.sizeof('INPUT')
+// Lazily initialized on first actual injection call, NOT at module load:
+// this module is imported unconditionally by injector.ts (whose isWin32
+// branching happens at call time, inside each function), and injector.ts is
+// in turn imported by the Electron main process on every platform --
+// koffi.load('user32.dll') at module scope would throw on the macOS
+// controller the moment the app starts. Verified: dlopen('user32.dll')
+// throws immediately on macOS. All callers are win32-gated, so init only
+// ever runs where user32.dll actually exists.
+let sendInputFn: ((count: number, buf: Buffer, size: number) => number) | null = null
+let inputSize = 0
 
-function sendOne(ki: {
-  wVk: number
-  wScan: number
-  dwFlags: number
-}): void {
-  const buf = Buffer.alloc(INPUT_SIZE)
+function ensureInit(): void {
+  if (sendInputFn) return
+  const user32 = koffi.load('user32.dll')
+  koffi.struct('KEYBDINPUT', {
+    wVk: 'uint16',
+    wScan: 'uint16',
+    dwFlags: 'uint32',
+    time: 'uint32',
+    dwExtraInfo: 'uint64'
+  })
+  // INPUT is a tagged union (type + MOUSEINPUT|KEYBDINPUT|HARDWAREINPUT) that's
+  // 40 bytes on x64 (8-byte header + 32-byte union, sized to the largest
+  // member, MOUSEINPUT). _tail pads KEYBDINPUT's 24 bytes up to that same 32,
+  // matching the real struct's layout byte-for-byte -- verified via hexdump
+  // against the documented Win32 INPUT/KEYBDINPUT layout during the spike.
+  koffi.struct('INPUT', {
+    type: 'uint32',
+    _pad: 'uint32',
+    ki: 'KEYBDINPUT',
+    _tail: 'uint64'
+  })
+  sendInputFn = user32.func(
+    'uint32 SendInput(uint32 cInputs, _Inout_ INPUT *pInputs, int cbSize)'
+  ) as (count: number, buf: Buffer, size: number) => number
+  inputSize = koffi.sizeof('INPUT')
+}
+
+function sendOne(ki: { wVk: number; wScan: number; dwFlags: number }): void {
+  ensureInit()
+  const buf = Buffer.alloc(inputSize)
   koffi.encode(buf, 0, 'INPUT', {
     type: INPUT_KEYBOARD,
     _pad: 0,
     ki: { ...ki, time: 0, dwExtraInfo: 0n },
     _tail: 0n
   })
-  SendInput(1, buf, INPUT_SIZE)
+  sendInputFn!(1, buf, inputSize)
 }
 
 // One SendInput call per UTF-16 code unit (not per Unicode code point) --
