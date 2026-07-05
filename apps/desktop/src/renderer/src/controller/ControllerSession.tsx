@@ -3,7 +3,7 @@ import { connectSignaling, SignalingClient } from '../shared/signaling/signaling
 import { resolveSignalingUrl } from '../shared/signaling/resolveSignalingUrl'
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
-import StatusPill from '../shared/components/StatusPill'
+import StatusPill, { classify } from '../shared/components/StatusPill'
 import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
 import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
@@ -64,6 +64,10 @@ export default function ControllerSession({
   // set-device-name message the agent itself uses; the server doesn't
   // check who sent it, so this "just works".
   const [nameDraft, setNameDraft] = useState(name ?? '')
+  // Parsec-style floating controls: collapsed to a small pill over the
+  // video by default, expanded on click. Starts open so a fresh session
+  // shows its status/stats until the person tucks it away.
+  const [panelOpen, setPanelOpen] = useState(true)
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -514,43 +518,61 @@ export default function ControllerSession({
 
   return (
     <div className="session-shell">
-      <div className="session-header">
-        <button className="btn btn--ghost session-header__back" onClick={goBack}>
-          ← Back
-        </button>
-        <div className="session-header__info">
-          <input
-            className="session-header__name-input"
-            value={nameDraft}
-            placeholder={deviceId}
-            onChange={(e) => setNameDraft(e.target.value)}
-            onBlur={commitName}
-            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-          />
-          <div className="session-header__meta">{deviceId} · Press Esc to disconnect</div>
-        </div>
-        <div className="session-header__status">
-          {videoStats && videoStats.fps > 0 && (
-            <span
-              className="connection-type-badge"
-              title="What's actually being received -- not just what was requested"
-            >
-              Decode {videoStats.processingMs}ms · Network {videoStats.rttMs ?? '?'}ms ·{' '}
-              {videoStats.fps}fps · {videoStats.width}×{videoStats.height} ·{' '}
-              {(videoStats.kbps / 1000).toFixed(1)} Mbps
-              {videoStats.codec ? ` · ${videoStats.codec}` : ''}
+      <div className={`session-float${panelOpen ? ' is-open' : ''}`}>
+        {panelOpen ? (
+          <div className="session-float__panel">
+            <span className="session-float__grip" title="Drag to move the window">
+              ⠿
             </span>
-          )}
-          {connectionType && (
-            <span
-              className="connection-type-badge"
-              title="Affects file transfer speed -- relay is shared/bandwidth-limited"
+            <button className="session-float__btn" onClick={goBack}>
+              ← Back
+            </button>
+            <input
+              className="session-float__name"
+              value={nameDraft}
+              placeholder={deviceId}
+              title={`${deviceId} · Press Esc to disconnect`}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+            />
+            {videoStats && videoStats.fps > 0 && (
+              <span
+                className="connection-type-badge"
+                title="What's actually being received -- not just what was requested"
+              >
+                Decode {videoStats.processingMs}ms · Network {videoStats.rttMs ?? '?'}ms ·{' '}
+                {videoStats.fps}fps · {videoStats.width}×{videoStats.height} ·{' '}
+                {(videoStats.kbps / 1000).toFixed(1)} Mbps
+                {videoStats.codec ? ` · ${videoStats.codec}` : ''}
+              </span>
+            )}
+            {connectionType && (
+              <span
+                className="connection-type-badge"
+                title="Affects file transfer speed -- relay is shared/bandwidth-limited"
+              >
+                {connectionType === 'relay' ? 'via relay' : 'direct connection'}
+              </span>
+            )}
+            <StatusPill status={status} />
+            <button
+              className="session-float__btn session-float__collapse"
+              title="Tuck away"
+              onClick={() => setPanelOpen(false)}
             >
-              {connectionType === 'relay' ? 'via relay' : 'direct connection'}
-            </span>
-          )}
-          <StatusPill status={status} />
-        </div>
+              ▴
+            </button>
+          </div>
+        ) : (
+          <button
+            className="session-float__toggle"
+            title={`${nameDraft || deviceId} · ${status} · Esc = disconnect`}
+            onClick={() => setPanelOpen(true)}
+          >
+            <span className={`session-float__dot is-${classify(status)}`} />
+          </button>
+        )}
       </div>
 
       <div className="session-video-area">

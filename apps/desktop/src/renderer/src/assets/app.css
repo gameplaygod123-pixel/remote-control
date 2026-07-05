@@ -507,70 +507,120 @@
   background: #000;
 }
 
-.session-header {
+/* Parsec-style floating session controls: the video owns the whole window;
+   a small translucent pill floats top-center and expands into the control
+   strip on click. Faded until hovered so it stays out of the way. Nothing
+   here is a window-drag region except the explicit grip -- a wide drag
+   region would swallow mouse events meant for the remote machine. */
+.session-float {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+}
+
+.session-float:hover,
+.session-float:focus-within,
+.session-float.is-open {
+  opacity: 1;
+}
+
+.session-float__toggle {
+  width: 38px;
+  height: 20px;
+  border-radius: 10px;
+  background: rgba(20, 21, 26, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 10px 16px;
-  background: rgba(20, 21, 26, 0.9);
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.session-float__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.session-float__dot.is-ok {
+  background: var(--ok);
+}
+
+.session-float__dot.is-error {
+  background: var(--err);
+}
+
+.session-float__dot.is-idle {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.session-float__panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(20, 21, 26, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
   backdrop-filter: blur(16px);
-  flex-shrink: 0;
-  /* With the OS titlebar hidden this header is the session window's only
-     drag handle. The video area below must NOT be a drag region -- a drag
-     strip there would swallow mouse events meant for the remote machine. */
+  white-space: nowrap;
+}
+
+.session-float__grip {
   -webkit-app-region: drag;
+  cursor: grab;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+  padding: 0 2px;
+  user-select: none;
 }
 
-.session-header :is(button, input, span) {
-  -webkit-app-region: no-drag;
-}
-
-.session-header__back {
+.session-float__btn {
   flex-shrink: 0;
-  padding: 8px 14px;
-}
-
-.session-header__info {
-  flex: 1;
-  min-width: 0;
-}
-
-.session-header__name-input {
-  display: block;
-  width: 100%;
-  max-width: 360px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--ev-c-text-1);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
   font-family: inherit;
-  font-size: 18px;
-  font-weight: 700;
+  cursor: pointer;
+}
+
+.session-float__btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.session-float__collapse {
+  padding: 4px 7px;
+}
+
+.session-float__name {
+  width: 130px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--ev-c-text-1);
   background: none;
   border: 1px solid transparent;
   border-radius: 6px;
-  padding: 2px 6px;
-  margin: 0 0 0 -6px;
+  padding: 3px 6px;
   outline: none;
 }
 
-.session-header__name-input:hover {
+.session-float__name:hover {
   border-color: var(--panel-border);
 }
 
-.session-header__name-input:focus {
+.session-float__name:focus {
   border-color: var(--accent);
   background: rgba(255, 255, 255, 0.05);
-}
-
-.session-header__meta {
-  font-size: 12px;
-  color: var(--ev-c-text-3);
-  margin-top: 2px;
-}
-
-.session-header__status {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
 }
 
 .session-video-area {
