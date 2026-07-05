@@ -65,7 +65,9 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.15.1** (full release, hotfix).
+Latest full release: **v1.15.1**. Latest PRERELEASE: **v1.16.0**
+(clipboard-in-helper) — awaiting the owner's real-machine paired-session test
+before `gh release edit v1.16.0 --prerelease=false`.
 
 Working and verified on real hardware:
 - Latency ≈ Parsec (direct connection, ~11 ms network).
@@ -76,23 +78,25 @@ Working and verified on real hardware:
 - File transfer controller→agent (tested with a 580 MB file).
 - Auto-update via GitHub Releases; signaling self-heals via supervisor.
 
-NOT working:
-- **Clipboard sync is fully non-functional in helper mode** (gap since
-  v1.14.0, not a regression). First fix attempt (v1.15.0, commit `acecaa0`)
-  crashed the helper and was reverted in v1.15.1. NOTE: owner also runs
-  Parsec sometimes — its clipboard sync can mask ours in tests.
+In test (v1.16.0 prerelease):
+- **Clipboard sync in helper mode** — fixed and merged (branch
+  `fix/clipboard-in-helper`). Root cause of the v1.15.0 segfault: koffi's
+  `str16` is a POINTER type, so encode/decode stored a transient koffi buffer
+  pointer in clipboard memory instead of the text (→ dangling-pointer crash
+  AND cross-app paste never actually worked). Fix: inline UTF-16 code units
+  via `koffi.array('uint16', n)`, reads bounded by `GlobalSize`, chunked
+  string building, `OpenClipboard(null)`. Windows-side verified: 500
+  roundtrips + PowerShell cross-app both directions (Thai/Chinese) + 251-read
+  contention, zero crashes. Remaining gate: owner's real paired-session test
+  (Mac controller ↔ Windows agent, window hidden), then promote. NOTE: owner
+  also runs Parsec sometimes — its clipboard sync can mask ours in tests;
+  make sure Parsec is CLOSED when testing. Cosmetic nit for later: helper's
+  `clipboard.onopen` log is overwritten by runClipboardSync, never prints.
 
 ## Backlog (rough priority)
 
-1. **Clipboard sync while agent hidden** (chosen next task): re-apply the
-   reverted architecture (`git cherry-pick acecaa0` onto a fix branch —
-   clipboardSyncCore + clipboardNative + wiring), but Windows-side Claude must
-   first verify the Win32 clipboard FFI (OpenClipboard/GlobalAlloc/GlobalLock/
-   SetClipboardData via koffi) with an isolated ELECTRON_RUN_AS_NODE test on
-   real hardware (ASCII + Thai roundtrip, 100 iterations, no crash). Segfault
-   suspects, in order: `OpenClipboard(0)` number-vs-null for `void*`;
-   `koffi.decode(ptr,'str16')` on GlobalLock pointer; `koffi.encode` into
-   GlobalAlloc'd memory; surrogate-pair sizing. Ship as PRERELEASE (rule 1).
+1. Promote v1.16.0 after the owner's test passes
+   (`gh release edit v1.16.0 --prerelease=false`).
 2. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
 3. Real AGENT_TOKEN (currently `dev-token-change-me`) — before family use.
