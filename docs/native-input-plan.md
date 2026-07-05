@@ -663,3 +663,60 @@ alongside the keyboard fix:
   happens during a session that was actually using the helper path. That
   turns a silent, zombie "video works, input doesn't" state into a real,
   visible disconnect the controller can see and retry against.
+
+## 16. Addendum: clipboard-in-helper's Win32 segfault -- koffi `str16` stored a pointer, not the text
+
+Branch `fix/clipboard-in-helper`. Moving clipboard sync into the helper
+(so it survives the agent window hiding, same as input) shipped as v1.15.0
+and was reverted the same day as v1.15.1 because the helper segfaulted in a
+loop ("input helper crashed" flapping). Recovered here after finding and
+fixing the actual crash.
+
+**Reproduced first, deterministically:** an isolated harness running the real
+`clipboardNative.ts` (Win32 koffi path) under `ELECTRON_RUN_AS_NODE`, doing
+ASCII/Thai/CJK/empty read+write roundtrips in a loop, segfaults (exit 139)
+reliably -- but non-deterministically in *timing* (crashed at iter 4, 59, 89
+across runs), always on the empty-string cycle. A per-FFI-call stderr trace
+pinned the crash to `koffi.decode(ptr, 'str16')` on the read *after* an
+empty-string write.
+
+**Root cause:** koffi's `str16` type is `const char16_t *` -- a POINTER to a
+string, not the characters themselves. So `koffi.encode(ptr, 'str16', text)`
+did NOT write the UTF-16 text into the clipboard's `GlobalAlloc`'d memory;
+it allocated a *transient koffi-managed* UTF-16 buffer and wrote an 8-byte
+POINTER to it into the clipboard memory (confirmed by hexdumping the encode
+output: `90dbf1d3cb010000` = a little-endian heap address, not text bytes).
+`koffi.decode(ptr, 'str16')` was symmetric -- it read that pointer back and
+dereferenced it -- which is the only reason the in-process roundtrip ever
+"passed": the test was reading koffi's own internal buffer, never the OS
+clipboard. Two independent failures fell out of that:
+  1. **Segfault:** the koffi-managed buffer is garbage-collected, so the
+     pointer sitting in the clipboard went stale; a later `decode` chased a
+     freed/unmapped address. The empty-string cycle (a tiny 2-byte alloc)
+     just made the dangling-pointer read land on unmapped memory most often,
+     hence "always empty, but not every time."
+  2. **The feature never actually worked:** the clipboard held an 8-byte
+     pointer where other apps expect UTF-16 text, so no real cross-app copy/
+     paste (the entire point) could have synced -- it only looked fine in the
+     self-referential roundtrip test.
+
+**Fix:** read/write the UTF-16 code units INLINE via `koffi.array('uint16',
+n)` instead of `str16`, so the actual bytes land in (and come out of) the
+global memory. The read is bounded by `GlobalSize(handle)` so a buffer some
+other app left un-terminated can't run the null-scan off the end, and it's
+built in chunks so a very large paste can't blow the stack via
+`String.fromCharCode(...spread)`. `OpenClipboard` is now passed an explicit
+`null` rather than the integer `0`.
+
+**Verified (real hardware, this machine):** 5x100 roundtrips including the
+empty string -- 0 crashes, all exact; helper writes text that a *separate*
+process (PowerShell `Get-Clipboard`) reads back exactly, and reads back
+exactly what PowerShell `Set-Clipboard` puts there -- Thai + CJK + arrows in
+both directions, proving real cross-app sync (which the reverted version
+could not have done); 251 reads/sec against a clipboard being mutated by an
+external process without a crash; and the real `runClipboardSync` +
+`clipboardNative` integration (mock channel, real OS clipboard) syncing both
+directions over a sustained session with no crash. Not yet verified: a full
+two-machine paired session against the real Mac controller -- same sandbox
+limitation as every prior round. Per the post-1.15.0 rule, native/FFI code
+the Mac side can't test ships PRERELEASE only, not a direct full release.

@@ -270,7 +270,13 @@ export default function ControllerSession({
           moveChannelRef.current = null
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, pairing')
-          client.send({ type: 'pair-request', deviceId, pin, controllerId, caps: [INPUT_HELPER_CAP] })
+          client.send({
+            type: 'pair-request',
+            deviceId,
+            pin,
+            controllerId,
+            caps: [INPUT_HELPER_CAP]
+          })
         }
       })
       if (cancelled) {
@@ -337,7 +343,10 @@ export default function ControllerSession({
             transport,
             deviceId,
             useHelper
-              ? { onFileChannel: attachChannel, onClipboardChannel: attachClipboardChannel }
+              ? // Helper mode: clipboard is on the input pc instead (below),
+                // so it survives the agent window hiding. Only file transfer
+                // (drag-and-drop, needs a visible window) stays on the video pc.
+                { onFileChannel: attachChannel }
               : {
                   onInputChannel: (channel) => {
                     inputChannelRef.current = channel
@@ -433,7 +442,13 @@ export default function ControllerSession({
             },
             onMoveChannel: (channel) => {
               moveChannelRef.current = channel
-            }
+            },
+            // Clipboard rides the input pc when the agent uses its native
+            // helper, so it (like input) survives the agent window being
+            // hidden -- the agent's helper process owns the other end. This
+            // controller side stays in the renderer, which is fine: the
+            // controller window is focused while controlling, never throttled.
+            onClipboardChannel: attachClipboardChannel
           })
           inputPcRef.current = pc
           await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
@@ -446,7 +461,11 @@ export default function ControllerSession({
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
           transport.send({ type: 'sdp-answer', deviceId, sdp: answer.sdp, channel: 'video' })
-        } else if (message.type === 'ice-candidate' && message.channel === 'input' && inputPcRef.current) {
+        } else if (
+          message.type === 'ice-candidate' &&
+          message.channel === 'input' &&
+          inputPcRef.current
+        ) {
           await inputPcRef.current.addIceCandidate({
             candidate: message.candidate,
             sdpMid: message.sdpMid,
@@ -462,7 +481,13 @@ export default function ControllerSession({
       })
 
       setStatus('pairing')
-      transport.send({ type: 'pair-request', deviceId, pin, controllerId, caps: [INPUT_HELPER_CAP] })
+      transport.send({
+        type: 'pair-request',
+        deviceId,
+        pin,
+        controllerId,
+        caps: [INPUT_HELPER_CAP]
+      })
     }
 
     connect().catch((error) => setStatus(`error: ${String(error)}`))
