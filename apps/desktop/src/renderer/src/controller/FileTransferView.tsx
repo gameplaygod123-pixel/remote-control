@@ -214,6 +214,14 @@ export default function FileTransferView(): React.JSX.Element {
     if (sending || files.length === 0 || selected.size === 0) return
     setSending(true)
     const targets = [...selected]
+    // Clear any leftover done/error rows from a previous send so this run
+    // starts clean (and a re-send of the same selection doesn't briefly show
+    // the old result).
+    setPushes((prev) => {
+      const next = { ...prev }
+      for (const id of targets) delete next[id]
+      return next
+    })
     await Promise.all(
       targets.map(async (deviceId) => {
         const pin = await window.api.controllerMemory.getCachedPin(deviceId)

@@ -71,17 +71,24 @@ export async function sendFileOverChannel(
   // data has no such dependency and can be chunked/paced freely.
   const buffer = await file.arrayBuffer()
 
+  // Poll bufferedAmount rather than waiting on the 'bufferedamountlow' event.
+  // That event is edge-triggered and was seen to never fire on a re-paired
+  // channel (second consecutive send), wedging the loop forever while the
+  // already-buffered bytes still trickled to the receiver -- exactly the
+  // "controller stuck at 18% but the file arrived" symptom. Polling can't
+  // miss an edge, and it also notices the channel closing under us.
   function waitForDrain(): Promise<void> {
-    if (channel.bufferedAmount <= BUFFERED_AMOUNT_LOW_THRESHOLD) return Promise.resolve()
-    return new Promise((resolve) => {
-      channel.addEventListener(
-        'bufferedamountlow',
-        function handler() {
-          channel.removeEventListener('bufferedamountlow', handler)
+    return new Promise((resolve, reject) => {
+      if (channel.bufferedAmount <= BUFFERED_AMOUNT_LOW_THRESHOLD) return resolve()
+      const timer = setInterval(() => {
+        if (channel.readyState !== 'open') {
+          clearInterval(timer)
+          reject(new Error('การเชื่อมต่อหลุดระหว่างส่ง'))
+        } else if (channel.bufferedAmount <= BUFFERED_AMOUNT_LOW_THRESHOLD) {
+          clearInterval(timer)
           resolve()
-        },
-        { once: true }
-      )
+        }
+      }, 50)
     })
   }
 
@@ -95,11 +102,30 @@ export async function sendFileOverChannel(
     const chunk = buffer.slice(offset, offset + CHUNK_SIZE)
     channel.send(chunk)
     offset += chunk.byteLength
-    onProgress(offset, buffer.byteLength)
+    // Report bytes actually flushed to the network (offset minus what's still
+    // queued locally), not bytes merely handed to send(). The old offset-only
+    // figure raced far ahead of the receiver -- why the two ends' percentages
+    // never matched. This tracks the receiver closely and only advances as
+    // the channel truly drains.
+    onProgress(Math.max(0, offset - channel.bufferedAmount), buffer.byteLength)
   }
 
+  // Drain the tail so the final percentage reflects real delivery. Report
+  // only when the delivered figure actually moves -- emitting the same value
+  // on every tick would keep any stall watchdog above alive while the channel
+  // is in fact wedged.
+  let lastReported = -1
+  while (channel.bufferedAmount > 0 && channel.readyState === 'open') {
+    const delivered = Math.max(0, buffer.byteLength - channel.bufferedAmount)
+    if (delivered !== lastReported) {
+      lastReported = delivered
+      onProgress(delivered, buffer.byteLength)
+    }
+    await new Promise((r) => setTimeout(r, 100))
+  }
   const end: ControlMessage = { t: 'file-end' }
   channel.send(JSON.stringify(end))
+  onProgress(buffer.byteLength, buffer.byteLength)
 }
 
 // Only one transfer in flight per direction at a time -- plenty for a

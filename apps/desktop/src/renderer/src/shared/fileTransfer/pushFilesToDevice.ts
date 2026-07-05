@@ -46,6 +46,11 @@ export interface PushUpdate {
 // 30s, which surfaces here as a pair-result failure well before this fires.
 const SETUP_TIMEOUT_MS = 60_000
 
+// No delivered-bytes progress for this long during sending = the transfer is
+// wedged; fail it rather than freezing the row (the second-consecutive-send
+// hang this was written to catch).
+const STALL_TIMEOUT_MS = 20_000
+
 export async function pushFilesToDevice(
   deviceId: string,
   pin: string,
@@ -79,6 +84,10 @@ export async function pushFilesToDevice(
   // invisible to TS's flow analysis, which would otherwise narrow a plain
   // `let pc` to null/never at the finally below.
   const held: { pc: RTCPeerConnection | null } = { pc: null }
+  // Hoisted so the finally can always clear them, whichever way the promise
+  // settles (resolve, reject, or a throw from an await inside a handler).
+  const timers: { setup?: ReturnType<typeof setTimeout>; stall?: ReturnType<typeof setInterval> } =
+    {}
   try {
     await new Promise<void>((resolve, reject) => {
       const transport: SignalTransport = {
@@ -88,13 +97,30 @@ export async function pushFilesToDevice(
 
       // Covers everything up to the file channel actually opening; the send
       // itself can legitimately run for minutes and is not under this timer.
-      const setupTimer = setTimeout(
+      timers.setup = setTimeout(
         () => reject(new Error('การเจรจาเชื่อมต่อค้างนานเกินไป')),
         SETUP_TIMEOUT_MS
       )
 
+      // Watchdog for a wedged transfer: if the delivered-bytes figure hasn't
+      // advanced in this long, the channel is dead (peer gone, relay stalled)
+      // -- fail loudly instead of leaving the row frozen forever. Reset on
+      // every progress tick.
+      let lastProgressAt = Date.now()
+      timers.stall = setInterval(() => {
+        if (Date.now() - lastProgressAt > STALL_TIMEOUT_MS) {
+          reject(new Error('การส่งค้าง — ลองใหม่อีกครั้ง'))
+        }
+      }, 2_000)
+
+      // The file channel can surface twice (onopen AND an already-open
+      // readyState check below); a second sendAll on the same channel would
+      // interleave a duplicate byte stream and corrupt the transfer.
+      let started = false
       async function sendAll(channel: RTCDataChannel): Promise<void> {
-        clearTimeout(setupTimer)
+        if (started) return
+        started = true
+        clearTimeout(timers.setup)
         channel.binaryType = 'arraybuffer'
         for (let i = 0; i < files.length; i++) {
           const file = files[i]
@@ -108,14 +134,16 @@ export async function pushFilesToDevice(
           await sendFileOverChannel(
             channel,
             file,
-            (sent, total) =>
+            (sent, total) => {
+              lastProgressAt = Date.now()
               onUpdate({
                 phase: 'sending',
                 fileName: file.name,
                 fileIndex: i + 1,
                 fileCount: files.length,
                 percent: Math.round((sent / total) * 100)
-              }),
+              })
+            },
             () => false
           )
         }
@@ -174,6 +202,8 @@ export async function pushFilesToDevice(
       client.send({ type: 'pair-request', token: houseToken, deviceId, pin, controllerId })
     })
   } finally {
+    clearTimeout(timers.setup)
+    clearInterval(timers.stall)
     held.pc?.close()
     client.close()
   }
