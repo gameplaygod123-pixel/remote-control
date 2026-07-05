@@ -131,10 +131,40 @@ async function publishUrl(wssUrl) {
 // ---------- cloudflared tunnel ----------
 
 let currentTunnelUrl = null
+let tunnelProcess = null
+
+// Quick tunnels can die *silently*: the public hostname stops resolving
+// while the local cloudflared process keeps running as if nothing
+// happened -- observed in production (both tunnels dead, both processes
+// alive). Probe the public URL and kill the process when it's gone; the
+// exit handler then respawns a fresh tunnel (new URL, auto-published).
+const HEALTH_CHECK_INTERVAL_MS = 60_000
+let consecutiveHealthFailures = 0
+
+async function checkTunnelHealth() {
+  if (!currentTunnelUrl || !tunnelProcess) return
+  const probeUrl = currentTunnelUrl.replace('wss://', 'https://')
+  try {
+    // Any HTTP answer (the signaling server replies 426 Upgrade Required)
+    // proves the tunnel is alive end-to-end; only a network-level failure
+    // (DNS gone, connect refused) counts as unhealthy.
+    await fetch(probeUrl, { signal: AbortSignal.timeout(10_000) })
+    consecutiveHealthFailures = 0
+  } catch {
+    consecutiveHealthFailures += 1
+    log(`tunnel health check failed (${consecutiveHealthFailures}/2):`, probeUrl)
+    if (consecutiveHealthFailures >= 2) {
+      log('tunnel unreachable -- killing cloudflared to force a fresh tunnel')
+      consecutiveHealthFailures = 0
+      tunnelProcess.kill()
+    }
+  }
+}
 
 function startTunnel() {
   log('starting cloudflared quick tunnel')
   const tunnel = spawn(CLOUDFLARED, ['tunnel', '--url', `http://localhost:${PORT}`])
+  tunnelProcess = tunnel
 
   function scan(chunk) {
     const match = TUNNEL_URL_PATTERN.exec(chunk.toString())
@@ -155,6 +185,7 @@ function startTunnel() {
   tunnel.once('exit', (code) => {
     log('cloudflared exited with code', code, `-- restarting in ${RESPAWN_DELAY_MS}ms`)
     currentTunnelUrl = null
+    tunnelProcess = null
     setTimeout(startTunnel, RESPAWN_DELAY_MS)
   })
 }
@@ -173,3 +204,4 @@ setInterval(() => {
     void publishUrl(currentTunnelUrl)
   }
 }, SERVER_CHECK_INTERVAL_MS)
+setInterval(() => void checkTunnelHealth(), HEALTH_CHECK_INTERVAL_MS)
