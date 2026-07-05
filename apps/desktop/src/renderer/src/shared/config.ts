@@ -1,7 +1,8 @@
-// Dev defaults point at a locally-run signaling server (see server/signaling).
-// Phase 4 will replace these with a real deployed URL + a real shared secret.
+// Dev default points at a locally-run signaling server (see server/signaling).
+// The house token is deliberately NOT here: anything baked at build time ends
+// up public (installers live on a public GitHub releases page), so it lives
+// in userData instead -- see main/houseToken.ts.
 export const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL ?? 'ws://localhost:8080'
-export const AGENT_TOKEN = import.meta.env.VITE_AGENT_TOKEN ?? 'dev-token-change-me'
 
 // Optional: for personal unattended-access use (both machines belong to the
 // same person), set a fixed PIN instead of the default rotating one-time

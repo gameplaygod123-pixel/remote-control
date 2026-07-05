@@ -5,6 +5,7 @@ import { SignalingMessage } from '../shared/protocol'
 import { classify } from '../shared/components/StatusPill'
 import UpdateBadge from '../shared/components/UpdateBadge'
 import SwitchModeLink from '../shared/components/SwitchModeLink'
+import TokenSetupView from '../setup/TokenSetupView'
 import '../assets/deviceList.css'
 
 interface Device {
@@ -48,7 +49,13 @@ export default function DeviceListView({
   const [showAddDevice, setShowAddDevice] = useState(false)
   const [addDeviceId, setAddDeviceId] = useState('')
   const [addPin, setAddPin] = useState('')
+  // The server answered our list-devices with "invalid token" -- the saved
+  // house token is wrong (mistyped, or rotated server-side). Routes back to
+  // the token screen instead of looping on silent disconnects.
+  const [tokenRejected, setTokenRejected] = useState(false)
   const clientRef = useRef<SignalingClient | null>(null)
+  // Loaded before connecting; rides list-devices/remove-device.
+  const tokenRef = useRef('')
 
   useEffect(() => {
     let cancelled = false
@@ -78,13 +85,18 @@ export default function DeviceListView({
       setLastUpdated(new Date())
     }
 
-    connectSignaling(resolveSignalingUrl, {
-      onDisconnect: () => setStatus('disconnected, reconnecting...'),
-      onReconnect: () => {
-        setStatus('reconnected')
-        clientRef.current?.send({ type: 'list-devices' })
-      }
-    })
+    window.api.houseToken
+      .get()
+      .then((saved) => {
+        tokenRef.current = saved ?? ''
+        return connectSignaling(resolveSignalingUrl, {
+          onDisconnect: () => setStatus('disconnected, reconnecting...'),
+          onReconnect: () => {
+            setStatus('reconnected')
+            clientRef.current?.send({ type: 'list-devices', token: tokenRef.current })
+          }
+        })
+      })
       .then((client) => {
         if (cancelled) {
           client.close()
@@ -104,10 +116,15 @@ export default function DeviceListView({
             applyThumbnail(message.deviceId, message.image)
           } else if (message.type === 'device-removed') {
             applyRemoval(message.deviceId)
+          } else if (message.type === 'server-error' && message.reason === 'invalid token') {
+            // Close before flagging: the client would otherwise keep
+            // reconnecting (and getting rejected) behind the token screen.
+            clientRef.current?.close()
+            setTokenRejected(true)
           }
         })
 
-        client.send({ type: 'list-devices' })
+        client.send({ type: 'list-devices', token: tokenRef.current })
       })
       .catch((error) => setStatus(`error: ${String(error)}`))
 
@@ -137,7 +154,7 @@ export default function DeviceListView({
   // request for a currently-online device) -- a device that's still
   // reachable shouldn't disappear just because someone clicked cleanup.
   function handleRemoveDevice(deviceId: string): void {
-    clientRef.current?.send({ type: 'remove-device', deviceId })
+    clientRef.current?.send({ type: 'remove-device', deviceId, token: tokenRef.current })
   }
 
   async function submitAddDevice(): Promise<void> {
@@ -150,6 +167,12 @@ export default function DeviceListView({
 
   const onlineCount = devices.filter((d) => d.online).length
   const statusVariant = classify(status)
+
+  if (tokenRejected) {
+    // Full reload after saving -- rebuilds the signaling connection and this
+    // whole view around the corrected token.
+    return <TokenSetupView onSaved={() => window.location.reload()} />
+  }
 
   return (
     <div className="dl-shell">

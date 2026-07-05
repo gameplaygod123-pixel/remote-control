@@ -25,6 +25,10 @@ declare global {
         write: (text: string) => Promise<void>
         read: () => Promise<string>
       }
+      houseToken: {
+        get: () => Promise<string | null>
+        set: (token: string) => Promise<void>
+      }
       agent: {
         captureThumbnail: () => Promise<string | null>
       }

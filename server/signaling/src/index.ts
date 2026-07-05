@@ -107,6 +107,13 @@ wss.on("connection", (socket) => {
       }
 
       case "pair-request": {
+        // Checked BEFORE anything device-related leaks (including whether
+        // the deviceId exists), and before the PIN is even looked at -- a
+        // stranger without the house token gets no PIN-guessing oracle.
+        if (!isValidAgentToken(message.token ?? "")) {
+          send(socket, { type: "pair-result", ok: false, reason: "invalid token" });
+          return;
+        }
         const agent = getAgent(message.deviceId);
         if (!agent || !agent.online || !agent.ws) {
           send(socket, { type: "pair-result", ok: false, reason: "unknown device id" });
@@ -178,12 +185,26 @@ wss.on("connection", (socket) => {
       }
 
       case "list-devices": {
+        // The roster carries names and live screen thumbnails. The
+        // server-error reply (before the close) is what lets a family
+        // member's app with a mistyped token show its fix-token screen
+        // instead of looping on silent disconnects.
+        if (!isValidAgentToken(message.token ?? "")) {
+          send(socket, { type: "server-error", reason: "invalid token" });
+          socket.close();
+          return;
+        }
         subscribeToDeviceList(socket);
         send(socket, { type: "device-list", devices: listDevices() });
         break;
       }
 
       case "remove-device": {
+        if (!isValidAgentToken(message.token ?? "")) {
+          send(socket, { type: "server-error", reason: "invalid token" });
+          socket.close();
+          return;
+        }
         if (removeDevice(message.deviceId)) {
           for (const controllerWs of getSubscribedControllers()) {
             send(controllerWs, { type: "device-removed", deviceId: message.deviceId });
@@ -196,6 +217,7 @@ wss.on("connection", (socket) => {
         send(socket, { type: "pong" });
         break;
 
+      case "server-error":
       case "register-result":
       case "pair-result":
       case "pong":

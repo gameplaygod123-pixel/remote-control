@@ -40,6 +40,7 @@ import {
   regeneratePin as regenerateAgentPin
 } from './agentIdentity'
 import { getSavedMode, saveMode, resetMode, type AppMode } from './appModeConfig'
+import { getHouseToken, saveHouseToken } from './houseToken'
 import { initAutoUpdater } from './updater'
 import { saveToDownloads } from './fileTransfer'
 import { getCachedPin, setCachedPin, clearCachedPin, setLastDeviceId } from './controllerMemory'
@@ -299,6 +300,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('get-mode', (): AppMode => appMode)
   ipcMain.handle('get-app-version', (): string => app.getVersion())
+  ipcMain.handle('house-token:get', (): string | null => getHouseToken())
+  ipcMain.handle('house-token:set', (_event, token: string): void => saveHouseToken(token))
 
   // Bridges the agent renderer to the input-helper process (see
   // inputHelperHost.ts). No-ops in controller mode, where inputHelperHost is

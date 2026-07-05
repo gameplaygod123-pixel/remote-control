@@ -3,7 +3,7 @@ import { connectSignaling } from '../shared/signaling/signalingClient'
 import { resolveSignalingUrl } from '../shared/signaling/resolveSignalingUrl'
 import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConnection'
 import { SignalingMessage } from '../shared/protocol'
-import { AGENT_TOKEN } from '../shared/config'
+import TokenSetupView from '../setup/TokenSetupView'
 import StatusPill from '../shared/components/StatusPill'
 import CopyButton from '../shared/components/CopyButton'
 import UpdateBadge from '../shared/components/UpdateBadge'
@@ -119,6 +119,10 @@ function AgentView(): React.JSX.Element {
   // clientRef/deviceIdRef just below.
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const [incomingRequest, setIncomingRequest] = useState(false)
+  // The server rejected our saved house token (someone rotated it, or it was
+  // mistyped on setup). Routes back to the token screen -- without this the
+  // only fix would be hand-deleting a userData file.
+  const [tokenRejected, setTokenRejected] = useState(false)
   const [pendingControllerId, setPendingControllerId] = useState<string | null>(null)
   const [trustedList, setTrustedList] = useState<{ id: string; trustedAt: number }[]>([])
   const [name, setName] = useState('')
@@ -336,6 +340,11 @@ function AgentView(): React.JSX.Element {
     }, THUMBNAIL_INTERVAL_MS)
 
     async function start(): Promise<void> {
+      // Fetched per connection attempt (not once at module load) so a token
+      // corrected via the setup screen is picked up by the reload without
+      // any cache to invalidate. App.tsx guarantees one exists by the time
+      // this view mounts.
+      const houseToken = (await window.api.houseToken.get()) ?? ''
       client = await connectSignaling(resolveSignalingUrl, {
         onDisconnect: () => setStatus('disconnected, reconnecting...'),
         onReconnect: () => {
@@ -351,7 +360,7 @@ function AgentView(): React.JSX.Element {
           setStatus('reconnected, registering')
           client!.send({
             type: 'register-agent',
-            token: AGENT_TOKEN,
+            token: houseToken,
             deviceId: agentDeviceId,
             pin: agentPin,
             name: nameRef.current
@@ -380,6 +389,7 @@ function AgentView(): React.JSX.Element {
           setStatus(
             message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`
           )
+          if (!message.ok && message.reason === 'invalid token') setTokenRejected(true)
         } else if (message.type === 'connection-request') {
           controllerCapsRef.current = message.caps ?? []
           if (await window.api.trusted.isTrusted(message.controllerId)) {
@@ -561,7 +571,7 @@ function AgentView(): React.JSX.Element {
 
       transport.send({
         type: 'register-agent',
-        token: AGENT_TOKEN,
+        token: houseToken,
         deviceId: agentDeviceId,
         pin: agentPin,
         name: nameRef.current
@@ -580,6 +590,12 @@ function AgentView(): React.JSX.Element {
     }
   }, [deviceId, pin, attachChannel])
 
+  if (tokenRejected) {
+    // Full reload after saving: the signaling client and any half-open
+    // session were built around the rejected token, so a clean restart of
+    // this window is simpler and safer than unwinding them in place.
+    return <TokenSetupView onSaved={() => window.location.reload()} />
+  }
   if (deviceId === null || pin === null) {
     return (
       <div className="agent-shell">

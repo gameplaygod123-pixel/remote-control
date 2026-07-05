@@ -256,6 +256,9 @@ export default function ControllerSession({
 
     async function connect(): Promise<void> {
       setStatus('connecting to signaling server')
+      // House token rides every pair-request -- the server rejects the PIN
+      // check outright without it. Guaranteed present by App.tsx's gate.
+      const houseToken = (await window.api.houseToken.get()) ?? ''
       const client = await connectSignaling(resolveSignalingUrl, {
         onDisconnect: () => setStatus('disconnected, reconnecting...'),
         onReconnect: () => {
@@ -272,6 +275,7 @@ export default function ControllerSession({
           setStatus('reconnected, pairing')
           client.send({
             type: 'pair-request',
+            token: houseToken,
             deviceId,
             pin,
             controllerId,
@@ -304,6 +308,7 @@ export default function ControllerSession({
               setTimeout(() => {
                 transport.send({
                   type: 'pair-request',
+                  token: houseToken,
                   deviceId,
                   pin,
                   controllerId,
@@ -389,6 +394,7 @@ export default function ControllerSession({
               setTimeout(() => {
                 transport.send({
                   type: 'pair-request',
+                  token: houseToken,
                   deviceId,
                   pin,
                   controllerId,
@@ -483,6 +489,7 @@ export default function ControllerSession({
       setStatus('pairing')
       transport.send({
         type: 'pair-request',
+        token: houseToken,
         deviceId,
         pin,
         controllerId,

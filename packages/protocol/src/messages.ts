@@ -31,6 +31,11 @@ export const PairRequestMessage = z.object({
   pin: z.string(),
   controllerId: z.string(), // lets the agent recognize a previously-trusted controller
   caps: z.array(z.string()).optional(),
+  // Same pre-shared "house token" agents use to register. Optional in the
+  // schema only so old clients still *parse*; the server rejects a missing/
+  // wrong token, so the PIN can never be brute-forced by strangers who found
+  // the (public) signaling URL.
+  token: z.string().optional(),
 });
 
 export const PairResultMessage = z.object({
@@ -91,6 +96,9 @@ export const PongMessage = z.object({
 // show a "Computers" list with online/offline status, Parsec/AnyDesk-style.
 export const ListDevicesMessage = z.object({
   type: z.literal("list-devices"),
+  // House token (see PairRequestMessage) -- the device roster includes names
+  // and live thumbnails, which strangers must not see.
+  token: z.string().optional(),
 });
 
 export const DeviceInfo = z.object({
@@ -173,6 +181,8 @@ export const PairingPendingMessage = z.object({
 export const RemoveDeviceMessage = z.object({
   type: z.literal("remove-device"),
   deviceId: z.string(),
+  // House token (see PairRequestMessage) -- removal is destructive.
+  token: z.string().optional(),
 });
 
 // Pushed to every subscribed controller once a device is actually removed,
@@ -183,7 +193,18 @@ export const DeviceRemovedMessage = z.object({
   deviceId: z.string(),
 });
 
+// Server-to-client: something about the request itself was unacceptable
+// (today: a missing/wrong house token on messages that have no dedicated
+// failure reply, like list-devices). Old clients drop unknown message types
+// on parse, so adding this is backward compatible; new clients use it to
+// show "fix your token" instead of a silent disconnect loop.
+export const ServerErrorMessage = z.object({
+  type: z.literal("server-error"),
+  reason: z.string(),
+});
+
 export const SignalingMessage = z.discriminatedUnion("type", [
+  ServerErrorMessage,
   RegisterAgentMessage,
   RegisterResultMessage,
   PairRequestMessage,

@@ -35,6 +35,10 @@ const api = {
     write: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write', text),
     read: (): Promise<string> => ipcRenderer.invoke('clipboard:read')
   },
+  houseToken: {
+    get: (): Promise<string | null> => ipcRenderer.invoke('house-token:get'),
+    set: (token: string): Promise<void> => ipcRenderer.invoke('house-token:set', token)
+  },
   agent: {
     captureThumbnail: (): Promise<string | null> => ipcRenderer.invoke('agent:capture-thumbnail')
   },
