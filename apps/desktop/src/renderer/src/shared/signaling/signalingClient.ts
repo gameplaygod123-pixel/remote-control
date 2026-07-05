@@ -62,7 +62,7 @@ export function connectSignaling(
     }
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     async function connectOnce(): Promise<void> {
       const target = typeof url === 'string' ? url : await url()
       if (stopped) return // close() may have been called while resolving
@@ -90,20 +90,21 @@ export function connectSignaling(
 
       socket.addEventListener('close', () => {
         if (heartbeatTimer) clearInterval(heartbeatTimer)
+        if (stopped) return
 
-        if (!settled) {
-          settled = true
-          reject(new Error(`failed to connect to ${target}`))
-          return
-        }
-
-        if (!stopped) {
-          options.onDisconnect?.()
-          reconnectTimer = setTimeout(() => {
-            reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_DELAY_MS)
-            void connectOnce()
-          }, reconnectDelay)
-        }
+        // The *initial* attempt failing used to reject and give up -- which
+        // stranded an agent that started while the published tunnel URL was
+        // mid-rotation: it showed "failed to connect" forever even though a
+        // working URL appeared on GitHub minutes later. Retry the first
+        // connect exactly like a reconnect (each attempt re-resolves the
+        // URL); the promise simply resolves on whichever attempt succeeds
+        // first, and callers' onReconnect/registration flow is unaffected
+        // since it only fires after `settled`.
+        options.onDisconnect?.()
+        reconnectTimer = setTimeout(() => {
+          reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_DELAY_MS)
+          void connectOnce()
+        }, reconnectDelay)
       })
     }
 
