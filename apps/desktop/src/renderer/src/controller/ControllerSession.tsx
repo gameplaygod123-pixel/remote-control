@@ -16,6 +16,7 @@ import {
   isEditableTarget,
   videoRelativePosition
 } from '../shared/input/inputProtocol'
+import { INPUT_HELPER_CAP } from '../shared/input/capabilities'
 
 // Mousemove fires far more often than the remote side needs to react to --
 // this caps how frequently position updates cross the data channel without
@@ -66,6 +67,12 @@ export default function ControllerSession({
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
+  // Second, input-only PC used only when the agent advertises input-helper
+  // support (pair-result.caps) -- its data channels are created by the
+  // agent's native input-helper process, not by anything in this renderer.
+  // When absent (older agent), input rides the video pc's own channels
+  // instead, exactly as before -- see the pair-result handler below.
+  const inputPcRef = useRef<RTCPeerConnection | null>(null)
   const inputChannelRef = useRef<RTCDataChannel | null>(null)
   const moveChannelRef = useRef<RTCDataChannel | null>(null)
   const lastMoveSentRef = useRef(0)
@@ -100,6 +107,7 @@ export default function ControllerSession({
     window.api.window.setFullScreen(false)
     clientRef.current?.close()
     pcRef.current?.close()
+    inputPcRef.current?.close()
     onBack()
   }
 
@@ -252,15 +260,17 @@ export default function ControllerSession({
         onDisconnect: () => setStatus('disconnected, reconnecting...'),
         onReconnect: () => {
           // The server forgets pairing on disconnect, and the old peer
-          // connection (if any) is no longer valid -- start over.
+          // connection(s) (if any) are no longer valid -- start over.
           pcRef.current?.close()
           pcRef.current = null
+          inputPcRef.current?.close()
+          inputPcRef.current = null
           setActivePc(null)
           inputChannelRef.current = null
           moveChannelRef.current = null
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, pairing')
-          client.send({ type: 'pair-request', deviceId, pin, controllerId })
+          client.send({ type: 'pair-request', deviceId, pin, controllerId, caps: [INPUT_HELPER_CAP] })
         }
       })
       if (cancelled) {
@@ -286,7 +296,13 @@ export default function ControllerSession({
             if (message.reason === 'unknown device id') {
               setStatus(`pairing failed: ${message.reason} (waiting for agent, retrying...)`)
               setTimeout(() => {
-                transport.send({ type: 'pair-request', deviceId, pin, controllerId })
+                transport.send({
+                  type: 'pair-request',
+                  deviceId,
+                  pin,
+                  controllerId,
+                  caps: [INPUT_HELPER_CAP]
+                })
               }, PAIR_RETRY_DELAY_MS)
               return
             }
@@ -298,17 +314,48 @@ export default function ControllerSession({
           // A re-pair can arrive while an old (e.g. failed) peer connection
           // is still around -- close it so we don't leak connections.
           pcRef.current?.close()
+          inputPcRef.current?.close()
+          inputPcRef.current = null
           setStatus('paired, waiting for video offer')
-          const pc = createPeerConnection(transport, deviceId, {
-            onInputChannel: (channel) => {
-              inputChannelRef.current = channel
-            },
-            onMoveChannel: (channel) => {
-              moveChannelRef.current = channel
-            },
-            onFileChannel: attachChannel,
-            onClipboardChannel: attachClipboardChannel
-          })
+
+          // Whether the agent negotiated this session with its native
+          // input-helper process (see docs/native-input-plan.md). Exactly
+          // one of the two branches below runs -- never both -- so input is
+          // never double-injected.
+          const useHelper = message.caps?.includes(INPUT_HELPER_CAP) ?? false
+
+          if (useHelper) {
+            // Input-only PC: the agent's helper creates its data channels,
+            // this side just listens for them, exactly like the video pc
+            // does for its own tracks below.
+            const inputPc = createPeerConnection(transport, deviceId, {
+              channel: 'input',
+              onInputChannel: (channel) => {
+                inputChannelRef.current = channel
+              },
+              onMoveChannel: (channel) => {
+                moveChannelRef.current = channel
+              }
+            })
+            inputPcRef.current = inputPc
+          }
+
+          const pc = createPeerConnection(
+            transport,
+            deviceId,
+            useHelper
+              ? { onFileChannel: attachChannel, onClipboardChannel: attachClipboardChannel }
+              : {
+                  onInputChannel: (channel) => {
+                    inputChannelRef.current = channel
+                  },
+                  onMoveChannel: (channel) => {
+                    moveChannelRef.current = channel
+                  },
+                  onFileChannel: attachChannel,
+                  onClipboardChannel: attachClipboardChannel
+                }
+          )
           pcRef.current = pc
           setActivePc(pc)
           pc.onconnectionstatechange = () => {
@@ -330,13 +377,21 @@ export default function ControllerSession({
             if (pc.connectionState === 'failed' && pcRef.current === pc) {
               pc.close()
               pcRef.current = null
+              inputPcRef.current?.close()
+              inputPcRef.current = null
               setActivePc(null)
               inputChannelRef.current = null
               moveChannelRef.current = null
               setConnectionType(null)
               if (videoRef.current) videoRef.current.srcObject = null
               setTimeout(() => {
-                transport.send({ type: 'pair-request', deviceId, pin, controllerId })
+                transport.send({
+                  type: 'pair-request',
+                  deviceId,
+                  pin,
+                  controllerId,
+                  caps: [INPUT_HELPER_CAP]
+                })
               }, PAIR_RETRY_DELAY_MS)
             }
           }
@@ -365,12 +420,24 @@ export default function ControllerSession({
             }
             if (videoRef.current) videoRef.current.srcObject = event.streams[0]
           }
+        } else if (message.type === 'sdp-offer' && message.channel === 'input' && inputPcRef.current) {
+          const pc = inputPcRef.current
+          await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
+          const answer = await pc.createAnswer()
+          await pc.setLocalDescription(answer)
+          transport.send({ type: 'sdp-answer', deviceId, sdp: answer.sdp, channel: 'input' })
         } else if (message.type === 'sdp-offer' && pcRef.current) {
           const pc = pcRef.current
           await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
-          transport.send({ type: 'sdp-answer', deviceId, sdp: answer.sdp })
+          transport.send({ type: 'sdp-answer', deviceId, sdp: answer.sdp, channel: 'video' })
+        } else if (message.type === 'ice-candidate' && message.channel === 'input' && inputPcRef.current) {
+          await inputPcRef.current.addIceCandidate({
+            candidate: message.candidate,
+            sdpMid: message.sdpMid,
+            sdpMLineIndex: message.sdpMLineIndex ?? undefined
+          })
         } else if (message.type === 'ice-candidate' && pcRef.current) {
           await pcRef.current.addIceCandidate({
             candidate: message.candidate,
@@ -381,7 +448,7 @@ export default function ControllerSession({
       })
 
       setStatus('pairing')
-      transport.send({ type: 'pair-request', deviceId, pin, controllerId })
+      transport.send({ type: 'pair-request', deviceId, pin, controllerId, caps: [INPUT_HELPER_CAP] })
     }
 
     connect().catch((error) => setStatus(`error: ${String(error)}`))
@@ -390,6 +457,8 @@ export default function ControllerSession({
       cancelled = true
       clientRef.current?.close()
       pcRef.current?.close()
+      inputPcRef.current?.close()
+      inputPcRef.current = null
       inputChannelRef.current = null
       moveChannelRef.current = null
       window.api.window.setFullScreen(false)

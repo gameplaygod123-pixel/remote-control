@@ -65,6 +65,22 @@ declare global {
       fileTransfer: {
         save: (name: string, data: Uint8Array) => Promise<string>
       }
+      inputHelper: {
+        isReady: () => Promise<boolean>
+        startSession: () => Promise<void>
+        stopSession: () => Promise<void>
+        remoteAnswer: (sdp: string) => Promise<void>
+        remoteIce: (
+          candidate: string,
+          sdpMid: string | null,
+          sdpMLineIndex: number | null
+        ) => Promise<void>
+        onOffer: (handler: (sdp: string) => void) => void
+        onIce: (
+          handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+        ) => void
+        onDown: (handler: () => void) => void
+      }
     }
   }
 }

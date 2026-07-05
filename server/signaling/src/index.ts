@@ -142,6 +142,7 @@ wss.on("connection", (socket) => {
           type: "connection-request",
           deviceId: message.deviceId,
           controllerId: message.controllerId,
+          caps: message.caps,
         });
         send(socket, { type: "pairing-pending" });
         console.log(`connection request pending approval: ${message.deviceId}`);
@@ -156,7 +157,7 @@ wss.on("connection", (socket) => {
         if (!pendingWs) break; // already resolved (timed out, controller left)
         if (message.accept) {
           pairController(message.deviceId, pendingWs);
-          send(pendingWs, { type: "pair-result", ok: true });
+          send(pendingWs, { type: "pair-result", ok: true, caps: message.caps });
           send(agent.ws, { type: "pair-result", ok: true });
           console.log(`controller paired with agent: ${message.deviceId}`);
         } else {

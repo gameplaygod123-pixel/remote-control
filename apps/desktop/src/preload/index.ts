@@ -84,6 +84,33 @@ const api = {
   fileTransfer: {
     save: (name: string, data: Uint8Array): Promise<string> =>
       ipcRenderer.invoke('file-transfer:save', name, data)
+  },
+  // Bridges the agent renderer to the native input-helper process (see
+  // main/inputHelperHost.ts). No-op / always-not-ready in controller mode.
+  inputHelper: {
+    isReady: (): Promise<boolean> => ipcRenderer.invoke('input-helper:is-ready'),
+    startSession: (): Promise<void> => ipcRenderer.invoke('input-helper:start-session'),
+    stopSession: (): Promise<void> => ipcRenderer.invoke('input-helper:stop-session'),
+    remoteAnswer: (sdp: string): Promise<void> =>
+      ipcRenderer.invoke('input-helper:remote-answer', sdp),
+    remoteIce: (
+      candidate: string,
+      sdpMid: string | null,
+      sdpMLineIndex: number | null
+    ): Promise<void> => ipcRenderer.invoke('input-helper:remote-ice', candidate, sdpMid, sdpMLineIndex),
+    onOffer: (handler: (sdp: string) => void): void => {
+      ipcRenderer.on('input-helper:offer', (_event, sdp) => handler(sdp))
+    },
+    onIce: (
+      handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+    ): void => {
+      ipcRenderer.on('input-helper:ice', (_event, candidate, sdpMid, sdpMLineIndex) =>
+        handler(candidate, sdpMid, sdpMLineIndex)
+      )
+    },
+    onDown: (handler: () => void): void => {
+      ipcRenderer.on('input-helper:down', () => handler())
+    }
   }
 }
 

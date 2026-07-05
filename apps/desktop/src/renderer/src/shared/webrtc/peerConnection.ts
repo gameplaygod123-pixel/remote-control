@@ -33,6 +33,12 @@ const ICE_SERVERS: RTCIceServer[] = [
 ]
 
 export interface PeerConnectionOptions {
+  // Which signaling channel this PC's ICE candidates should be tagged with
+  // (see packages/protocol SignalChannel). Defaults to 'video' -- the only
+  // caller that needs 'input' is the controller's second, input-only PC (see
+  // ControllerSession.tsx); the agent's input PC lives in the native
+  // input-helper process instead and doesn't go through this function.
+  channel?: 'video' | 'input'
   // The agent is always the SDP offerer (see AgentView/ControllerSession),
   // so it's the one that must create the data channel for it to be
   // negotiated in the initial offer. The controller instead receives it via
@@ -75,7 +81,8 @@ export function createPeerConnection(
         deviceId,
         candidate: event.candidate.candidate,
         sdpMid: event.candidate.sdpMid,
-        sdpMLineIndex: event.candidate.sdpMLineIndex
+        sdpMLineIndex: event.candidate.sdpMLineIndex,
+        channel: options.channel ?? 'video'
       })
     }
   }

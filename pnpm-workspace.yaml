@@ -6,3 +6,4 @@ allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
+  node-datachannel: true

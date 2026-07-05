@@ -20,29 +20,50 @@ export const RegisterResultMessage = z.object({
   reason: z.string().optional(),
 });
 
+// `caps` advertises optional protocol capabilities the sender supports, e.g.
+// "input-helper" (a native input-helper process, see docs/native-input-plan.md).
+// Absent/empty is exactly what every existing client sends (they don't know
+// this field exists), which correctly reads as "supports nothing extra" and
+// falls back to the original behavior -- never a breaking change.
 export const PairRequestMessage = z.object({
   type: z.literal("pair-request"),
   deviceId: z.string(),
   pin: z.string(),
   controllerId: z.string(), // lets the agent recognize a previously-trusted controller
+  caps: z.array(z.string()).optional(),
 });
 
 export const PairResultMessage = z.object({
   type: z.literal("pair-result"),
   ok: z.boolean(),
   reason: z.string().optional(),
+  // The *agent's* caps, populated by the server from the agent's
+  // connection-response when relaying its accept as this pair-result to the
+  // controller -- lets the controller know, at the moment pairing succeeds,
+  // whether the agent has a native input-helper it can negotiate against.
+  caps: z.array(z.string()).optional(),
 });
+
+// `channel` distinguishes which of the agent's (potentially several) peer
+// connections a message belongs to: the video PC (screen share, still
+// renderer-owned) vs. the input PC (owned by the agent's native input-helper
+// process -- see docs/native-input-plan.md). Absent/omitted means "video",
+// so every message an old client ever sent -- none of which know this field
+// exists -- still parses and routes exactly as before.
+export const SignalChannel = z.enum(["video", "input"]);
 
 export const SdpOfferMessage = z.object({
   type: z.literal("sdp-offer"),
   deviceId: z.string(),
   sdp: z.string(),
+  channel: SignalChannel.optional(),
 });
 
 export const SdpAnswerMessage = z.object({
   type: z.literal("sdp-answer"),
   deviceId: z.string(),
   sdp: z.string(),
+  channel: SignalChannel.optional(),
 });
 
 export const IceCandidateMessage = z.object({
@@ -51,6 +72,7 @@ export const IceCandidateMessage = z.object({
   candidate: z.string(),
   sdpMid: z.string().nullable(),
   sdpMLineIndex: z.number().nullable(),
+  channel: SignalChannel.optional(),
 });
 
 // Keeps the WebSocket connection alive through proxies/tunnels (e.g. a free
@@ -123,6 +145,10 @@ export const ConnectionRequestMessage = z.object({
   type: z.literal("connection-request"),
   deviceId: z.string(),
   controllerId: z.string(),
+  // The *controller's* caps, carried through from its pair-request so the
+  // agent knows -- before it even answers -- whether this controller can
+  // negotiate a native input-helper session at all.
+  caps: z.array(z.string()).optional(),
 });
 
 // The agent's answer to a ConnectionRequestMessage.
@@ -130,6 +156,7 @@ export const ConnectionResponseMessage = z.object({
   type: z.literal("connection-response"),
   deviceId: z.string(),
   accept: z.boolean(),
+  caps: z.array(z.string()).optional(),
 });
 
 // Sent to the controller in place of an immediate pair-result, so its UI

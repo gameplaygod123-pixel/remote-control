@@ -15,6 +15,7 @@ import { getConnectionType, type ConnectionType } from '../shared/webrtc/connect
 import { useVideoStats } from '../shared/webrtc/useVideoStats'
 import { attachClipboardChannel } from '../shared/clipboard/clipboardSync'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
+import { INPUT_HELPER_CAP } from '../shared/input/capabilities'
 
 // Cached after the first remote input message -- the agent's screen doesn't
 // resize mid-session, and re-querying nut.js on every mousemove would add
@@ -121,6 +122,18 @@ function AgentView(): React.JSX.Element {
   const clientRef = useRef<Awaited<ReturnType<typeof connectSignaling>> | null>(null)
   const nameRef = useRef(name)
   nameRef.current = name
+  const deviceIdRef = useRef(deviceId)
+  deviceIdRef.current = deviceId
+  // Set from the most recent connection-request's caps, read again whenever
+  // this controller is (auto- or manually-) accepted -- see the
+  // connection-request handler and handleAccept below.
+  const controllerCapsRef = useRef<string[]>([])
+  // Whether THIS session actually negotiated the input-helper path -- decided
+  // once at accept time (controller supports it AND the helper is currently
+  // ready) and read again when pair-result creates the session, so the
+  // agent's actual behavior always matches what it told the controller in
+  // connection-response.caps.
+  const useHelperRef = useRef(false)
   const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
     useFileTransferChannel()
 
@@ -202,6 +215,18 @@ function AgentView(): React.JSX.Element {
   // connection-request handler below) -- otherwise every reconnect from
   // the same, already-trusted Mac would ask again, which given how often
   // this app already auto-reconnects would get old fast.
+  // Decides, and remembers in useHelperRef, whether THIS accepted session
+  // will use the input-helper path -- both sides must agree, so the caps
+  // sent here in connection-response are the single source of truth that
+  // pair-result later echoes back to the controller.
+  async function negotiateHelperCaps(): Promise<string[]> {
+    const useHelper =
+      controllerCapsRef.current.includes(INPUT_HELPER_CAP) &&
+      (await window.api.inputHelper.isReady())
+    useHelperRef.current = useHelper
+    return useHelper ? [INPUT_HELPER_CAP] : []
+  }
+
   async function handleAccept(): Promise<void> {
     setIncomingRequest(false)
     if (pendingControllerId) {
@@ -209,7 +234,8 @@ function AgentView(): React.JSX.Element {
       setTrustedList(await window.api.trusted.list())
     }
     setPendingControllerId(null)
-    clientRef.current?.send({ type: 'connection-response', deviceId, accept: true })
+    const caps = await negotiateHelperCaps()
+    clientRef.current?.send({ type: 'connection-response', deviceId, accept: true, caps })
   }
 
   function handleReject(): void {
@@ -226,6 +252,47 @@ function AgentView(): React.JSX.Element {
 
   useEffect(() => {
     window.api.trusted.list().then(setTrustedList)
+  }, [])
+
+  // Subscribed once for the component's lifetime, not per-pairing-session --
+  // the input-helper process outlives any single call and its offer/ice
+  // events need relaying to whichever signaling client is current right now,
+  // via clientRef/deviceIdRef rather than closing over a specific session's
+  // variables. deviceId is read through a ref (not a dependency) so this
+  // doesn't re-subscribe (and double-register) when identity finishes
+  // loading from disk.
+  useEffect(() => {
+    window.api.inputHelper.onOffer((sdp) => {
+      clientRef.current?.send({
+        type: 'sdp-offer',
+        deviceId: deviceIdRef.current ?? '',
+        sdp,
+        channel: 'input'
+      })
+    })
+    window.api.inputHelper.onIce((candidate, sdpMid, sdpMLineIndex) => {
+      clientRef.current?.send({
+        type: 'ice-candidate',
+        deviceId: deviceIdRef.current ?? '',
+        candidate,
+        sdpMid,
+        sdpMLineIndex,
+        channel: 'input'
+      })
+    })
+    window.api.inputHelper.onDown(() => {
+      // Known limitation (see docs/native-input-plan.md): this does not
+      // instantly recover an in-flight helper-backed session -- its input
+      // silently stops until the next re-pair, which then correctly falls
+      // back since useHelperRef is cleared here before any future
+      // negotiateHelperCaps() call.
+      useHelperRef.current = false
+      setStatus((current) =>
+        current.startsWith('paired') || current.startsWith('connection')
+          ? `${current} (input helper crashed -- reconnect to recover input)`
+          : current
+      )
+    })
   }, [])
 
   useEffect(() => {
@@ -259,6 +326,8 @@ function AgentView(): React.JSX.Element {
           pc = undefined
           setActivePc(null)
           if (videoRef.current) videoRef.current.srcObject = null
+          void window.api.inputHelper.stopSession()
+          useHelperRef.current = false
           setStatus('reconnected, registering')
           client!.send({
             type: 'register-agent',
@@ -292,8 +361,15 @@ function AgentView(): React.JSX.Element {
             message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`
           )
         } else if (message.type === 'connection-request') {
+          controllerCapsRef.current = message.caps ?? []
           if (await window.api.trusted.isTrusted(message.controllerId)) {
-            transport.send({ type: 'connection-response', deviceId: agentDeviceId, accept: true })
+            const caps = await negotiateHelperCaps()
+            transport.send({
+              type: 'connection-response',
+              deviceId: agentDeviceId,
+              accept: true,
+              caps
+            })
           } else {
             setPendingControllerId(message.controllerId)
             setIncomingRequest(true)
@@ -309,22 +385,41 @@ function AgentView(): React.JSX.Element {
           setIncomingRequest(false)
           pc?.close()
           setStatus('paired, starting screen share')
-          const onInputMessage = (event: MessageEvent): void => {
-            enqueueRemoteInput(JSON.parse(event.data) as RemoteInputMessage)
+
+          // Exactly one of these two paths runs per session, never both --
+          // useHelperRef was decided once, at accept time, and is exactly
+          // what this agent told the controller via connection-response.caps
+          // (which the controller's own pair-result.caps echoes back), so
+          // both sides agree on which path to expect.
+          if (useHelperRef.current) {
+            // Input lives entirely in the native input-helper process now --
+            // stopSession() first clears out any stale PC/queue state from a
+            // previous pairing before starting the fresh one.
+            void window.api.inputHelper.stopSession()
+            window.api.inputHelper.startSession()
+            pc = createPeerConnection(transport, agentDeviceId, {
+              createFileChannel: true,
+              onFileChannel: attachChannel,
+              onClipboardChannel: attachClipboardChannel
+            })
+          } else {
+            const onInputMessage = (event: MessageEvent): void => {
+              enqueueRemoteInput(JSON.parse(event.data) as RemoteInputMessage)
+            }
+            pc = createPeerConnection(transport, agentDeviceId, {
+              createInputChannel: true,
+              onInputChannel: (channel) => {
+                resetInputQueue() // fresh session -- controller seq restarts at 0
+                channel.onmessage = onInputMessage
+              },
+              onMoveChannel: (channel) => {
+                channel.onmessage = onInputMessage
+              },
+              createFileChannel: true,
+              onFileChannel: attachChannel,
+              onClipboardChannel: attachClipboardChannel
+            })
           }
-          pc = createPeerConnection(transport, agentDeviceId, {
-            createInputChannel: true,
-            onInputChannel: (channel) => {
-              resetInputQueue() // fresh session -- controller seq restarts at 0
-              channel.onmessage = onInputMessage
-            },
-            onMoveChannel: (channel) => {
-              channel.onmessage = onInputMessage
-            },
-            createFileChannel: true,
-            onFileChannel: attachChannel,
-            onClipboardChannel: attachClipboardChannel
-          })
           setActivePc(pc)
           pc.onconnectionstatechange = () => {
             setStatus(`connection: ${pc!.connectionState}`)
@@ -412,9 +507,22 @@ function AgentView(): React.JSX.Element {
 
           const offer = await pc.createOffer()
           await pc.setLocalDescription(offer)
-          transport.send({ type: 'sdp-offer', deviceId: agentDeviceId, sdp: offer.sdp })
+          transport.send({
+            type: 'sdp-offer',
+            deviceId: agentDeviceId,
+            sdp: offer.sdp,
+            channel: 'video'
+          })
+        } else if (message.type === 'sdp-answer' && message.channel === 'input') {
+          void window.api.inputHelper.remoteAnswer(message.sdp)
         } else if (message.type === 'sdp-answer' && pc) {
           await pc.setRemoteDescription({ type: 'answer', sdp: message.sdp })
+        } else if (message.type === 'ice-candidate' && message.channel === 'input') {
+          void window.api.inputHelper.remoteIce(
+            message.candidate,
+            message.sdpMid,
+            message.sdpMLineIndex
+          )
         } else if (message.type === 'ice-candidate' && pc) {
           await pc.addIceCandidate({
             candidate: message.candidate,
@@ -441,6 +549,7 @@ function AgentView(): React.JSX.Element {
       clientRef.current = null
       pc?.close()
       client?.close()
+      void window.api.inputHelper.stopSession()
     }
   }, [deviceId, pin, attachChannel])
 

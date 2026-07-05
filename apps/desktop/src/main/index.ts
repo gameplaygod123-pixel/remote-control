@@ -43,6 +43,7 @@ import { getSavedMode, saveMode, resetMode, type AppMode } from './appModeConfig
 import { initAutoUpdater } from './updater'
 import { saveToDownloads } from './fileTransfer'
 import { getCachedPin, setCachedPin, clearCachedPin, setLastDeviceId } from './controllerMemory'
+import { startInputHelperHost, type InputHelperHost } from './inputHelperHost'
 
 export type { AppMode }
 
@@ -150,11 +151,19 @@ function createBrowserWindow(searchParams?: string, hidden = false): BrowserWind
   return win
 }
 
+// Set when appMode === 'agent' so the input-helper host (below) has
+// somewhere to forward its offer/ice/down events -- there is only ever one
+// agent window per process.
+let agentWindow: BrowserWindow | undefined
+
 function createWindow(appMode: AppMode): void {
   const win = createBrowserWindow(undefined, appMode === 'agent' && startHidden)
   win.setTitle(`Personal Remote - ${appMode}`)
 
-  if (appMode === 'agent') setupAgentTray(win)
+  if (appMode === 'agent') {
+    agentWindow = win
+    setupAgentTray(win)
+  }
 }
 
 // Shown once on a fresh install/first launch when no mode is known yet
@@ -262,6 +271,22 @@ app.whenReady().then(async () => {
     app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] })
   }
 
+  // Only the agent side ever needs to inject input, so only it spawns the
+  // native input-helper process (see inputHelperHost.ts). Started eagerly
+  // (not lazily on first pairing) so the helper's native modules are already
+  // loaded and it's reporting ready by the time a controller actually pairs,
+  // rather than adding first-connection latency.
+  let inputHelperHost: InputHelperHost | undefined
+  if (appMode === 'agent') {
+    inputHelperHost = startInputHelperHost({
+      onOffer: (sdp) => agentWindow?.webContents.send('input-helper:offer', sdp),
+      onIce: (candidate, sdpMid, sdpMLineIndex) =>
+        agentWindow?.webContents.send('input-helper:ice', candidate, sdpMid, sdpMLineIndex),
+      onDown: () => agentWindow?.webContents.send('input-helper:down')
+    })
+    app.on('before-quit', () => inputHelperHost?.destroy())
+  }
+
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
@@ -274,6 +299,25 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('get-mode', (): AppMode => appMode)
   ipcMain.handle('get-app-version', (): string => app.getVersion())
+
+  // Bridges the agent renderer to the input-helper process (see
+  // inputHelperHost.ts). No-ops in controller mode, where inputHelperHost is
+  // never created -- ControllerSession.tsx never calls these.
+  ipcMain.handle('input-helper:is-ready', (): boolean => inputHelperHost?.isReady() ?? false)
+  ipcMain.handle('input-helper:start-session', (): void => inputHelperHost?.startSession())
+  ipcMain.handle('input-helper:stop-session', (): void => inputHelperHost?.stopSession())
+  ipcMain.handle('input-helper:remote-answer', (_event, sdp: string): void =>
+    inputHelperHost?.remoteAnswer(sdp)
+  )
+  ipcMain.handle(
+    'input-helper:remote-ice',
+    (
+      _event,
+      candidate: string,
+      sdpMid: string | null,
+      sdpMLineIndex: number | null
+    ): void => inputHelperHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
+  )
 
   // Explicit escape hatch for the "deleted and reinstalled, mode picker
   // never showed again" case -- uninstalling doesn't clear userData, so

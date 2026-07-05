@@ -28,7 +28,8 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@nut-tree-fork/nut-js": "^4.2.6",
     "@remote-control/protocol": "workspace:*",
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "node-datachannel": "^0.32.3"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
@@ -54,7 +55,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron",
-      "esbuild"
+      "esbuild",
+      "node-datachannel"
     ]
   }
 }
