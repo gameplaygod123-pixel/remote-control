@@ -8,3 +8,6 @@ build/Release/
 .DS_Store
 .claude/
 .cache/
+
+# House token -- the real pre-shared secret, must never reach the public repo
+/token
