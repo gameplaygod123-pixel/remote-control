@@ -8,3 +8,18 @@ allowBuilds:
   esbuild: true
   koffi: true
   node-datachannel: true
+# Windows installers are packaged FROM the Mac (see scripts/build-win.sh), so
+# platform-split binary packages (koffi's @koromix/koffi-<platform> optional
+# deps) must be installed for win32-x64 too, not just this machine's own
+# darwin-arm64 -- otherwise the packaged app ships without the Windows
+# binary and the input-helper dies at require('koffi') on the target
+# machine. (node-datachannel has the same cross-platform problem but ships
+# a single build/Release binary instead of per-platform packages; that one
+# is handled by the swap in scripts/build-win.sh.)
+supportedArchitectures:
+  os:
+    - current
+    - win32
+  cpu:
+    - current
+    - x64

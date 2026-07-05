@@ -61,10 +61,22 @@ echo "swapped in win32-x64 node-datachannel binary"
 cd "$REPO_ROOT/apps/desktop"
 npm run build:win
 
-# Sanity check: the built app must contain the WINDOWS binary.
+# Sanity check: the built app must contain the WINDOWS binaries.
 PACKED=$(find dist/win-unpacked -path "*node-datachannel*" -name "node_datachannel.node" | head -1)
 if [ -z "$PACKED" ] || ! file "$PACKED" | grep -q "PE32+"; then
   echo "ERROR: packaged node_datachannel.node is missing or not a Windows PE" >&2
   exit 1
 fi
 echo "OK: packaged node-datachannel is win32-x64 ($PACKED)"
+
+# koffi ships per-platform binaries as @koromix/koffi-<platform> optional
+# deps; pnpm only installs the win32 one because of supportedArchitectures
+# in pnpm-workspace.yaml -- verify it actually made it into the package,
+# otherwise the input-helper's keyboard injection dies at require('koffi')
+# on the target machine.
+KOFFI_WIN=$(find dist/win-unpacked -path "*koffi-win32-x64*" -name "*.node" | head -1)
+if [ -z "$KOFFI_WIN" ] || ! file "$KOFFI_WIN" | grep -q "PE32+"; then
+  echo "ERROR: packaged koffi win32-x64 binary is missing (check pnpm supportedArchitectures)" >&2
+  exit 1
+fi
+echo "OK: packaged koffi win32-x64 present ($KOFFI_WIN)"
