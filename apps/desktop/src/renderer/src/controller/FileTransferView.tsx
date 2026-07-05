@@ -164,6 +164,12 @@ export default function FileTransferView(): React.JSX.Element {
     })
   }
 
+  // Header checkbox: select every online machine, or clear the lot.
+  function toggleSelectAll(): void {
+    const online = devices.filter((d) => d.online).map((d) => d.deviceId)
+    setSelected((prev) => (prev.size >= online.length ? new Set() : new Set(online)))
+  }
+
   function addFiles(list: FileList | File[]): void {
     setFiles((prev) => [...prev, ...Array.from(list)])
   }
@@ -222,7 +228,7 @@ export default function FileTransferView(): React.JSX.Element {
           <h1 className="dl-heading">
             โอนไฟล์<span className="dl-cursor">_</span>
           </h1>
-          <p className="dl-subheading">เลือกได้หลายเครื่อง แล้วส่งไฟล์พร้อมกันทีเดียว</p>
+          <p className="dl-subheading">ส่งเป็นโฟลเดอร์ไม่ได้ — ต้องบีบอัดเป็นไฟล์ .zip ก่อน</p>
         </div>
         <span className="dl-pill is-ok">{status}</span>
       </div>
@@ -260,7 +266,13 @@ export default function FileTransferView(): React.JSX.Element {
 
       <div className="ft-table">
         <div className="ft-row ft-row--head">
-          <span />
+          <input
+            type="checkbox"
+            title="เลือกเครื่องที่ online ทั้งหมด"
+            disabled={sending || onlineCount === 0}
+            checked={onlineCount > 0 && selected.size >= onlineCount}
+            onChange={toggleSelectAll}
+          />
           <span>ชื่อเครื่อง</span>
           <span>สถานะ</span>
           <span>OS</span>
@@ -302,10 +314,21 @@ export default function FileTransferView(): React.JSX.Element {
         </span>
         <button
           className="dl-btn ft-send"
-          disabled={sending || files.length === 0 || selected.size === 0}
-          onClick={() => void sendToSelected()}
+          // Never a dead button: with no files chosen yet it opens the file
+          // picker itself instead of sitting disabled with no explanation.
+          disabled={sending || (files.length > 0 && selected.size === 0)}
+          onClick={() => {
+            if (files.length === 0) fileInputRef.current?.click()
+            else void sendToSelected()
+          }}
         >
-          {sending ? 'กำลังส่ง...' : `ส่งไฟล์ไป ${selected.size} เครื่อง`}
+          {sending
+            ? 'กำลังส่ง...'
+            : files.length === 0
+              ? '+ เลือกไฟล์เพื่อส่ง'
+              : selected.size === 0
+                ? 'ติ๊กเลือกเครื่องก่อน'
+                : `ส่งไฟล์ไป ${selected.size} เครื่อง`}
         </button>
       </div>
     </div>
