@@ -65,8 +65,8 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.17.0** (house token). v1.16.0 (clipboard-in-helper) was
-promoted the same day after the owner's real-machine test passed.
+Latest release: **v1.17.1** (CSP hotfix — see below). v1.17.0 = house token;
+v1.16.0 = clipboard-in-helper.
 
 Working and verified on real hardware:
 - Latency ≈ Parsec (direct connection, ~11 ms network).
@@ -112,6 +112,29 @@ Since v1.17.0 — **house token** (one shared secret per household):
   whatever holds 8080, let the supervisor's 60s ensureServer respawn it.
 - Verified: 9/9 local enforcement tests + live server rejects the old
   default and accepts the new token.
+
+**v1.17.1 CSP incident (2026-07-06) — big lesson:** the renderer CSP
+(`connect-src 'self' ws: wss:`) had no `https:` source, so the packaged
+app's fetch of `signaling-url.json` from raw.githubusercontent.com was
+silently CSP-blocked since the mechanism shipped (v1.13) — the resolver
+swallows failures and falls back to the build-time URL, so it only LOOKED
+like dynamic URL resolution worked. First tunnel rotation after v1.17.0
+bricked every installed app ("disconnected, reconnecting..." forever).
+Lessons:
+- Dev couldn't catch it (DEV mode skips the fetch). To test the real
+  production network path on the Mac: `npx electron out/main/index.js` with
+  `APP_MODE=agent` after `npm run build`, ideally with a deliberately dead
+  `VITE_SIGNALING_URL` so only the GitHub path can succeed. NOTE: running
+  electron against a bare file uses `~/Library/Application Support/Electron/`
+  (not `desktop/`) for userData — seed house-token.txt there.
+- Windows-side Claude can diagnose installed-app issues by reading the
+  packed bundle under the install dir (CSP, baked constants) — no DevTools
+  needed.
+- A fallback that silently swallows failures hides dead code paths for
+  months. Prefer logging/telemetry when a primary path falls back.
+- Old (pre-v1.17.0) clients that fail the token check hammer the server in
+  a ~1s connect/reject loop (server closes; client backoff resets on every
+  successful open). Harmless at family scale; remember when reading logs.
 
 ## Backlog (rough priority)
 
