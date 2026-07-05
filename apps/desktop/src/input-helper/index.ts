@@ -26,11 +26,6 @@ import {
   getScreenSize
 } from '../main/input/injector'
 import type { RemoteInputMessage } from '../renderer/src/shared/input/inputProtocol'
-import {
-  runClipboardSync,
-  type ClipboardChannelLike
-} from '../renderer/src/shared/clipboard/clipboardSyncCore'
-import { readClipboardText, writeClipboardText } from './clipboardNative'
 import { logInputHelper } from '../main/inputHelperLog'
 
 // TEMP diagnostic (helper-session-flapping investigation, see
@@ -243,10 +238,6 @@ const CONNECT_TIMEOUT_MS = process.env.NDC_TEST_SHORT_TIMEOUT === '1' ? 100 : 5_
 const MAX_ATTEMPTS = 3
 let attemptNumber = 0
 let connectTimeout: ReturnType<typeof setTimeout> | undefined
-// Stops the clipboard-sync poll for the current session's clipboard channel;
-// re-created per negotiation attempt, so the previous one must be torn down
-// before the next starts (otherwise stale poll intervals stack up).
-let clipboardStop: (() => void) | null = null
 
 function clearConnectTimeout(): void {
   if (connectTimeout) clearTimeout(connectTimeout)
@@ -256,10 +247,6 @@ function clearConnectTimeout(): void {
 function closeSession(): void {
   log(sessionCounter, `closeSession() called, pc=${pc ? 'present' : 'none'}`)
   clearConnectTimeout()
-  if (clipboardStop) {
-    clipboardStop()
-    clipboardStop = null
-  }
   if (pc) {
     // Belt-and-suspenders: null the pc-level handlers before close(), on top
     // of the `pc !== conn` guard inside each handler below. Confirmed by an
@@ -382,30 +369,11 @@ function attemptNegotiation(): void {
   }
   moves.onmessage = onChannelMessage
 
-  // Clipboard sync lives here in the helper (not the agent renderer) for the
-  // same reason input does: when the agent window is hidden, the renderer is
-  // throttled, but this process keeps polling. The controller side stays in
-  // its renderer (its window is focused while controlling). The shared core
-  // (clipboardSyncCore) handles the echo-guard/poll; this process just gives
-  // it OS-level clipboard access (clipboardNative).
-  const clipboard = conn.createDataChannel('clipboard')
-  clipboard.onopen = () => {
-    if (pc !== conn) return
-    log(mySession, 'data channel "clipboard" open')
-  }
-  clipboardStop = runClipboardSync(clipboard as unknown as ClipboardChannelLike, {
-    read: readClipboardText,
-    write: writeClipboardText
-  })
-
   void (async () => {
     const offer = await conn.createOffer()
     await conn.setLocalDescription(offer)
     if (pc !== conn) {
-      log(
-        mySession,
-        'IGNORED stale offer (superseded before createOffer/setLocalDescription resolved)'
-      )
+      log(mySession, 'IGNORED stale offer (superseded before createOffer/setLocalDescription resolved)')
       return
     }
     log(mySession, `offer created, sdp length=${offer.sdp?.length}`)
@@ -455,10 +423,7 @@ process.on('message', (raw: MainToHelper) => {
     case 'remote-answer': {
       const session = currentSession?.session ?? sessionCounter
       if (!currentSession || !pc) {
-        log(
-          session,
-          'remote-answer received but no active pc (already closed/superseded) -- ignored'
-        )
+        log(session, 'remote-answer received but no active pc (already closed/superseded) -- ignored')
         break
       }
       log(session, `remote-answer received, sdp length=${raw.sdp.length}`)
