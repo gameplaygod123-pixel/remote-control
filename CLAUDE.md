@@ -65,11 +65,28 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.19.4** (file-transfer reliability: progress now = bytes flushed to network not queued, poll-based drain replaces the edge-triggered bufferedamountlow that wedged 2nd sends, 20s stall watchdog + double-send guard). v1.19.3 = native picker fix. v1.19.1 = live send button + select-all + zip hint. v1.19.0 = (controller sidebar + multi-machine file-transfer page: headless per-target pushes via pushFilesToDevice — no caps advertised so agents serve the legacy file channel; roster gained optional os/lastSeenAt; CAVEAT: pushing to a machine mid-session kicks that session). v1.18.3 = Parsec-style floating session controls. v1.18.2 = single-instance lock (relaunch surfaces the running window). v1.18.1 = UI pass 2: agent preview box removed, agent window fixed 680×700; controller stays resizable). v1.18.0 = titlebar (OS bar hidden, single app-drawn bar
-with centered title — start of the owner's UI-redesign push; shared
-`TitleBar` component; Windows uses titleBarOverlay whose 38px height must
-match `.app-titlebar`). v1.17.1 = CSP hotfix (confirmed on the real Windows
-agent); v1.17.0 = house token; v1.16.0 = clipboard-in-helper.
+Latest release: **v1.19.4**. The controller now has an app-shell layout: a
+slim icon sidebar (Computers / File Transfer) drawn by ControllerView, with a
+single centered TitleBar (OS bar hidden — macOS hiddenInset traffic lights,
+Windows titleBarOverlay whose 38px height must match `.app-titlebar`). A live
+session takes the whole window with Parsec-style floating controls (collapsible
+pill; only the ⠿ grip is a window-drag region). Recent release trail:
+- v1.19.x — **multi-machine file transfer** (File Transfer page): tick online
+  machines, pick (native OS dialog via `dialog:pick-files` — a hidden
+  `<input type=file>` .click() does NOT open the dialog in this Electron
+  build) or drop files, send to all at once. Each target = an independent
+  headless `pushFilesToDevice` (own signaling+peer connection, advertises no
+  caps so the agent serves the file channel on its legacy renderer path).
+  Reliability (v1.19.4): progress = bytes flushed to network (offset −
+  bufferedAmount), poll-based drain (the edge-triggered `bufferedamountlow`
+  never fired on a 2nd consecutive send → wedged at ~18% while bytes still
+  drained), 20s stall watchdog, double-send guard. Roster gained optional
+  os + lastSeenAt. CAVEAT: an agent serves one controller at a time, so
+  pushing to a machine mid-session kicks that session.
+- v1.18.x — UI redesign pass: single centered titlebar; agent window fixed
+  680×700 (preview box removed); single-instance lock (relaunch surfaces the
+  running window / brings the tray agent back); floating session controls.
+- v1.17.1 CSP hotfix; v1.17.0 house token; v1.16.0 clipboard-in-helper.
 
 Working and verified on real hardware:
 - Latency ≈ Parsec (direct connection, ~11 ms network).
@@ -77,7 +94,8 @@ Working and verified on real hardware:
 - Thai/English typing + shortcuts; Windows grave `~` layout toggle.
 - Typed language follows the CONTROLLER machine's layout (deliberate design —
   each user switches language on their own machine).
-- File transfer controller→agent (tested with a 580 MB file).
+- File transfer controller→agent, including multi-machine send from the File
+  Transfer page — verified: repeated back-to-back sends, ~590 MB files.
 - Auto-update via GitHub Releases; signaling self-heals via supervisor.
 
 Also working since v1.16.0:
