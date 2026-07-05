@@ -30,6 +30,15 @@
   color: rgba(235, 225, 215, 0.55);
 }
 
+/* Light mode (controller only): the titlebar sits inside .ctl-shell, so its
+   dark-tuned border/text need to flip on a light ground. */
+:root[data-theme='light'] .ctl-shell .app-titlebar {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+:root[data-theme='light'] .ctl-shell .app-titlebar__text {
+  color: rgba(60, 45, 35, 0.6);
+}
+
 /* Invisible drag strip for windows whose content has no titlebar row of
    its own (the first-launch setup cards) -- without it a frameless window
    can't be moved at all. */

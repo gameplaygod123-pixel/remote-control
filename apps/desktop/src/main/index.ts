@@ -43,6 +43,7 @@ import {
 } from './agentIdentity'
 import { getSavedMode, saveMode, resetMode, type AppMode } from './appModeConfig'
 import { getHouseToken, saveHouseToken } from './houseToken'
+import { getTheme, saveTheme, type Theme } from './themeConfig'
 import { initAutoUpdater } from './updater'
 import { saveToDownloads } from './fileTransfer'
 import { getCachedPin, setCachedPin, clearCachedPin, setLastDeviceId } from './controllerMemory'
@@ -354,6 +355,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-app-version', (): string => app.getVersion())
   ipcMain.handle('house-token:get', (): string | null => getHouseToken())
   ipcMain.handle('house-token:set', (_event, token: string): void => saveHouseToken(token))
+  ipcMain.handle('theme:get', (): Theme => getTheme())
+  ipcMain.handle('theme:set', (_event, theme: Theme): void => saveTheme(theme))
 
   // Bridges the agent renderer to the input-helper process (see
   // inputHelperHost.ts). No-ops in controller mode, where inputHelperHost is

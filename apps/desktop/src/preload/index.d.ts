@@ -29,6 +29,10 @@ declare global {
         get: () => Promise<string | null>
         set: (token: string) => Promise<void>
       }
+      theme: {
+        get: () => Promise<'dark' | 'light'>
+        set: (theme: 'dark' | 'light') => Promise<void>
+      }
       agent: {
         captureThumbnail: () => Promise<string | null>
       }

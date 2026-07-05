@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import DeviceListView from './DeviceListView'
 import FileTransferView from './FileTransferView'
 import ControllerSession from './ControllerSession'
+import ThemeToggle from './ThemeToggle'
 import TitleBar from '../shared/components/TitleBar'
 import { AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
 
@@ -51,6 +52,14 @@ function ControllerView(): React.JSX.Element {
   const [activeDevice, setActiveDevice] = useState<ActiveDevice | null>(ENV_AUTO_CONNECT)
   const [page, setPage] = useState<Page>('computers')
 
+  // Apply the saved light/dark choice as the controller mounts so there's no
+  // dark flash before the toggle's own effect runs.
+  useEffect(() => {
+    window.api.theme.get().then((t) => {
+      document.documentElement.dataset.theme = t
+    })
+  }, [])
+
   function handleConnect(deviceId: string, pin: string, name?: string): void {
     window.api.controllerMemory.setLastDeviceId(deviceId)
     setActiveDevice({ deviceId, pin, name })
@@ -88,6 +97,8 @@ function ControllerView(): React.JSX.Element {
           >
             <FilesIcon />
           </button>
+          <div className="ctl-side__spacer" />
+          <ThemeToggle />
         </nav>
         <div className="ctl-content">
           {page === 'computers' ? <DeviceListView onConnect={handleConnect} /> : <FileTransferView />}

@@ -13,17 +13,44 @@
   inset: 0;
   display: flex;
   flex-direction: column;
-  background: #171210;
-  color: #f0e6dc;
+  background: var(--dl-bg);
+  color: var(--dl-text);
   font-family:
     ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  /* Dark ("Amber Dark") is the default token set; the light set lives in the
+     data-theme block below and is toggled by the sidebar switch (persisted
+     per machine via main/themeConfig). Everything themable references these
+     tokens so one attribute flip re-skins the whole controller shell. */
+  --dl-bg: #171210;
+  --dl-text: #f0e6dc;
+  --dl-rail: #120e0b;
+  --dl-thumb: #120d0b;
   --dl-accent: #e0793f;
+  --dl-accent-ink: #1a1008;
   --dl-accent-dim: #8a6a52;
   --dl-text-dim: #9c8a7c;
   --dl-border: #332822;
   --dl-card-bg: #1f1712;
   --dl-ok: #4ade80;
   --dl-idle: #6b6058;
+  --dl-hover: rgba(255, 255, 255, 0.06);
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+:root[data-theme='light'] .ctl-shell {
+  --dl-bg: #f4ede3;
+  --dl-text: #2c2119;
+  --dl-rail: #efe5d7;
+  --dl-thumb: #efe4d6;
+  --dl-accent: #cf5f26;
+  --dl-accent-ink: #fff6ee;
+  --dl-accent-dim: #b08a6f;
+  --dl-text-dim: #8a7563;
+  --dl-border: #e3d5c2;
+  --dl-card-bg: #fffaf2;
+  --dl-ok: #1a9e4b;
+  --dl-idle: #b6a693;
+  --dl-hover: rgba(120, 80, 40, 0.08);
 }
 
 .ctl-main {
@@ -40,7 +67,7 @@
   align-items: center;
   gap: 10px;
   padding: 14px 0;
-  background: #120e0b;
+  background: var(--dl-rail);
   border-right: 1px solid var(--dl-border);
 }
 
@@ -58,13 +85,86 @@
 }
 
 .ctl-side__btn:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #f0e6dc;
+  background: var(--dl-hover);
+  color: var(--dl-text);
 }
 
 .ctl-side__btn.is-active {
-  background: rgba(224, 121, 63, 0.16);
+  background: color-mix(in srgb, var(--dl-accent) 18%, transparent);
   color: var(--dl-accent);
+}
+
+/* Pushes the theme toggle to the bottom of the rail, away from the nav. */
+.ctl-side__spacer {
+  margin-top: auto;
+}
+
+/* Sliding sun/moon switch (see ThemeToggle.tsx). Track shows both icons
+   faintly; the accent knob slides over the active one. */
+.theme-toggle {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid var(--dl-border);
+  background: var(--dl-thumb);
+  cursor: pointer;
+  padding: 0;
+  display: block;
+}
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--dl-accent);
+  outline-offset: 2px;
+}
+.theme-toggle__icon {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  color: var(--dl-text-dim);
+  opacity: 0.5;
+}
+.theme-toggle__icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.theme-toggle__sun {
+  left: 5px;
+}
+.theme-toggle__moon {
+  right: 5px;
+}
+.theme-toggle__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--dl-accent);
+  color: var(--dl-accent-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  transform: translateX(20px);
+  transition: transform 0.24s cubic-bezier(0.34, 1.3, 0.5, 1), background 0.25s ease;
+}
+.theme-toggle__knob svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+:root[data-theme='light'] .theme-toggle__knob {
+  transform: translateX(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle__knob {
+    transition: none;
+  }
 }
 
 .ctl-content {
@@ -133,7 +233,7 @@
   border-radius: 999px;
   font-size: 13px;
   font-weight: 600;
-  background: rgba(224, 121, 63, 0.12);
+  background: color-mix(in srgb, var(--dl-accent) 14%, transparent);
   color: var(--dl-accent);
 }
 
@@ -227,7 +327,7 @@
   aspect-ratio: 16 / 10;
   border-radius: 6px;
   overflow: hidden;
-  background: #120d0b;
+  background: var(--dl-thumb);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -296,7 +396,7 @@
   font-weight: 700;
   cursor: pointer;
   background: var(--dl-accent);
-  color: #1a1008;
+  color: var(--dl-accent-ink);
 }
 
 .dl-btn:hover {
@@ -338,8 +438,8 @@
   padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--dl-border);
-  background: #120d0b;
-  color: #f0e6dc;
+  background: var(--dl-thumb);
+  color: var(--dl-text);
   outline: none;
 }
 
@@ -421,7 +521,7 @@
 }
 
 .ft-file-chip__remove:hover {
-  color: #f0e6dc;
+  color: var(--dl-text);
 }
 
 .ft-table {
