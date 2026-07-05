@@ -5,6 +5,7 @@ import { createPeerConnection, SignalTransport } from '../shared/webrtc/peerConn
 import { SignalingMessage } from '../shared/protocol'
 import TokenSetupView from '../setup/TokenSetupView'
 import StatusPill from '../shared/components/StatusPill'
+import TitleBar from '../shared/components/TitleBar'
 import CopyButton from '../shared/components/CopyButton'
 import UpdateBadge from '../shared/components/UpdateBadge'
 import SwitchModeLink from '../shared/components/SwitchModeLink'
@@ -606,14 +607,7 @@ function AgentView(): React.JSX.Element {
 
   return (
     <div className="agent-shell" onDragOver={handleDragOver} onDrop={handleDrop}>
-      <div className="agent-titlebar">
-        <div className="agent-dots">
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className="agent-titletext">Personal Remote — Agent</div>
-      </div>
+      <TitleBar title="Personal Remote — Agent" />
 
       <div className="agent-body">
         <div className="app-header">

@@ -6,6 +6,7 @@ import { classify } from '../shared/components/StatusPill'
 import UpdateBadge from '../shared/components/UpdateBadge'
 import SwitchModeLink from '../shared/components/SwitchModeLink'
 import TokenSetupView from '../setup/TokenSetupView'
+import TitleBar from '../shared/components/TitleBar'
 import '../assets/deviceList.css'
 
 interface Device {
@@ -176,14 +177,7 @@ export default function DeviceListView({
 
   return (
     <div className="dl-shell">
-      <div className="dl-titlebar">
-        <div className="dl-dots">
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className="dl-titletext">Personal Remote — Computers</div>
-      </div>
+      <TitleBar title="Personal Remote — Computers" />
 
       <div className="dl-body">
         <div className="dl-header">

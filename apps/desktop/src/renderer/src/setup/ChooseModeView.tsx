@@ -6,6 +6,7 @@
 function ChooseModeView(): React.JSX.Element {
   return (
     <div className="app-shell">
+      <div className="setup-drag-strip" />
       <div className="app-header">
         <div className="app-icon">🖥️</div>
         <div>

@@ -114,6 +114,16 @@ function createBrowserWindow(searchParams?: string, hidden = false): BrowserWind
     show: false,
     autoHideMenuBar: true,
     icon,
+    // No OS titlebar -- the app draws its own slim bar (see .app-titlebar
+    // in app.css) with the title centered. macOS keeps its floating
+    // traffic-light buttons; Windows gets the native min/max/close cluster
+    // overlaid via titleBarOverlay, colored to match the bar. The overlay
+    // height must match the CSS bar height (38px) or the native buttons
+    // misalign with the drawn bar.
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    ...(process.platform === 'win32'
+      ? { titleBarOverlay: { color: '#171210', symbolColor: '#c9beb5', height: 38 } }
+      : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
