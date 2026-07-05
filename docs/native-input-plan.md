@@ -297,3 +297,103 @@ binary loading and asar packaging do, neither of which this bug touches -- the
 local dev-mode harness was used instead, and is what the evidence above comes
 from. This should be re-verified against a real packaged install (ideally on
 the machine that originally reported it) before considering this fully closed.
+
+## 11. Addendum: real 8-round log from v1.14.1 -- the stale-event fix wasn't it
+
+Branch `fix/input-pc-retry`. The stale-event guard shipped in §10 did NOT fix
+the flapping: a real packaged v1.14.1 install still alternated 4 good / 4 bad
+across 8 real sessions against the Mac controller. The saved
+`%TEMP%\input-helper.log` from that run gave a much more specific signature
+than anything reproducible locally:
+
+- Every bad session (2, 3, 6, 7 of 8) received the controller's answer and
+  **all 3** of its remote ICE candidates -- identical to every good session.
+- Every bad session sent only **2 of its own 4** outgoing ICE candidates: the
+  two `host` candidates (fired instantly, always identical across every
+  session -- just enumerating the same local interfaces) but **never** the
+  two `srflx` (STUN server-reflexive) candidates that every good session sent
+  50-250ms after its offer.
+- Bad sessions then sat in `connectionState=connecting` for 10-13 seconds
+  (well past any real STUN round-trip) until the next "back" killed them --
+  not a slow candidate, a candidate that never gets gathered at all.
+- Zero `IGNORED stale ...` or `REJECTED` lines anywhere in the log, and the
+  host log showed no `PONG TIMEOUT`/kill/respawn -- so the §10 fix's own
+  guard never even had anything to catch, and the helper process itself
+  never went down. This rules out both the exact mechanism §10 fixed and the
+  ping/pong liveness check as causes of *this* symptom (the stale-event fix
+  is still correct and worth keeping -- it's just apparently not what's
+  making these particular sessions fail).
+
+This points at the helper's own STUN candidate-gathering pipeline stalling
+for a subset of `RTCPeerConnection` instances specifically -- most likely
+some form of state (a socket, a STUN transaction, or an internal client
+object) that node-datachannel doesn't fully release between one
+`RTCPeerConnection` and the next within the same process, matching the
+"port/candidate reuse" theory floated when the log was first reviewed.
+
+### Two tracks landed in this branch
+
+**Track 1 -- diagnostics, to actually pin down *why* (not yet confirmed; needs
+a real-hardware run with this build):**
+- `initLogger` (from `node-datachannel`, not the polyfill) is now wired to
+  the same file log, so libdatachannel/libjuice's own debug output shows up
+  next to everything else. Defaults to `'Debug'`; override with
+  `NDC_LOG_LEVEL` if that's too noisy to read by hand.
+- `onicegatheringstatechange` is now logged per pc (with the same
+  stale-guard as every other handler) -- shows whether a bad session's
+  gathering state ever reaches `'complete'` (meaning it gave up gathering
+  srflx and thinks it's done) or stays stuck at `'gathering'` forever.
+- Every outgoing ICE candidate's `typ host|srflx|relay` is now extracted and
+  logged directly (`candidateType()`), instead of requiring a human to
+  decode a truncated candidate string by eye -- this is what made the
+  host/srflx split in this addendum's analysis fast to confirm, and will
+  make it immediately obvious whether a **relay** (TURN) candidate ever
+  shows up in *any* session, good or bad -- if it never does, the TURN
+  entries (particularly the one whose URL has a `?transport=tcp` suffix
+  baked into the `user:pass@host:port` string the polyfill constructs --
+  unconfirmed whether libdatachannel's URI parser accepts that combination)
+  have likely been silently broken all along.
+- `NDC_ICE_SERVERS=stun-only` (env var) drops every ICE server except the
+  plain Google STUN entry, to A/B whether the openrelay STUN/TURN entries
+  are implicated at all.
+- None of the above reproduces the actual stall locally (same as every
+  prior investigation round) -- confirming/denying the leading theory needs
+  the log from an actual bad session on real hardware.
+
+**Track 2 -- self-healing retry (shipped regardless of what Track 1 finds):**
+- `input-helper/index.ts`: `attemptNegotiation()` now sets a 5s
+  (`CONNECT_TIMEOUT_MS`) timer after sending each offer. If the pc hasn't
+  reached `'connected'` by then, it logs the exact stall (state, gathering
+  state, in/out candidate counts, attempt number), fully tears down (through
+  the same `closeSession()` used everywhere else -- stale-event guard
+  included), and starts a brand new `RTCPeerConnection` + offer -- up to
+  `MAX_ATTEMPTS = 3` total per top-level `start-session` before giving up
+  and sending `{evt:'fatal'}` up to the host (logged; doesn't crash the
+  helper process, since this is an ordinary negotiation failure, not a
+  process-level fault).
+- `ControllerSession.tsx`: the `sdp-offer`/`channel:'input'` handler no
+  longer assumes `inputPcRef.current` already exists and reuses it -- it now
+  **always** closes whatever's there (if anything), builds a brand new
+  input-only `RTCPeerConnection`, clears `inputChannelRef`/`moveChannelRef`
+  immediately (so `sendInput()` can never send on a channel belonging to the
+  pc just closed, in the gap before the new one's channels open), and only
+  then answers. Every offer -- the first one for a session or a retry's
+  replacement -- gets a genuinely clean pc; the proactive pc creation that
+  used to happen in the `pair-result` handler was removed since it's now
+  redundant (and would otherwise be one more pc instance to tear down before
+  the first real offer arrives).
+- Verified locally: temporarily forcing `CONNECT_TIMEOUT_MS` down to 100ms
+  (via `NDC_TEST_SHORT_TIMEOUT=1`, a permanent but inert-by-default test
+  knob) forced 3 real retries end to end -- each with a fresh
+  `RTCPeerConnection`/offer/session number, correctly giving up and sending
+  `fatal` after the third, and safely no-op'ing a late answer that arrived
+  for an already-abandoned attempt (via the same `pc`/`currentSession`
+  guards, not a crash). Re-ran at the real 5s timeout afterward to confirm
+  no regression: a normal session still connects on attempt 1/3 with no
+  unnecessary retries, and the new candidate-type logging shows the expected
+  `host` (#1-2) then `srflx` (#3-4) pattern cleanly.
+- Not yet verified: the actual acceptance criterion (8-10 real rounds against
+  the Mac controller, every session getting input within ~6s). Needs a real
+  build + a real test round, same environment limitation as every prior
+  round in this investigation -- this sandboxed dev environment cannot
+  reliably run a packaged Electron build at all (see §10's addendum).

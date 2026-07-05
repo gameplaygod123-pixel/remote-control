@@ -324,21 +324,14 @@ export default function ControllerSession({
           // never double-injected.
           const useHelper = message.caps?.includes(INPUT_HELPER_CAP) ?? false
 
-          if (useHelper) {
-            // Input-only PC: the agent's helper creates its data channels,
-            // this side just listens for them, exactly like the video pc
-            // does for its own tracks below.
-            const inputPc = createPeerConnection(transport, deviceId, {
-              channel: 'input',
-              onInputChannel: (channel) => {
-                inputChannelRef.current = channel
-              },
-              onMoveChannel: (channel) => {
-                moveChannelRef.current = channel
-              }
-            })
-            inputPcRef.current = inputPc
-          }
+          // The input PC itself is NOT created here -- it's built fresh from
+          // whichever sdp-offer (channel:'input') actually arrives, below.
+          // The helper may retry its own negotiation (closing and recreating
+          // its RTCPeerConnection, see docs/native-input-plan.md's
+          // helper-session-flapping addendum), sending a brand new offer with
+          // fresh ICE credentials each time -- building here and then
+          // reusing across retries would apply a NEW offer to an OLD,
+          // no-longer-matching pc.
 
           const pc = createPeerConnection(
             transport,
@@ -420,8 +413,29 @@ export default function ControllerSession({
             }
             if (videoRef.current) videoRef.current.srcObject = event.streams[0]
           }
-        } else if (message.type === 'sdp-offer' && message.channel === 'input' && inputPcRef.current) {
-          const pc = inputPcRef.current
+        } else if (message.type === 'sdp-offer' && message.channel === 'input') {
+          // Every input-channel offer -- the first one for this session AND
+          // any the helper sends after retrying its own negotiation -- gets
+          // a completely fresh pc. A retried offer carries new ICE
+          // credentials from a brand new RTCPeerConnection on the agent
+          // side; reusing the old inputPc here would try to apply it to a
+          // connection it doesn't belong to.
+          inputPcRef.current?.close()
+          // Clear immediately, not just on the new pc's onopen -- sendInput()
+          // must never send on a channel belonging to the pc we just closed
+          // in the gap before the new one's channels actually open.
+          inputChannelRef.current = null
+          moveChannelRef.current = null
+          const pc = createPeerConnection(transport, deviceId, {
+            channel: 'input',
+            onInputChannel: (channel) => {
+              inputChannelRef.current = channel
+            },
+            onMoveChannel: (channel) => {
+              moveChannelRef.current = channel
+            }
+          })
+          inputPcRef.current = pc
           await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)

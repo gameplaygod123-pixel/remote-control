@@ -14,6 +14,7 @@
 // process, and is immune to the window-visibility-driven throttling that
 // makes remote control input die the moment the agent window is closed.
 // See docs/native-input-plan.md for the full investigation and design.
+import { initLogger, type LogLevel } from 'node-datachannel'
 import { RTCPeerConnection } from 'node-datachannel/polyfill'
 import {
   moveMouse,
@@ -38,11 +39,28 @@ function log(session: number, message: string): void {
   logInputHelper('HELPER', `[session ${session}] ${message}`)
 }
 
+// TEMP diagnostic: node-datachannel's own (libdatachannel/libjuice) debug
+// log, redirected here instead of stdout (a packaged build's helper has no
+// console at all). Level defaults to 'Debug' -- can be turned down via
+// NDC_LOG_LEVEL if it proves too noisy to read by hand. Logged with
+// `sessionCounter` (not a per-pc session, since these lines originate from
+// the native library itself, not from one of our own pc-bound handlers).
+initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Debug', (level, message) => {
+  logInputHelper('HELPER', `[session ${sessionCounter}] [ndc:${level}] ${message}`)
+})
+
 // Mirrors shared/webrtc/peerConnection.ts's ICE_SERVERS -- duplicated rather
 // than imported because that file lives under renderer/src and assumes a
 // browser's global RTCPeerConnection; this process supplies its own via the
 // node-datachannel polyfill instead. Keep these two lists in sync by hand.
-const ICE_SERVERS: RTCIceServer[] = [
+//
+// TEMP diagnostic (helper-session-flapping investigation): NDC_ICE_SERVERS=
+// stun-only drops everything but the plain Google STUN server, to test
+// whether the openrelay STUN/TURN entries (particularly the
+// `?transport=tcp` one, whose credential-embedding + query-suffix combo
+// hasn't been confirmed to round-trip correctly through the polyfill's URL
+// rewriting) have anything to do with the observed failures.
+const FULL_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:openrelay.metered.ca:80' },
   {
@@ -61,6 +79,17 @@ const ICE_SERVERS: RTCIceServer[] = [
     credential: 'openrelayproject'
   }
 ]
+const STUN_ONLY_ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
+const ICE_SERVERS: RTCIceServer[] =
+  process.env.NDC_ICE_SERVERS === 'stun-only' ? STUN_ONLY_ICE_SERVERS : FULL_ICE_SERVERS
+
+// TEMP diagnostic: pulls the `typ host|srflx|relay` suffix out of a raw ICE
+// candidate string so the log says outright whether a server-reflexive/relay
+// candidate ever gets gathered, instead of requiring a human to decode a
+// candidate string by eye.
+function candidateType(candidate: string): string {
+  return /typ (\w+)/.exec(candidate)?.[1] ?? '?'
+}
 
 type MainToHelper =
   | { cmd: 'start-session' }
@@ -82,10 +111,9 @@ function send(message: HelperToMain): void {
 
 let pc: InstanceType<typeof RTCPeerConnection> | undefined
 // TEMP diagnostic (helper-session-flapping investigation): incremented on
-// every start-session. Read at the top of startSession() and captured into a
-// local (see `mySession` below) so a pc's callbacks always log the session
-// number they were created under, even if `sessionCounter` has since moved
-// on to a newer session.
+// every negotiation attempt (including retries -- see attemptNegotiation()),
+// so a pc's callbacks always log the attempt number they were created under,
+// even if `sessionCounter` has since moved on to a newer attempt/session.
 let sessionCounter = 0
 
 // Cached after the first remote input message -- same rationale as the
@@ -170,14 +198,34 @@ function enqueueRemoteInput(message: RemoteInputMessage): void {
 }
 
 // TEMP diagnostic (helper-session-flapping investigation): tracks the
-// currently-active session's number and per-session counters, so the
+// currently-active attempt's number and per-attempt counters, so the
 // module-level process.on('message') handler below (which isn't inside
-// startSession()'s closure) can still log with the right session number and
+// attemptNegotiation()'s closure) can still log with the right number and
 // running counts for remote-answer/remote-ice.
 let currentSession: { session: number; incomingIce: number; inputMessages: number } | undefined
 
+// Self-healing retry (see docs/native-input-plan.md's helper-session-
+// flapping addendum): if a negotiation attempt doesn't reach 'connected'
+// within CONNECT_TIMEOUT_MS, close it and start over with a brand new
+// RTCPeerConnection + fresh offer, up to MAX_ATTEMPTS total for one
+// top-level start-session before giving up. Retries are NOT silent renegs of
+// the same pc (which failed to reach connected for whatever reason, possibly
+// leftover native state) -- they're a full teardown and a genuinely new
+// negotiation, same as the fix for the stale-event leak: don't try to repair
+// a connection whose state might already be confused, replace it outright.
+const CONNECT_TIMEOUT_MS = process.env.NDC_TEST_SHORT_TIMEOUT === '1' ? 100 : 5_000
+const MAX_ATTEMPTS = 3
+let attemptNumber = 0
+let connectTimeout: ReturnType<typeof setTimeout> | undefined
+
+function clearConnectTimeout(): void {
+  if (connectTimeout) clearTimeout(connectTimeout)
+  connectTimeout = undefined
+}
+
 function closeSession(): void {
   log(sessionCounter, `closeSession() called, pc=${pc ? 'present' : 'none'}`)
+  clearConnectTimeout()
   if (pc) {
     // Belt-and-suspenders: null the pc-level handlers before close(), on top
     // of the `pc !== conn` guard inside each handler below. Confirmed by an
@@ -188,10 +236,12 @@ function closeSession(): void {
     // pc already existed. Without a guard, that stale event's side effects
     // (relaying an ICE candidate that belongs to a different, dead
     // negotiation) get attributed to whatever session is current when they
-    // finally arrive, corrupting it with mismatched ICE credentials -- the
-    // root cause of the observed flapping (works, dies, works, dies...).
+    // finally arrive, corrupting it with mismatched ICE credentials -- one
+    // possible contributor to the observed flapping (works, dies, works,
+    // dies...); see the addendum for what the evidence actually showed.
     pc.onicecandidate = null
     pc.onconnectionstatechange = null
+    pc.onicegatheringstatechange = null
     pc.close()
   }
   pc = undefined
@@ -199,27 +249,38 @@ function closeSession(): void {
   resetInputQueue()
 }
 
+function startSession(): void {
+  attemptNumber = 0
+  attemptNegotiation()
+}
+
 // The agent is always the offerer for the input PC too, for parity with the
 // existing video PC (see AgentView.tsx) and because renegotiation isn't
-// needed this way -- both data channels are known upfront.
-function startSession(): void {
+// needed this way -- both data channels are known upfront. Called once for
+// the initial attempt and again (with a fresh pc) for each retry.
+function attemptNegotiation(): void {
   closeSession()
+  attemptNumber += 1
   sessionCounter += 1
   const mySession = sessionCounter
   currentSession = { session: mySession, incomingIce: 0, inputMessages: 0 }
-  log(mySession, 'start-session received, creating new RTCPeerConnection')
+  log(
+    mySession,
+    `start-session, attempt ${attemptNumber}/${MAX_ATTEMPTS}, creating new RTCPeerConnection` +
+      ` (iceServers=${ICE_SERVERS.length})`
+  )
   const conn = new RTCPeerConnection({ iceServers: ICE_SERVERS })
   pc = conn
   let outgoingIce = 0
 
   // Every handler below checks `pc !== conn` first and bails if so -- this
-  // pc has been superseded by a later session (closeSession() nulls the two
+  // pc has been superseded by a later attempt (closeSession() nulls the
   // pc-level handlers above as a first line of defense, but the data-channel
   // handlers are local to this closure and can't be nulled from there, so
   // this guard is the one mechanism that reliably covers all of them). Bound
   // to `conn`/`mySession` via closure, NOT the module-level `pc`/
   // `sessionCounter`, so a stale event is recognized as stale rather than
-  // silently attributed to whatever session happens to be current when it
+  // silently attributed to whatever attempt happens to be current when it
   // arrives.
   conn.onconnectionstatechange = () => {
     if (pc !== conn) {
@@ -227,6 +288,12 @@ function startSession(): void {
       return
     }
     log(mySession, `pc connectionState=${conn.connectionState}`)
+    if (conn.connectionState === 'connected') clearConnectTimeout()
+  }
+
+  conn.onicegatheringstatechange = () => {
+    if (pc !== conn) return
+    log(mySession, `iceGatheringState=${conn.iceGatheringState}`)
   }
 
   conn.onicecandidate = (event) => {
@@ -236,7 +303,10 @@ function startSession(): void {
     }
     if (event.candidate) {
       outgoingIce += 1
-      log(mySession, `outgoing ICE candidate #${outgoingIce}`)
+      log(
+        mySession,
+        `outgoing ICE candidate #${outgoingIce} type=${candidateType(event.candidate.candidate)}`
+      )
       send({
         evt: 'ice',
         candidate: event.candidate.candidate,
@@ -288,6 +358,25 @@ function startSession(): void {
     log(mySession, `offer created, sdp length=${offer.sdp?.length}`)
     send({ evt: 'offer', sdp: offer.sdp! })
   })().catch((err) => log(mySession, `createOffer/setLocalDescription REJECTED: ${err}`))
+
+  clearConnectTimeout()
+  connectTimeout = setTimeout(() => {
+    if (pc !== conn) return // superseded by something else already, nothing to do
+    log(
+      mySession,
+      `CONNECT TIMEOUT after ${CONNECT_TIMEOUT_MS}ms -- state=${conn.connectionState}` +
+        ` gatheringState=${conn.iceGatheringState} outgoingIce=${outgoingIce}` +
+        ` incomingIce=${currentSession?.incomingIce ?? 0} attempt=${attemptNumber}/${MAX_ATTEMPTS}`
+    )
+    if (attemptNumber < MAX_ATTEMPTS) {
+      log(mySession, 'retrying: closing and creating a fresh RTCPeerConnection')
+      attemptNegotiation()
+    } else {
+      log(mySession, `giving up after ${MAX_ATTEMPTS} attempts`)
+      send({ evt: 'fatal', message: `input PC negotiation failed after ${MAX_ATTEMPTS} attempts` })
+      closeSession()
+    }
+  }, CONNECT_TIMEOUT_MS)
 }
 
 process.on('message', (raw: MainToHelper) => {
@@ -301,18 +390,26 @@ process.on('message', (raw: MainToHelper) => {
       break
     case 'remote-answer': {
       const session = currentSession?.session ?? sessionCounter
+      if (!currentSession || !pc) {
+        log(session, 'remote-answer received but no active pc (already closed/superseded) -- ignored')
+        break
+      }
       log(session, `remote-answer received, sdp length=${raw.sdp.length}`)
       void pc
-        ?.setRemoteDescription({ type: 'answer', sdp: raw.sdp })
+        .setRemoteDescription({ type: 'answer', sdp: raw.sdp })
         .catch((err) => log(session, `setRemoteDescription REJECTED: ${err}`))
       break
     }
     case 'remote-ice': {
       const session = currentSession?.session ?? sessionCounter
-      if (currentSession) currentSession.incomingIce += 1
-      log(session, `remote-ice received #${currentSession?.incomingIce ?? '?'}`)
+      if (!currentSession || !pc) {
+        log(session, 'remote-ice received but no active pc (already closed/superseded) -- ignored')
+        break
+      }
+      currentSession.incomingIce += 1
+      log(session, `remote-ice received #${currentSession.incomingIce}`)
       void pc
-        ?.addIceCandidate({
+        .addIceCandidate({
           candidate: raw.candidate,
           sdpMid: raw.sdpMid ?? undefined,
           sdpMLineIndex: raw.sdpMLineIndex ?? undefined
