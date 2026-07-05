@@ -69,6 +69,26 @@ if (envMode) {
   app.setPath('userData', join(app.getPath('userData'), envMode))
 }
 
+// Launching the app while it's already running must not open a second copy
+// -- two agents fight over registration (same deviceId) and two windows
+// just confuse. Instead the duplicate exits immediately and the FIRST
+// instance surfaces its window: for a tray-hidden agent, double-clicking
+// the app icon again becomes the natural "bring it back" gesture. The lock
+// is keyed to userData, so it must be requested AFTER the dev-mode
+// nesting above -- that's also what still allows one agent and one
+// controller to run side by side in dev.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
+    if (!win) return
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+  })
+}
+
 // Phase 1 dev harness: opens a "source" (screen-capturing) window and a
 // "viewer" window in the same process, and relays WebRTC signaling messages
 // between them via IPC. Stands in for the real signaling server until Phase 3.
