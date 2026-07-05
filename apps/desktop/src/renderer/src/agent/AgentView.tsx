@@ -98,6 +98,15 @@ function enqueueRemoteInput(message: RemoteInputMessage): void {
 
 const THUMBNAIL_INTERVAL_MS = 4000
 
+// Human-readable OS label for the roster's OS column -- resolved once, sent
+// with every register-agent. navigator.platform is deprecated-but-stable in
+// Chromium and this only needs the coarse family, not a version.
+const AGENT_OS = navigator.platform.startsWith('Win')
+  ? 'Windows'
+  : navigator.platform.startsWith('Mac')
+    ? 'macOS'
+    : 'Linux'
+
 function AgentView(): React.JSX.Element {
   // deviceId/name/pin all live in a main-process file (see agentIdentity.ts)
   // rather than renderer localStorage or a VITE_PIN env var -- the latter
@@ -361,7 +370,8 @@ function AgentView(): React.JSX.Element {
             token: houseToken,
             deviceId: agentDeviceId,
             pin: agentPin,
-            name: nameRef.current
+            name: nameRef.current,
+            os: AGENT_OS
           })
         }
       })
@@ -571,7 +581,8 @@ function AgentView(): React.JSX.Element {
         token: houseToken,
         deviceId: agentDeviceId,
         pin: agentPin,
-        name: nameRef.current
+        name: nameRef.current,
+        os: AGENT_OS
       })
     }
 

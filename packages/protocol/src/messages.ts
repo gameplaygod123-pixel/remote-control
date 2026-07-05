@@ -12,6 +12,7 @@ export const RegisterAgentMessage = z.object({
   deviceId: z.string(),
   pin: z.string(), // sent once at registration; server stores only a hash
   name: z.string().optional(), // human-friendly label, e.g. "Bedroom PC"
+  os: z.string().optional(), // display string, e.g. "Windows" -- roster column
 });
 
 export const RegisterResultMessage = z.object({
@@ -106,6 +107,8 @@ export const DeviceInfo = z.object({
   online: z.boolean(),
   name: z.string().optional(),
   thumbnail: z.string().optional(), // data URL, low-res preview -- see device-thumbnail
+  os: z.string().optional(), // from register-agent; absent for pre-os agents
+  lastSeenAt: z.number().optional(), // epoch ms of last register/disconnect
 });
 
 export const DeviceListMessage = z.object({
@@ -121,6 +124,8 @@ export const DeviceStatusChangedMessage = z.object({
   deviceId: z.string(),
   online: z.boolean(),
   name: z.string().optional(),
+  os: z.string().optional(),
+  lastSeenAt: z.number().optional(),
 });
 
 // Sent by an already-registered agent to relabel itself without touching

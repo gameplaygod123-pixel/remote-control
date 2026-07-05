@@ -54,6 +54,8 @@ function broadcastDeviceUpdate(deviceId: string): void {
       deviceId,
       online: agent.online,
       name: agent.name,
+      os: agent.os,
+      lastSeenAt: agent.lastSeenAt,
     });
   }
 }
@@ -77,7 +79,7 @@ wss.on("connection", (socket) => {
           return;
         }
         const pinHash = await hashPin(message.pin);
-        registerAgent(message.deviceId, socket, pinHash, message.name);
+        registerAgent(message.deviceId, socket, pinHash, message.name, message.os);
         send(socket, { type: "register-result", ok: true });
         broadcastDeviceUpdate(message.deviceId);
         console.log(`agent registered: ${message.deviceId}`);

@@ -10,6 +10,8 @@ export interface AgentRecord {
   online: boolean;
   name?: string;
   thumbnail?: string;
+  os?: string;
+  lastSeenAt?: number; // epoch ms of last register/disconnect
   // A controller with a correct PIN, waiting on the agent operator to
   // accept/reject before the session actually starts. Not the same as
   // controllerWs, which is only set once the connection is truly live.
@@ -21,6 +23,8 @@ export interface DeviceInfo {
   online: boolean;
   name?: string;
   thumbnail?: string;
+  os?: string;
+  lastSeenAt?: number;
 }
 
 // In-memory only -- fine for a personal, single-user relay. Restarting the
@@ -37,6 +41,7 @@ export function registerAgent(
   ws: WebSocket,
   pinHash: string,
   name?: string,
+  os?: string,
 ): void {
   const existing = agents.get(deviceId);
   agents.set(deviceId, {
@@ -47,6 +52,8 @@ export function registerAgent(
     online: true,
     name: name ?? existing?.name,
     thumbnail: existing?.thumbnail,
+    os: os ?? existing?.os,
+    lastSeenAt: Date.now(),
   });
 }
 
@@ -82,6 +89,8 @@ export function listDevices(): DeviceInfo[] {
     online: agent.online,
     name: agent.name,
     thumbnail: agent.thumbnail,
+    os: agent.os,
+    lastSeenAt: agent.lastSeenAt,
   }));
 }
 
@@ -153,6 +162,7 @@ export function removeConnection(ws: WebSocket): RemoveConnectionResult {
       agent.ws = null;
       agent.controllerWs = null;
       agent.online = false;
+      agent.lastSeenAt = Date.now();
       const orphanedPendingController = agent.pendingControllerWs ?? undefined;
       agent.pendingControllerWs = null;
       return { offlineDeviceId: deviceId, orphanedPendingController };
