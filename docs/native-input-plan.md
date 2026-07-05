@@ -221,3 +221,79 @@ covers what to check there specifically.
 Behind the `"input-helper"` capability flag, so mixed old/new fleets keep
 working (§4). The helper path takes over automatically once both the agent and
 controller are on a build that has it. No server redeploy required.
+
+## 10. Addendum: helper-session-flapping bug (found in packaged v1.14.0)
+
+Branch `fix/helper-session-flapping`. Reported symptom: pairing repeatedly
+(controller "back" then reconnect) made the session alternate almost exactly
+every other attempt -- works, dead, works, dead -- with `X`-close behavior
+correctly using the helper path whenever a session did work, ruling out a
+regression back to the original hidden-window freeze.
+
+**Root cause, proven with an isolated reproduction:** `node-datachannel`'s
+`RTCPeerConnection.close()` does not synchronously stop all native event
+delivery. A small standalone script (create a pc, close it ~50ms later,
+immediately create a second pc) showed the FIRST pc's own
+`onconnectionstatechange` firing *after* `close()` was called and *after* the
+second pc already existed. `input-helper/index.ts`'s handlers were written as
+plain closures over the pc they were created for (`conn`), with no check that
+`conn` was still the module's current `pc` -- so a stale, late-firing event
+from a session's supposedly-closed connection would relay exactly as if it
+belonged to whatever session happened to be current when it finally arrived.
+For `onicecandidate` specifically, a late candidate carries the OLD
+negotiation's ICE credentials; fed into the NEW session's peer connection (no
+per-message session tag existed to catch it), it corrupts that peer
+connection's ICE state. On localhost this never had a window to manifest (ICE
+gathering completes in under a second, well before a `close()` from the next
+session could interleave with it) -- consistent with the original hidden-
+window bug also being unreproducible on localhost. The real Mac path's slower,
+real-network ICE gathering gives this race a much wider window to land in,
+which is why it only ever showed up there.
+
+**Diagnostic method:** since packaged builds have no visible console for
+either the agent main process or the pure-Node helper, both were instrumented
+to append timestamped, session-numbered lines to `%TEMP%\input-helper.log`
+(`main/inputHelperLog.ts`, temporary, still in the tree pending a decision on
+whether to keep it -- see below). Every session-start, offer, answer, ICE
+candidate (in and out), pc connection-state change, data-channel open, and
+handled/unhandled rejection is logged, tagged with the session number the
+*originating pc* was created under (not whatever session happens to be
+current when the log line is written) -- so a stale event is visibly
+identifiable as belonging to an older session than its neighbors in the log.
+Separately checked and found **no evidence for**: the ping/pong liveness
+check killing a healthy-but-busy helper (pong round-trip stayed 0-1ms through
+every negotiation observed, including sessions started and killed within the
+same 10s ping interval) or any unhandled promise rejection (none logged in
+any run, including deliberately aggressive back-to-back reconnect cycles).
+
+**Fix** (`input-helper/index.ts`): every handler bound to a specific pc
+(`onicecandidate`, `onconnectionstatechange`, both data channels' `onopen`/
+`onmessage`, and the async offer-creation continuation) now checks `pc !==
+conn` first and bails out if the connection it was created for has since been
+superseded. `closeSession()` also nulls the two pc-level handlers
+(`onicecandidate`, `onconnectionstatechange`) before calling `close()`, as a
+first line of defense -- confirmed by rerunning the isolated repro that this
+alone suppresses the stale event before it ever reaches JS in the common case;
+the per-handler guard is the backstop for the data-channel handlers, which
+can't be reached from `closeSession()` since they're local to the closure
+that created them.
+
+**Verified:** the same isolated repro no longer shows a stale-session log line
+after the fix. Re-ran the local two-instance harness through multiple rounds
+of connect/kill/reconnect, including deliberately killing the controller the
+instant its session started negotiating (before reaching `connected`) and
+immediately reconnecting -- every round completed cleanly with no `IGNORED
+stale ...` / `REJECTED` lines.
+
+**Not done, and why:** the literal ask was to reproduce via a packaged
+install. The packaged app would not reliably start in this sandboxed dev
+environment (hung indefinitely on one launch with zero CPU activity and no
+child processes spawned, silently exited immediately on another) -- consistent
+with the GPU/display-virtualization limitations this same environment showed
+throughout the original investigation (persistent `DXGI` desktop-duplication
+failures). Since none of the code under investigation (input-helper session
+lifecycle) differs between a dev build and a packaged one -- only native
+binary loading and asar packaging do, neither of which this bug touches -- the
+local dev-mode harness was used instead, and is what the evidence above comes
+from. This should be re-verified against a real packaged install (ideally on
+the machine that originally reported it) before considering this fully closed.

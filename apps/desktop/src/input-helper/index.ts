@@ -25,6 +25,18 @@ import {
   getScreenSize
 } from '../main/input/injector'
 import type { RemoteInputMessage } from '../renderer/src/shared/input/inputProtocol'
+import { logInputHelper } from '../main/inputHelperLog'
+
+// TEMP diagnostic (helper-session-flapping investigation, see
+// docs/native-input-plan.md). `session` is passed explicitly rather than
+// read from the current sessionCounter -- a pc's own callbacks (onicecandidate,
+// onconnectionstatechange, channel.onmessage) close over the session number
+// they were CREATED under, so if one fires after a NEWER session has already
+// started, the log line still shows the OLD session number: the smoking gun
+// for "a stale pc's event leaked into a later session".
+function log(session: number, message: string): void {
+  logInputHelper('HELPER', `[session ${session}] ${message}`)
+}
 
 // Mirrors shared/webrtc/peerConnection.ts's ICE_SERVERS -- duplicated rather
 // than imported because that file lives under renderer/src and assumes a
@@ -69,6 +81,12 @@ function send(message: HelperToMain): void {
 }
 
 let pc: InstanceType<typeof RTCPeerConnection> | undefined
+// TEMP diagnostic (helper-session-flapping investigation): incremented on
+// every start-session. Read at the top of startSession() and captured into a
+// local (see `mySession` below) so a pc's callbacks always log the session
+// number they were created under, even if `sessionCounter` has since moved
+// on to a newer session.
+let sessionCounter = 0
 
 // Cached after the first remote input message -- same rationale as the
 // renderer's old cachedScreenSize: the agent's screen doesn't resize
@@ -151,9 +169,33 @@ function enqueueRemoteInput(message: RemoteInputMessage): void {
   })()
 }
 
+// TEMP diagnostic (helper-session-flapping investigation): tracks the
+// currently-active session's number and per-session counters, so the
+// module-level process.on('message') handler below (which isn't inside
+// startSession()'s closure) can still log with the right session number and
+// running counts for remote-answer/remote-ice.
+let currentSession: { session: number; incomingIce: number; inputMessages: number } | undefined
+
 function closeSession(): void {
-  pc?.close()
+  log(sessionCounter, `closeSession() called, pc=${pc ? 'present' : 'none'}`)
+  if (pc) {
+    // Belt-and-suspenders: null the pc-level handlers before close(), on top
+    // of the `pc !== conn` guard inside each handler below. Confirmed by an
+    // isolated repro (see docs/native-input-plan.md, "helper-session-
+    // flapping") that node-datachannel's close() does NOT synchronously stop
+    // all native event delivery -- a closed pc's own onconnectionstatechange
+    // fired again well after close() was called and after a NEWER session's
+    // pc already existed. Without a guard, that stale event's side effects
+    // (relaying an ICE candidate that belongs to a different, dead
+    // negotiation) get attributed to whatever session is current when they
+    // finally arrive, corrupting it with mismatched ICE credentials -- the
+    // root cause of the observed flapping (works, dies, works, dies...).
+    pc.onicecandidate = null
+    pc.onconnectionstatechange = null
+    pc.close()
+  }
   pc = undefined
+  currentSession = undefined
   resetInputQueue()
 }
 
@@ -162,11 +204,39 @@ function closeSession(): void {
 // needed this way -- both data channels are known upfront.
 function startSession(): void {
   closeSession()
+  sessionCounter += 1
+  const mySession = sessionCounter
+  currentSession = { session: mySession, incomingIce: 0, inputMessages: 0 }
+  log(mySession, 'start-session received, creating new RTCPeerConnection')
   const conn = new RTCPeerConnection({ iceServers: ICE_SERVERS })
   pc = conn
+  let outgoingIce = 0
+
+  // Every handler below checks `pc !== conn` first and bails if so -- this
+  // pc has been superseded by a later session (closeSession() nulls the two
+  // pc-level handlers above as a first line of defense, but the data-channel
+  // handlers are local to this closure and can't be nulled from there, so
+  // this guard is the one mechanism that reliably covers all of them). Bound
+  // to `conn`/`mySession` via closure, NOT the module-level `pc`/
+  // `sessionCounter`, so a stale event is recognized as stale rather than
+  // silently attributed to whatever session happens to be current when it
+  // arrives.
+  conn.onconnectionstatechange = () => {
+    if (pc !== conn) {
+      log(mySession, `IGNORED stale pc connectionState=${conn.connectionState} (superseded)`)
+      return
+    }
+    log(mySession, `pc connectionState=${conn.connectionState}`)
+  }
 
   conn.onicecandidate = (event) => {
+    if (pc !== conn) {
+      log(mySession, 'IGNORED stale outgoing ICE candidate (superseded)')
+      return
+    }
     if (event.candidate) {
+      outgoingIce += 1
+      log(mySession, `outgoing ICE candidate #${outgoingIce}`)
       send({
         evt: 'ice',
         candidate: event.candidate.candidate,
@@ -177,21 +247,42 @@ function startSession(): void {
   }
 
   const onChannelMessage = (event: MessageEvent): void => {
+    if (pc !== conn) {
+      log(mySession, 'IGNORED stale data channel message (superseded)')
+      return
+    }
+    if (currentSession?.session === mySession) currentSession.inputMessages += 1
+    if ((currentSession?.inputMessages ?? 0) % 25 === 1) {
+      log(mySession, `input message #${currentSession?.inputMessages}`)
+    }
     enqueueRemoteInput(JSON.parse(event.data as string) as RemoteInputMessage)
   }
   const input = conn.createDataChannel('input')
+  input.onopen = () => {
+    if (pc !== conn) return
+    log(mySession, 'data channel "input" open')
+  }
   input.onmessage = onChannelMessage
   const moves = conn.createDataChannel('input-moves', {
     ordered: false,
     maxRetransmits: 0
   })
+  moves.onopen = () => {
+    if (pc !== conn) return
+    log(mySession, 'data channel "input-moves" open')
+  }
   moves.onmessage = onChannelMessage
 
   void (async () => {
     const offer = await conn.createOffer()
     await conn.setLocalDescription(offer)
+    if (pc !== conn) {
+      log(mySession, 'IGNORED stale offer (superseded before createOffer/setLocalDescription resolved)')
+      return
+    }
+    log(mySession, `offer created, sdp length=${offer.sdp?.length}`)
     send({ evt: 'offer', sdp: offer.sdp! })
-  })()
+  })().catch((err) => log(mySession, `createOffer/setLocalDescription REJECTED: ${err}`))
 }
 
 process.on('message', (raw: MainToHelper) => {
@@ -200,18 +291,30 @@ process.on('message', (raw: MainToHelper) => {
       startSession()
       break
     case 'stop-session':
+      log(sessionCounter, 'stop-session received')
       closeSession()
       break
-    case 'remote-answer':
-      void pc?.setRemoteDescription({ type: 'answer', sdp: raw.sdp })
+    case 'remote-answer': {
+      const session = currentSession?.session ?? sessionCounter
+      log(session, `remote-answer received, sdp length=${raw.sdp.length}`)
+      void pc
+        ?.setRemoteDescription({ type: 'answer', sdp: raw.sdp })
+        .catch((err) => log(session, `setRemoteDescription REJECTED: ${err}`))
       break
-    case 'remote-ice':
-      void pc?.addIceCandidate({
-        candidate: raw.candidate,
-        sdpMid: raw.sdpMid ?? undefined,
-        sdpMLineIndex: raw.sdpMLineIndex ?? undefined
-      })
+    }
+    case 'remote-ice': {
+      const session = currentSession?.session ?? sessionCounter
+      if (currentSession) currentSession.incomingIce += 1
+      log(session, `remote-ice received #${currentSession?.incomingIce ?? '?'}`)
+      void pc
+        ?.addIceCandidate({
+          candidate: raw.candidate,
+          sdpMid: raw.sdpMid ?? undefined,
+          sdpMLineIndex: raw.sdpMLineIndex ?? undefined
+        })
+        .catch((err) => log(session, `addIceCandidate REJECTED: ${err}`))
       break
+    }
     case 'ping':
       send({ evt: 'pong' })
       break
@@ -219,8 +322,21 @@ process.on('message', (raw: MainToHelper) => {
 })
 
 process.on('uncaughtException', (err) => {
+  log(currentSession?.session ?? sessionCounter, `uncaughtException: ${err?.stack ?? err}`)
   send({ evt: 'fatal', message: err?.stack ?? String(err) })
   process.exit(1)
+})
+
+// TEMP diagnostic (helper-session-flapping investigation): setRemoteDescription/
+// addIceCandidate/createOffer above are all fire-and-forget promises with no
+// .catch() in the ORIGINAL code -- an unhandled rejection from any of them
+// would silently kill this process (Node's default since v15), which would
+// explain the observed crash-respawn flapping with no other visible cause.
+// This handler's own .catch() calls above should already surface any such
+// rejection in the log; this is a backstop in case something rejects from
+// somewhere else not yet wrapped.
+process.on('unhandledRejection', (reason) => {
+  log(currentSession?.session ?? sessionCounter, `unhandledRejection: ${reason}`)
 })
 
 send({ evt: 'ready' })
