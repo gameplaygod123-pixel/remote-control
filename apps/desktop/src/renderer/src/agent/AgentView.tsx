@@ -128,7 +128,6 @@ function AgentView(): React.JSX.Element {
   const [trustedList, setTrustedList] = useState<{ id: string; trustedAt: number }[]>([])
   const [name, setName] = useState('')
   const [nameDraft, setNameDraft] = useState('')
-  const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<Awaited<ReturnType<typeof connectSignaling>> | null>(null)
   const nameRef = useRef(name)
   nameRef.current = name
@@ -308,7 +307,6 @@ function AgentView(): React.JSX.Element {
         pcRef.current = null
         setActivePc(null)
         setConnectionType(null)
-        if (videoRef.current) videoRef.current.srcObject = null
       }
       useHelperRef.current = false
       setStatus((current) =>
@@ -355,7 +353,6 @@ function AgentView(): React.JSX.Element {
           pc = undefined
           pcRef.current = null
           setActivePc(null)
-          if (videoRef.current) videoRef.current.srcObject = null
           void window.api.inputHelper.stopSession()
           useHelperRef.current = false
           setStatus('reconnected, registering')
@@ -524,7 +521,6 @@ function AgentView(): React.JSX.Element {
             params.degradationPreference = 'maintain-framerate'
             sender.setParameters(params).catch(() => {})
           })
-          if (videoRef.current) videoRef.current.srcObject = stream
 
           // Prefer H.264 over Chromium's default (often VP8, typically
           // software-encoded) -- H.264 gets hardware encode/decode on both
@@ -698,13 +694,6 @@ function AgentView(): React.JSX.Element {
           </span>
         )}
         <StatusPill status={status} />
-
-        <div className="video-frame">
-          <video ref={videoRef} autoPlay muted />
-          {!status.includes('connection') && (
-            <span className="video-frame__empty">Not sharing yet</span>
-          )}
-        </div>
 
         <TransferStatus transfer={transfer} onCancel={cancelTransfer} />
 

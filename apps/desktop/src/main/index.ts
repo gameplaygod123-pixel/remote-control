@@ -107,13 +107,18 @@ app.commandLine.appendSwitch('disable-background-timer-throttling')
 // rather than hiding it (see setupAgentTray below).
 let isQuitting = false
 
-function createBrowserWindow(searchParams?: string, hidden = false): BrowserWindow {
+function createBrowserWindow(
+  searchParams?: string,
+  hidden = false,
+  windowOptions?: Electron.BrowserWindowConstructorOptions
+): BrowserWindow {
   const win = new BrowserWindow({
     width: 900,
     height: 670,
     show: false,
     autoHideMenuBar: true,
     icon,
+    ...windowOptions,
     // No OS titlebar -- the app draws its own slim bar (see .app-titlebar
     // in app.css) with the title centered. macOS keeps its floating
     // traffic-light buttons; Windows gets the native min/max/close cluster
@@ -168,7 +173,17 @@ function createBrowserWindow(searchParams?: string, hidden = false): BrowserWind
 let agentWindow: BrowserWindow | undefined
 
 function createWindow(appMode: AppMode): void {
-  const win = createBrowserWindow(undefined, appMode === 'agent' && startHidden)
+  // The agent window is a fixed-size credentials card -- everything on it
+  // has one natural size, so resizing only ever makes it look broken. The
+  // controller stays fully resizable: the Computers grid reflows and the
+  // session view needs maximize/fullscreen.
+  const win = createBrowserWindow(
+    undefined,
+    appMode === 'agent' && startHidden,
+    appMode === 'agent'
+      ? { width: 680, height: 700, resizable: false, maximizable: false, fullscreenable: false }
+      : undefined
+  )
   win.setTitle(`Personal Remote - ${appMode}`)
 
   if (appMode === 'agent') {
@@ -184,7 +199,12 @@ function createWindow(appMode: AppMode): void {
 // saveMode() so this never shows again on the same install.
 function promptForMode(): Promise<AppMode> {
   return new Promise((resolve) => {
-    const win = createBrowserWindow('role=choose-mode')
+    const win = createBrowserWindow('role=choose-mode', false, {
+      width: 600,
+      height: 620,
+      resizable: false,
+      maximizable: false
+    })
     win.setTitle('Personal Remote - Setup')
     ipcMain.once('choose-mode', (_event, mode: AppMode) => {
       win.close()
