@@ -30,7 +30,8 @@
     "@remote-control/protocol": "workspace:*",
     "electron-updater": "^6.8.9",
     "koffi": "^3.1.0",
-    "node-datachannel": "^0.32.3"
+    "node-datachannel": "^0.32.3",
+    "@koromix/koffi-win32-x64": "3.1.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
