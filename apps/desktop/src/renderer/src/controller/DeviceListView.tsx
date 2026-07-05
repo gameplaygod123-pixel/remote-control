@@ -24,9 +24,9 @@ function formatTime(date: Date): string {
 // real thumbnail arrives, or permanently for offline devices.
 function MonitorIcon(): React.JSX.Element {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-      <rect x="3" y="4" width="18" height="13" rx="2" stroke="currentColor" strokeWidth="1.6" />
-      <rect x="8" y="8" width="8" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
+      <rect x="3" y="4" width="18" height="13" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="8" y="8" width="8" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   )
 }
