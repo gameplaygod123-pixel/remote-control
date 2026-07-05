@@ -65,7 +65,14 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.2** (device card matched to owner mock: transparent thumb bg so placeholder icon floats, 40px icon, 18px card radius, 12px rounder Connect button, bigger name/status; live thumbnails still shown when sent). v1.20.1 = taller thumbnail + ID line removed. v1.20.0 = **light mode (Amber Light) + a sliding sun/moon
+Latest release: **v1.20.3** (device card now matches the owner's reference
+100%: the card ALWAYS renders the floating monitor icon and no longer shows a
+live screen thumbnail — every card looks identical/clean; icon 52px, card
+radius 22px, thumb area aspect 16/10, Connect button is a full-capsule pill
+`border-radius:999px` and taller (14px pad, 15px font), name 17px. NOTE: the
+`device-thumbnail` message + `thumbnail` state still flow but are no longer
+rendered on the card — flip `DeviceListView` line ~233 back to
+`{device.thumbnail ? <img/> : <MonitorIcon/>}` to restore live previews). v1.20.2 = transparent thumb bg so placeholder icon floats, 40px icon, 18px card radius, 12px rounder Connect button, bigger name/status; live thumbnails still shown when sent. v1.20.1 = taller thumbnail + ID line removed. v1.20.0 = **light mode (Amber Light) + a sliding sun/moon
 theme toggle** at the bottom of the controller sidebar. The whole controller
 shell themes through `--dl-*` tokens (deviceList.css); a
 `:root[data-theme='light'] .ctl-shell` block redefines them. Persisted per
