@@ -9,6 +9,14 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+# asar disabled entirely: the agent's input-helper is a *plain Node* child
+# process (ELECTRON_RUN_AS_NODE, no Chromium -- see src/input-helper/) and
+# plain Node has no asar filesystem support, so it could neither be forked
+# from inside an archive nor require() its JS dependencies out of one.
+# Unpacking just its dependency tree would mean hand-maintaining a glob list
+# of transitive deps; shipping unarchived files sidesteps the whole class of
+# problem for a negligible startup cost at this app's size.
+asar: false
 asarUnpack:
   - resources/**
 win:

@@ -7,3 +7,4 @@ build/Release/
 *.log
 .DS_Store
 .claude/
+.cache/
