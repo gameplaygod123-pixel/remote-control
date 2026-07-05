@@ -247,22 +247,37 @@ export default function FileTransferView(): React.JSX.Element {
         <button className="dl-add-toggle" onClick={() => fileInputRef.current?.click()}>
           + เลือกไฟล์
         </button>
-        <span className="ft-files__hint">
-          {files.length === 0 ? 'หรือลากไฟล์มาวางที่หน้านี้' : `${files.length} ไฟล์:`}
-        </span>
-        {files.map((file, i) => (
-          <span key={`${file.name}-${i}`} className="ft-file-chip">
-            {file.name} · {formatBytes(file.size)}
-            <button
-              className="ft-file-chip__remove"
-              title="เอาออก"
-              onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
-            >
-              ✕
-            </button>
-          </span>
-        ))}
+        <span className="ft-files__hint">หรือลากไฟล์มาวางที่หน้านี้</span>
       </div>
+
+      {files.length > 0 && (
+        <div className="ft-filelist">
+          <div className="ft-filelist__head">
+            <span>
+              เลือกไว้ {files.length} ไฟล์ · รวม{' '}
+              {formatBytes(files.reduce((sum, f) => sum + f.size, 0))}
+            </span>
+            <button className="ft-filelist__clear" onClick={() => setFiles([])}>
+              ล้างทั้งหมด
+            </button>
+          </div>
+          {files.map((file, i) => (
+            <div key={`${file.name}-${i}`} className="ft-file-row">
+              <span className="ft-file-row__name" title={file.name}>
+                {file.name}
+              </span>
+              <span className="ft-file-row__size">{formatBytes(file.size)}</span>
+              <button
+                className="ft-file-row__remove"
+                title="เอาออก"
+                onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="ft-table">
         <div className="ft-row ft-row--head">

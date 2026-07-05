@@ -496,3 +496,78 @@
   width: auto;
   padding: 0 18px;
 }
+
+/* Selected-files list -- a clear block below the dropzone so chosen files
+   (name + size) are visible before sending, not crammed into the button row. */
+.ft-filelist {
+  border: 1px solid var(--dl-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ft-filelist__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--dl-text-dim);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--dl-border);
+}
+
+.ft-filelist__clear {
+  background: none;
+  border: none;
+  color: var(--dl-text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ft-filelist__clear:hover {
+  color: #ef6b6b;
+}
+
+.ft-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--dl-border);
+}
+
+.ft-file-row:last-child {
+  border-bottom: none;
+}
+
+.ft-file-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-file-row__size {
+  flex-shrink: 0;
+  color: var(--dl-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.ft-file-row__remove {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--dl-text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+}
+
+.ft-file-row__remove:hover {
+  color: #ef6b6b;
+}
