@@ -20,7 +20,7 @@ import { connectSignaling, type SignalingClient } from '../signaling/signalingCl
 import { resolveSignalingUrl } from '../signaling/resolveSignalingUrl'
 import { createPeerConnection, type SignalTransport } from '../webrtc/peerConnection'
 import { SignalingMessage } from '../protocol'
-import { sendFileOverChannel } from './fileTransferChannel'
+import { sendFileOverChannel, type SendableFile } from './fileTransferChannel'
 
 export type PushPhase =
   | 'connecting' // reaching the signaling server
@@ -49,7 +49,7 @@ const SETUP_TIMEOUT_MS = 60_000
 export async function pushFilesToDevice(
   deviceId: string,
   pin: string,
-  files: File[],
+  files: SendableFile[],
   onUpdate: (update: PushUpdate) => void
 ): Promise<void> {
   onUpdate({ phase: 'connecting' })

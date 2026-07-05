@@ -87,7 +87,12 @@ const api = {
   },
   fileTransfer: {
     save: (name: string, data: Uint8Array): Promise<string> =>
-      ipcRenderer.invoke('file-transfer:save', name, data)
+      ipcRenderer.invoke('file-transfer:save', name, data),
+    readFile: (path: string): Promise<Uint8Array> => ipcRenderer.invoke('file:read', path)
+  },
+  dialog: {
+    pickFiles: (): Promise<{ path: string; name: string; size: number }[]> =>
+      ipcRenderer.invoke('dialog:pick-files')
   },
   // Bridges the agent renderer to the native input-helper process (see
   // main/inputHelperHost.ts). No-op / always-not-ready in controller mode.

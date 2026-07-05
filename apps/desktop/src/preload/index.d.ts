@@ -68,6 +68,10 @@ declare global {
       }
       fileTransfer: {
         save: (name: string, data: Uint8Array) => Promise<string>
+        readFile: (path: string) => Promise<Uint8Array>
+      }
+      dialog: {
+        pickFiles: () => Promise<{ path: string; name: string; size: number }[]>
       }
       inputHelper: {
         isReady: () => Promise<boolean>

@@ -11,7 +11,9 @@ import {
   nativeImage,
   dialog
 } from 'electron'
-import { join } from 'path'
+import { join, basename } from 'path'
+import { statSync } from 'fs'
+import { readFile } from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import {
@@ -437,6 +439,34 @@ app.whenReady().then(async () => {
   ipcMain.handle('file-transfer:save', (_event, name: string, data: Uint8Array) =>
     saveToDownloads(name, data)
   )
+
+  // File picking goes through the main process rather than a renderer
+  // <input type=file>: a hidden (display:none) file input's programmatic
+  // .click() does not reliably open the native dialog in this Electron build
+  // -- clicking "เลือกไฟล์" just did nothing (v1.19.2 report). The native
+  // dialog here always works and returns real paths.
+  ipcMain.handle(
+    'dialog:pick-files',
+    async (event): Promise<{ path: string; name: string; size: number }[]> => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = await (win
+        ? dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] })
+        : dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] }))
+      if (result.canceled) return []
+      return result.filePaths.map((p) => ({
+        path: p,
+        name: basename(p),
+        size: statSync(p).size
+      }))
+    }
+  )
+
+  // Reads a picked file's bytes for sending. Whole-file into memory, matching
+  // what the renderer's File.arrayBuffer() path already did -- fine for the
+  // personal-scale transfers this tool handles.
+  ipcMain.handle('file:read', async (_event, path: string): Promise<Uint8Array> => {
+    return new Uint8Array(await readFile(path))
+  })
 
   // Used by the controller to go fullscreen once a remote session connects,
   // and back to windowed when returning to the device list.

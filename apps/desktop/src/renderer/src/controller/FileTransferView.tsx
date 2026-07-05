@@ -3,7 +3,10 @@ import { connectSignaling, SignalingClient } from '../shared/signaling/signaling
 import { resolveSignalingUrl } from '../shared/signaling/resolveSignalingUrl'
 import { SignalingMessage } from '../shared/protocol'
 import { pushFilesToDevice, type PushUpdate } from '../shared/fileTransfer/pushFilesToDevice'
-import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
+import {
+  findDroppedDirectory,
+  type SendableFile
+} from '../shared/fileTransfer/fileTransferChannel'
 
 interface Device {
   deviceId: string
@@ -64,12 +67,11 @@ export default function FileTransferView(): React.JSX.Element {
   const [devices, setDevices] = useState<Device[]>([])
   const [status, setStatus] = useState('connecting to signaling server')
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [files, setFiles] = useState<File[]>([])
+  const [files, setFiles] = useState<SendableFile[]>([])
   const [pushes, setPushes] = useState<Record<string, PushUpdate>>({})
   const [sending, setSending] = useState(false)
   const clientRef = useRef<SignalingClient | null>(null)
   const tokenRef = useRef('')
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -170,8 +172,31 @@ export default function FileTransferView(): React.JSX.Element {
     setSelected((prev) => (prev.size >= online.length ? new Set() : new Set(online)))
   }
 
-  function addFiles(list: FileList | File[]): void {
-    setFiles((prev) => [...prev, ...Array.from(list)])
+  function addFiles(list: SendableFile[]): void {
+    setFiles((prev) => [...prev, ...list])
+  }
+
+  // Native OS picker via the main process -- a hidden <input type=file>'s
+  // programmatic click doesn't reliably open the dialog in this Electron
+  // build. Picked files read their bytes from disk through the main process
+  // on demand (see fileTransfer.readFile), matching the SendableFile shape.
+  async function pickFiles(): Promise<void> {
+    const picked = await window.api.dialog.pickFiles()
+    addFiles(
+      picked.map((p) => ({
+        name: p.name,
+        size: p.size,
+        arrayBuffer: async () => {
+          const bytes = await window.api.fileTransfer.readFile(p.path)
+          // Copy into a fresh ArrayBuffer -- the IPC-returned view may sit on
+          // a larger/pooled (or Shared) buffer; the send path wants exactly
+          // these bytes as a plain ArrayBuffer.
+          const copy = new Uint8Array(bytes.byteLength)
+          copy.set(bytes)
+          return copy.buffer
+        }
+      }))
+    )
   }
 
   function handleDrop(e: React.DragEvent): void {
@@ -181,7 +206,8 @@ export default function FileTransferView(): React.JSX.Element {
       setStatus(`โฟลเดอร์ยังไม่รองรับ (${dir}) — บีบเป็น .zip ก่อน`)
       return
     }
-    if (e.dataTransfer.files.length > 0) addFiles(e.dataTransfer.files)
+    // Dropped browser File objects already satisfy SendableFile.
+    if (e.dataTransfer.files.length > 0) addFiles(Array.from(e.dataTransfer.files))
   }
 
   async function sendToSelected(): Promise<void> {
@@ -234,17 +260,7 @@ export default function FileTransferView(): React.JSX.Element {
       </div>
 
       <div className="ft-files">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            if (e.target.files) addFiles(e.target.files)
-            e.target.value = ''
-          }}
-        />
-        <button className="dl-add-toggle" onClick={() => fileInputRef.current?.click()}>
+        <button className="dl-add-toggle" onClick={() => void pickFiles()}>
           + เลือกไฟล์
         </button>
         <span className="ft-files__hint">หรือลากไฟล์มาวางที่หน้านี้</span>
@@ -333,7 +349,7 @@ export default function FileTransferView(): React.JSX.Element {
           // picker itself instead of sitting disabled with no explanation.
           disabled={sending || (files.length > 0 && selected.size === 0)}
           onClick={() => {
-            if (files.length === 0) fileInputRef.current?.click()
+            if (files.length === 0) void pickFiles()
             else void sendToSelected()
           }}
         >

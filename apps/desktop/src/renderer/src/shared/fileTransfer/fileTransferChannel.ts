@@ -42,9 +42,19 @@ const BUFFERED_AMOUNT_LOW_THRESHOLD = 1024 * 1024
 type ControlMessage =
   { t: 'file-start'; name: string; size: number } | { t: 'file-end' } | { t: 'file-cancel' }
 
+// The minimum this needs from a file: metadata plus a way to get its bytes.
+// A browser `File` (drag-and-drop) satisfies this directly; a file picked via
+// the native dialog satisfies it with an arrayBuffer() that reads the path
+// through the main process (see FileTransferView / dialog:pick-files).
+export interface SendableFile {
+  name: string
+  size: number
+  arrayBuffer: () => Promise<ArrayBuffer>
+}
+
 export async function sendFileOverChannel(
   channel: RTCDataChannel,
-  file: File,
+  file: SendableFile,
   onProgress: (sentBytes: number, totalBytes: number) => void,
   shouldCancel: () => boolean
 ): Promise<void> {
