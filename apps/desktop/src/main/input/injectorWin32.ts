@@ -29,6 +29,7 @@ const KEYEVENTF_UNICODE = 0x0004
 // throws immediately on macOS. All callers are win32-gated, so init only
 // ever runs where user32.dll actually exists.
 let sendInputFn: ((count: number, buf: Buffer, size: number) => number) | null = null
+let mapVirtualKeyFn: ((code: number, mapType: number) => number) | null = null
 let inputSize = 0
 
 function ensureInit(): void {
@@ -55,7 +56,30 @@ function ensureInit(): void {
   sendInputFn = user32.func(
     'uint32 SendInput(uint32 cInputs, _Inout_ INPUT *pInputs, int cbSize)'
   ) as (count: number, buf: Buffer, size: number) => number
+  mapVirtualKeyFn = user32.func('uint32 MapVirtualKeyW(uint32 uCode, uint32 uMapType)') as (
+    code: number,
+    mapType: number
+  ) => number
   inputSize = koffi.sizeof('INPUT')
+}
+
+// VK -> hardware scan code, cached per VK (the mapping never changes within
+// a session). Windows' own language-switch handling (the Thai grave-key
+// toggle, Alt+Shift, etc.) reads the SCAN CODE off injected key events, not
+// the VK -- events sent with wScan=0 typed characters fine but never
+// triggered the layout switch. Populating the real scan code is SendInput
+// best practice anyway: plenty of software (games especially) reads scan
+// codes rather than VKs.
+const MAPVK_VK_TO_VSC = 0
+const scanCodeCache = new Map<number, number>()
+
+function scanCodeFor(vk: number): number {
+  let scan = scanCodeCache.get(vk)
+  if (scan === undefined) {
+    scan = mapVirtualKeyFn!(vk, MAPVK_VK_TO_VSC)
+    scanCodeCache.set(vk, scan)
+  }
+  return scan
 }
 
 function sendOne(ki: { wVk: number; wScan: number; dwFlags: number }): void {
@@ -92,9 +116,10 @@ export function typeTextWin32(text: string): void {
 export function keyToggleWin32(code: string, down: boolean): void {
   const entry = CODE_TO_VK[code]
   if (entry === undefined) return
+  ensureInit()
   sendOne({
     wVk: entry.vk,
-    wScan: 0,
+    wScan: scanCodeFor(entry.vk),
     dwFlags: (down ? 0 : KEYEVENTF_KEYUP) | (entry.extended ? KEYEVENTF_EXTENDEDKEY : 0)
   })
 }
