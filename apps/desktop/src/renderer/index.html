@@ -4,9 +4,16 @@
     <meta charset="UTF-8" />
     <title>Personal Remote</title>
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <!-- connect-src must list raw.githubusercontent.com: packaged builds
+         fetch the current signaling URL from there on every (re)connect
+         (resolveSignalingUrl.ts). Without it that fetch is CSP-blocked,
+         and silently so -- the resolver treats any failure as "offline"
+         and falls back to the build-time URL, so every tunnel rotation
+         bricked installed apps until a re-release (v1.17.0 incident,
+         2026-07-06). Dev never catches this: DEV mode skips the fetch. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss: https://raw.githubusercontent.com"
     />
   </head>
 
