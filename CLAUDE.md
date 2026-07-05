@@ -65,8 +65,8 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.16.0** (clipboard-in-helper; promoted 2026-07-06 after
-the owner's real-machine paired-session test passed).
+Latest release: **v1.17.0** (house token). v1.16.0 (clipboard-in-helper) was
+promoted the same day after the owner's real-machine test passed.
 
 Working and verified on real hardware:
 - Latency ≈ Parsec (direct connection, ~11 ms network).
@@ -90,12 +90,35 @@ Also working since v1.16.0:
   Cosmetic nit for later: helper's `clipboard.onopen` log is overwritten by
   runClipboardSync, never prints.
 
+Since v1.17.0 — **house token** (one shared secret per household):
+- Gates register-agent, pair-request (checked BEFORE the PIN — no guessing
+  oracle), list-devices (roster leaks names + live thumbnails), and
+  remove-device. A wrong/rotated token routes the app back to the
+  first-launch token screen via the new `server-error` message.
+- Entered once per machine (TokenSetupView on first launch), persisted in
+  userData `house-token.txt`; nothing secret is baked into builds anymore
+  (`VITE_AGENT_TOKEN` is gone). Dev falls back to `dev-token-change-me`
+  (unpackaged only); `HOUSE_TOKEN` env overrides for harnesses.
+- The real token lives ONLY in: the LaunchAgent plist
+  (`~/Library/LaunchAgents/com.personalremote.signaling.plist`,
+  EnvironmentVariables.AGENT_TOKEN), a backup at
+  `~/.personal-remote-house-token` (mode 600), and each machine's userData.
+  NEVER commit it. Rotating it = edit plist → restart LaunchAgent → kill any
+  stray server on 8080 → every machine re-enters via the auto-shown screen.
+- Ops gotcha (2026-07-06): a leftover `tsx watch` DEV server was holding
+  port 8080, so the supervisor had never spawned its real `dist/index.js` —
+  production was silently running dev code with the default token. After
+  changing server code: `pnpm --filter signaling-server build`, kill
+  whatever holds 8080, let the supervisor's 60s ensureServer respawn it.
+- Verified: 9/9 local enforcement tests + live server rejects the old
+  default and accepts the new token.
+
 ## Backlog (rough priority)
 
 1. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
-2. Real AGENT_TOKEN (currently `dev-token-change-me`) — before family use.
-3. Computers-page search/sort; per-controller device visibility (family use).
-4. Known limitation: helper crash mid-session recovers input only at re-pair.
-5. No TURN relay (only matters for CGNAT↔CGNAT pairs).
-6. Mac installer (.dmg) — deferred by owner decision.
+2. Computers-page search/sort; per-controller device visibility (family use).
+3. Known limitation: helper crash mid-session recovers input only at re-pair.
+4. No TURN relay (only matters for CGNAT↔CGNAT pairs).
+5. Mac installer (.dmg) — deferred by owner decision.
+6. Owner plans a UI redesign + playful feature additions next.
