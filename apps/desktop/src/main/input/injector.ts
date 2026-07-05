@@ -8,6 +8,17 @@ import {
   providerRegistry
 } from '@nut-tree-fork/nut-js'
 import { CODE_TO_KEY } from './keyMap'
+import { typeTextWin32, keyToggleWin32 } from './injectorWin32'
+
+// libnut-win32's keyboard calls resolve without throwing but silently fail
+// to deliver most/all keystrokes when this process has never owned a
+// window (the real input-helper's situation) -- see
+// docs/native-input-plan.md's keyboard-injection-silent-failure addendum.
+// Mouse is unaffected (stays on nut.js below); keyboard on Windows goes
+// through raw user32.SendInput instead (injectorWin32.ts). Every other
+// platform this app's dev/test harness runs on keeps the original nut.js
+// keyboard path.
+const isWin32 = process.platform === 'win32'
 
 // Injects mouse/keyboard input on the agent (target) machine.
 // Coordinates are absolute screen pixels, matching what the controller
@@ -47,6 +58,10 @@ if (providerRegistry.hasKeyboard()) providerRegistry.getKeyboard().setKeyboardDe
 mouse.config.autoDelayMs = 0
 
 export async function typeText(text: string): Promise<void> {
+  if (isWin32) {
+    typeTextWin32(text)
+    return
+  }
   await keyboard.type(text)
 }
 
@@ -83,6 +98,10 @@ export async function scrollMouse(deltaY: number): Promise<void> {
 // keyboard.type() -- required for modifier combos (Ctrl+C) and any key held
 // across time, neither of which typeText() can express.
 export async function keyToggle(code: string, down: boolean): Promise<void> {
+  if (isWin32) {
+    keyToggleWin32(code, down)
+    return
+  }
   const key = CODE_TO_KEY[code]
   if (key === undefined) return // unmapped key -- silently ignore rather than throw
   if (down) await keyboard.pressKey(key)

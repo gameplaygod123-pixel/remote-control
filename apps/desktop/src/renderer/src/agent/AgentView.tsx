@@ -113,6 +113,11 @@ function AgentView(): React.JSX.Element {
   // replaced -- see the identical pattern/reasoning in ControllerSession.
   const [activePc, setActivePc] = useState<RTCPeerConnection | null>(null)
   const videoStats = useVideoStats(activePc, 'outbound')
+  // Mirrors activePc for the input-helper's onDown handler below, which is
+  // registered in a separate, mount-once effect (empty deps) and so can't
+  // read activePc state directly without going stale -- same rationale as
+  // clientRef/deviceIdRef just below.
+  const pcRef = useRef<RTCPeerConnection | null>(null)
   const [incomingRequest, setIncomingRequest] = useState(false)
   const [pendingControllerId, setPendingControllerId] = useState<string | null>(null)
   const [trustedList, setTrustedList] = useState<{ id: string; trustedAt: number }[]>([])
@@ -281,11 +286,25 @@ function AgentView(): React.JSX.Element {
       })
     })
     window.api.inputHelper.onDown(() => {
-      // Known limitation (see docs/native-input-plan.md): this does not
-      // instantly recover an in-flight helper-backed session -- its input
-      // silently stops until the next re-pair, which then correctly falls
-      // back since useHelperRef is cleared here before any future
-      // negotiateHelperCaps() call.
+      // Safety net (see docs/native-input-plan.md): a helper crash used to
+      // leave an active helper-backed session silently input-dead -- video
+      // kept flowing, looking "connected" while nothing typed or clicked
+      // ever landed, with no signal to either side that anything was wrong
+      // until a human noticed and manually reconnected. Closing the video
+      // pc here instead turns that into a real, visible disconnect: the
+      // controller sees the connection drop and can retry the pairing,
+      // which starts a genuinely fresh session (a freshly-respawned helper,
+      // per inputHelperHost's own exit-handler, by the time that retry
+      // reaches pair-result). Only closes anything if THIS session actually
+      // used the helper path -- a helper crash during a renderer-input-
+      // channel session isn't this session's problem.
+      if (useHelperRef.current && pcRef.current) {
+        pcRef.current.close()
+        pcRef.current = null
+        setActivePc(null)
+        setConnectionType(null)
+        if (videoRef.current) videoRef.current.srcObject = null
+      }
       useHelperRef.current = false
       setStatus((current) =>
         current.startsWith('paired') || current.startsWith('connection')
@@ -324,6 +343,7 @@ function AgentView(): React.JSX.Element {
           // old peer connection (if any) is no longer valid -- start over.
           pc?.close()
           pc = undefined
+          pcRef.current = null
           setActivePc(null)
           if (videoRef.current) videoRef.current.srcObject = null
           void window.api.inputHelper.stopSession()
@@ -420,12 +440,14 @@ function AgentView(): React.JSX.Element {
               onClipboardChannel: attachClipboardChannel
             })
           }
+          pcRef.current = pc
           setActivePc(pc)
           pc.onconnectionstatechange = () => {
             setStatus(`connection: ${pc!.connectionState}`)
             if (pc!.connectionState === 'connected') getConnectionType(pc!).then(setConnectionType)
             else if (pc!.connectionState === 'failed' || pc!.connectionState === 'closed') {
               setConnectionType(null)
+              pcRef.current = null
               setActivePc(null)
             }
           }

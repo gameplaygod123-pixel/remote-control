@@ -540,3 +540,126 @@ diagnosis -- see options below):**
 No fix implemented in this round for #13 -- reported for a decision on which
 candidate (or combination) to pursue, per this round's own instruction to
 investigate before changing code.
+
+## 14. Addendum: keyboard fixed -- candidate C (koffi + raw SendInput), the Notepad oracle was the bug
+
+Branch `fix/ice-servers-and-keyboard`. §13 concluded raw `SendInput` also
+failed and the "must own a window" theory held even for the direct Win32
+API, not just libnut. That conclusion was wrong, and the *test* was the
+reason why, not the injection: Notepad's `WM_GETTEXT`/`GetWindowTextLength`
+on this system reported the document as "modified" (`*` in the title bar --
+real proof *something* was delivered) while its edit control's own text
+length stayed 0. A broken read, not a broken write.
+
+Rebuilt with a trustworthy oracle instead of trusting an external app: added
+a real accumulating `<input>` plus a running keydown log (key/code/shiftKey/
+ctrlKey/altKey) to `CaptureTestView.tsx` (the existing `INPUT_TEST=1` dev
+harness), and drove it from the same kind of windowless
+`ELECTRON_RUN_AS_NODE` process the real helper runs as. Full matrix result:
+
+| method | input | landed in the real oracle? |
+|---|---|---|
+| libnut `keyboard.type()` | `"abc-123"`, `"ABC"` | no -- 0 characters, 0 keydown events |
+| libnut `pressKey`/`releaseKey` | `A` alone, Shift+`B` | no -- same as above |
+| raw `SendInput` `KEYEVENTF_UNICODE` | `"xyz-789XYZ"`, Thai `"สวัสดี"` | **yes -- 100%, exact, both cases, no shift handling needed** |
+| raw `SendInput` VK-based | `C` alone, Shift+`D` | delivered, but character translated through the active (non-US) keyboard layout (`"u"`/`"g"` instead of `"c"`/`"D"`) |
+
+So: libnut is confirmed broken in this windowless context (matches the
+original bug report exactly, now with a reliable oracle instead of a
+possibly-broken one), raw `SendInput` with `KEYEVENTF_UNICODE` works
+perfectly and is layout-independent (exactly what's needed for the `'text'`
+message path), and VK-based `SendInput` works too but is layout-sensitive
+for letter keys -- irrelevant here since letters/symbols only ever go
+through the Unicode path; VK-based injection is reserved for modifiers/
+navigation/function keys (`Ctrl`, `Alt`, `Shift`, arrows, `F1`-`F24`, Enter,
+Backspace, Home/End/PageUp/PageDown/Insert/Delete), which are layout-
+invariant in Windows and where an app's shortcut recognition keys off the
+VK code, not the character.
+
+One real edge case found and deliberately avoided rather than fixed: mixing
+a genuinely-held modifier key (real `VK_SHIFT` down) with `KEYEVENTF_UNICODE`
+events at the same time produces inconsistent modifier-flag reporting and
+occasionally-altered characters. Not a problem in practice -- the
+implementation below never combines the two: `'text'` messages are pure
+Unicode injection, `'keydown'`/`'keyup'` messages are pure VK injection,
+matching the protocol's own existing separation between those message
+types.
+
+**Implementation** (`koffi` chosen for the FFI layer -- N-API-based prebuilds
+ship for every platform inside the npm package itself, so there's no
+binary-swap step needed when cross-building from a Mac, unlike a
+native/node-gyp addon):
+
+- `src/main/input/keyMapWin32.ts` -- `CODE_TO_VK`, mirroring `keyMap.ts`'s
+  `CODE_TO_KEY` one-for-one (same codes, same Cmd->Ctrl rationale for
+  `MetaLeft`/`MetaRight`), mapping each `KeyboardEvent.code` to a raw VK
+  constant plus whether `KEYEVENTF_EXTENDEDKEY` is required (arrows, Insert/
+  Delete/Home/End/PageUp/PageDown, right-hand Ctrl/Alt, NumLock, Print
+  Screen, numpad Enter/Divide).
+- `src/main/input/injectorWin32.ts` -- `typeTextWin32(text)` sends one
+  `KEYEVENTF_UNICODE` down+up pair per **UTF-16 code unit** (not per Unicode
+  code point -- a supplementary-plane character like an emoji needs its
+  surrogate pair delivered as two separate events, same as real Windows text
+  input; Thai and everything else this app targets is single-code-unit
+  BMP, but iterating by code unit keeps that case from silently mangling
+  instead of only working for the common case). `keyToggleWin32(code, down)`
+  looks up `CODE_TO_VK`, silently ignores unmapped codes (matching the
+  existing `keyToggle()` behavior), and sends one `SendInput` call with the
+  right VK + `KEYEVENTF_KEYUP`/`KEYEVENTF_EXTENDEDKEY` flags.
+- `injector.ts` branches on `process.platform === 'win32'`: `typeText`/
+  `keyToggle` go through the new Win32 module there, and fall back to the
+  original nut.js path on any other platform (this app's dev/test harness
+  is the only thing that ever runs non-Windows). Mouse
+  (`moveMouse`/`clickMouse`/`mouseButtonToggle`/`scrollMouse`) is completely
+  untouched -- it was never broken, stays on nut.js everywhere.
+
+Re-verified end to end against the real (bundled, wired-up) `injector.ts`,
+not just the raw spike: ASCII + Thai `typeText` landed correctly; a real
+`Ctrl`+`C`-shaped `keyToggle` sequence correctly reported `ctrl=true`; a
+held-`Shift`-then-three-letters `keyToggle` sequence correctly reported
+`shift=true` consistently across all three letters (unlike the earlier
+ad hoc test that mixed VK and Unicode injection); an Alt+Tab-shaped sequence
+sent without error.
+
+Temporary diagnostic added to the real helper (`input-helper/index.ts`):
+every `'keydown'`/`'keyup'`/`'text'` message now logs the code/character(s)
+to `%TEMP%\input-helper.log` before injecting, so a real session from the
+Mac controller can be checked against that log for ground truth on real
+hardware -- this sandboxed dev environment's own non-US keyboard layout and
+general virtualization quirks mean its results, while now backed by a
+trustworthy oracle, still aren't a substitute for a real round. Remove this
+logging once real-hardware rounds confirm the Win32 path is solid.
+
+## 15. Addendum: STUN second server + two-layer resilience safety net
+
+Same branch. Two smaller, previously-proposed/approved items landed
+alongside the keyboard fix:
+
+- **Second STUN server**: a single STUN server is itself a single point of
+  failure -- exactly what just went wrong with openrelay in §12. Added
+  `stun:stun.cloudflare.com:3478` as a second entry in both `ICE_SERVERS`
+  lists (`input-helper/index.ts` and `peerConnection.ts`), but only after
+  sending it a real RFC 5389 Binding Request from this machine and getting a
+  valid Binding Success Response back (6/6 across 3 separate runs) -- the
+  same verification openrelay never got before it was originally added.
+- **Safety net A** (helper): after `MAX_ATTEMPTS` (3) failed negotiation
+  attempts, the helper now calls `process.exit(1)` (after a `setImmediate`
+  tick to let the `'fatal'` IPC message flush) instead of sending `'fatal'`
+  and just sitting alive. `inputHelperHost.ts` already had an unconditional
+  respawn-on-exit handler (`RESPAWN_DELAY_MS` later) from the original
+  self-healing-retry work, so this gets a genuinely fresh process -- new
+  native module state, everything -- for the next pairing attempt, instead
+  of an uncertain same-process retry after 3 attempts already failed
+  identically.
+- **Safety net B** (agent renderer): `AgentView.tsx`'s `onDown` handler
+  previously only cleared `useHelperRef` and updated the status text,
+  leaving an in-flight helper-backed session's video connection alive and
+  looking "connected" while input was silently, permanently dead until a
+  human noticed and manually reconnected. Added a `pcRef` (mirroring the
+  existing `activePc` state for the same reason `clientRef`/`deviceIdRef`
+  already exist -- `onDown` is registered in a separate, mount-once effect
+  that can't read other effects' local variables or go stale-free off
+  state) so `onDown` can now close the video pc outright when the crash
+  happens during a session that was actually using the helper path. That
+  turns a silent, zombie "video works, input doesn't" state into a real,
+  visible disconnect the controller can see and retry against.

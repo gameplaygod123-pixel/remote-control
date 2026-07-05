@@ -21,7 +21,15 @@ export interface SignalTransport {
 // restrictive-NAT pair genuinely needs a TURN relay, this needs a real
 // (ideally self-hosted, e.g. coturn on a small VPS) replacement, not another
 // free service assumed to work without being verified end to end first.
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
+//
+// stun.cloudflare.com added as a second, independent STUN server -- a single
+// one is itself a single point of failure (exactly what just went wrong with
+// openrelay). Verified first: a real RFC 5389 Binding Request from this
+// machine got a valid Binding Success Response back, 6/6 across 3 runs.
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' }
+]
 
 export interface PeerConnectionOptions {
   // Which signaling channel this PC's ICE candidates should be tagged with

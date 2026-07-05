@@ -65,7 +65,17 @@ initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Debug', (leve
 // was logged, and no `typ relay` candidate appears anywhere across the whole
 // (9500+ line) log -- the TURN relay fallback was never actually working
 // either. See docs/native-input-plan.md's stun-server-flapping addendum.
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
+//
+// A single STUN server is itself a single point of failure (exactly what
+// just went wrong with openrelay), so stun.cloudflare.com is added as a
+// second, independent option -- but only after sending it a real RFC 5389
+// Binding Request from this machine and confirming a valid Binding Success
+// Response came back (6/6 across 3 separate runs), the same verification
+// openrelay never got before it was originally added.
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' }
+]
 
 // TEMP diagnostic: pulls the `typ host|srflx|relay` suffix out of a raw ICE
 // candidate string so the log says outright whether a server-reflexive/relay
@@ -125,9 +135,22 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
       break
     case 'keydown':
     case 'keyup':
+      // TEMP diagnostic (keyboard-injection-silent-failure investigation,
+      // see docs/native-input-plan.md): logs every real keyboard message
+      // this process receives and injects, so a real session from the Mac
+      // controller can be checked against %TEMP%\input-helper.log to
+      // confirm messages actually arrive here and injection doesn't throw
+      // -- remove once the Win32 SendInput keyboard path is confirmed
+      // solid across real hardware rounds, not just this sandboxed dev
+      // environment's own oracle.
+      log(currentSession?.session ?? sessionCounter, `${message.t} code=${message.code}`)
       await keyToggle(message.code, message.t === 'keydown')
       break
     case 'text':
+      log(
+        currentSession?.session ?? sessionCounter,
+        `text len=${message.text.length} codePoints=${JSON.stringify(Array.from(message.text).map((c) => c.codePointAt(0)))}`
+      )
       await typeText(message.text)
       break
   }
@@ -370,9 +393,20 @@ function attemptNegotiation(): void {
       log(mySession, 'retrying: closing and creating a fresh RTCPeerConnection')
       attemptNegotiation()
     } else {
-      log(mySession, `giving up after ${MAX_ATTEMPTS} attempts`)
+      log(mySession, `giving up after ${MAX_ATTEMPTS} attempts -- exiting for a clean respawn`)
       send({ evt: 'fatal', message: `input PC negotiation failed after ${MAX_ATTEMPTS} attempts` })
       closeSession()
+      // Safety net (see docs/native-input-plan.md): a helper that's failed
+      // to connect 3 times in a row might have some kind of degraded native
+      // state that a same-process retry can't fix (this is exactly the
+      // uncertainty the v1.14.2 "all 3 attempts stall identically" report
+      // raised, before the STUN root cause was found) -- rather than sit
+      // alive indefinitely after sending 'fatal', exit outright so
+      // inputHelperHost's existing exit-handler respawns a genuinely fresh
+      // process (new native module state, new everything) for the next
+      // pairing attempt. setImmediate gives the 'fatal' IPC message a tick
+      // to actually flush before the process goes away.
+      setImmediate(() => process.exit(1))
     }
   }, CONNECT_TIMEOUT_MS)
 }
