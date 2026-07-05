@@ -65,7 +65,16 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.19.4**. The controller now has an app-shell layout: a
+Latest release: **v1.20.0** — **light mode (Amber Light) + a sliding sun/moon
+theme toggle** at the bottom of the controller sidebar. The whole controller
+shell themes through `--dl-*` tokens (deviceList.css); a
+`:root[data-theme='light'] .ctl-shell` block redefines them. Persisted per
+machine via `main/themeConfig.ts` (userData `theme.txt`, default dark);
+`ThemeToggle.tsx` flips `document.documentElement.dataset.theme` + saves.
+Session view + agent/setup screens stay dark for now (later pass); Windows
+titleBarOverlay buttons keep their dark tint until re-themed dynamically.
+
+The controller has an app-shell layout: a
 slim icon sidebar (Computers / File Transfer) drawn by ControllerView, with a
 single centered TitleBar (OS bar hidden — macOS hiddenInset traffic lights,
 Windows titleBarOverlay whose 38px height must match `.app-titlebar`). A live
