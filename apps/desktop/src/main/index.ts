@@ -448,8 +448,15 @@ app.whenReady().then(async () => {
           if (surfaceAttached) {
             // Lock the session window to the remote's aspect (1920x1080 agent) so
             // the in-window video fills it with no letterbox + the input mapping
-            // is pixel-exact. Released on detach.
+            // is pixel-exact. Released on detach. Also snap the CURRENT size to
+            // 16:9 once (setAspectRatio only constrains future user-resizes), so a
+            // windowed session isn't letterboxed with black bars on connect.
             controllerWindow.setAspectRatio(16 / 9)
+            if (!controllerWindow.isFullScreen()) {
+              const [w, h] = controllerWindow.getContentSize()
+              const targetH = Math.round((w * 9) / 16)
+              if (Math.abs(targetH - h) > 2) controllerWindow.setContentSize(w, targetH)
+            }
           }
         }
         pushNativeAccessUnit(au)
