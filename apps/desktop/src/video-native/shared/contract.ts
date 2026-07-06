@@ -37,16 +37,31 @@ export const VIDEO_PIPELINE_ENV = 'VIDEO_PIPELINE'
 export type VideoCodec = 'h264' | 'hevc'
 
 /**
+ * Chroma subsampling. 4:2:0 is universal hardware; 4:4:4 keeps text and thin UI
+ * lines razor-sharp (Parsec's readout showed "4:2:0 Full Range" — 4:4:4 is a
+ * real step up for a remote *desktop*). Needs encode + decode support on BOTH
+ * ends, so it's negotiated, never assumed. Carried here so "best quality" is a
+ * config flip + capability probe, not a rearchitect.
+ */
+export type Chroma = '4:2:0' | '4:4:4'
+
+/** 8-bit SDR (default, universal) or 10-bit for HDR / deep-color displays.
+ *  10-bit needs HW support both ends — negotiated in the Phase 1 probe. */
+export type BitDepth = 8 | 10
+
+/**
  * Capture + encode parameters the controller requests and the agent's sender
  * applies. Defaults deliberately mirror the tuned WebRTC values proven in
  * v1.22.0 (see agent/AgentView.tsx history) so the native path starts at
  * known-good numbers instead of re-discovering them.
  */
 export interface VideoConfig {
-  width: number // 1920
+  width: number // 1920 — ceiling is parameterized: 1440p/4K are just bigger numbers
   height: number // 1080
-  fps: number // 60
+  fps: number // 60 — 120/144 is a number change, not an architecture change
   codec: VideoCodec
+  chroma: Chroma // '4:2:0' default; '4:4:4' when both ends support it
+  bitDepth: BitDepth // 8 default; 10 for HDR/deep-color when supported
   /** Floor that stops the encoder collapsing to a blurry trickle on a quiet
    *  link -- the exact failure v1.22.0 fixed with x-google-min-bitrate. */
   minBitrateKbps: number // 6000
@@ -60,6 +75,10 @@ export interface VideoConfig {
    * carries it from day one so neither side has to change shape later.
    */
   cursor: 'composited' | 'separate'
+  /** Which display to capture on a multi-monitor agent; undefined = primary.
+   *  Displays are enumerated via a separate capability (Phase 3). Reserved now
+   *  so multi-monitor doesn't reshape the config later. */
+  displayId?: string
 }
 
 export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
@@ -67,11 +86,37 @@ export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   height: 1080,
   fps: 60,
   codec: 'h264',
+  chroma: '4:2:0',
+  bitDepth: 8,
   minBitrateKbps: 6_000,
   startBitrateKbps: 20_000,
   maxBitrateKbps: 30_000,
   cursor: 'composited'
 }
+
+/**
+ * Audio is out of scope for the first native milestone, but the architecture
+ * RESERVES a parallel audio track negotiated over the same signaling so adding
+ * it later is additive, not a rearchitect. Opus is the natural choice (what
+ * Parsec uses). Kept in the frozen contract precisely so the day audio lands,
+ * no interface has to change shape.
+ */
+export interface AudioConfig {
+  codec: 'opus'
+  sampleRate: 48_000
+  channels: 1 | 2
+}
+
+/**
+ * Everything a session may carry. `start-session` takes this (not a bare
+ * VideoConfig) so audio slots in later with zero IPC churn.
+ */
+export interface SessionConfig {
+  video: VideoConfig
+  audio?: AudioConfig
+}
+
+export const DEFAULT_SESSION_CONFIG: SessionConfig = { video: DEFAULT_VIDEO_CONFIG }
 
 /**
  * Per-second pipeline telemetry each helper reports to its Electron main,

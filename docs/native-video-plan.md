@@ -44,9 +44,33 @@ setting that closes this — only leaving the `<video>`/capture path does.
 **Goal:** get "glued to the mouse" feel by moving the *video hot path* out of
 Chromium on both ends, while keeping the current UI and every existing feature.
 
-**Non-goals:** rewriting the UI (keep the Electron shell exactly), replacing
-signaling, replacing the input helper (it already works), or supporting new
-platforms in this project.
+**Non-goals:** replacing signaling, replacing the input helper (it already
+works), or supporting new platforms in this project. The Electron **lobby** UI
+(device list, file transfer, settings, themes) is kept as-is; only the in-session
+screen moves to a native window (§3).
+
+## 1.5 North Star — what "best" means here (owner: "ทำให้ดีที่สุดไปเลย")
+
+Since we're rewriting the video path anyway, aim for genuinely best-in-class, not
+just parity. Concrete bar:
+
+| Target | Bar | Status in foundation |
+|---|---|---|
+| Latency | within **~1 frame of Parsec** glass-to-glass | the whole point (native capture+render) |
+| Cursor feel | **instant local cursor** (`cursor:'separate'`) | reserved in `VideoConfig.cursor` |
+| Text sharpness | **4:4:4** chroma option (Parsec is 4:2:0) | reserved in `VideoConfig.chroma` |
+| Color | **10-bit / HDR** option | reserved in `VideoConfig.bitDepth` |
+| Codec | H.264 **and** HEVC, negotiated | reserved in `VideoCodec` |
+| Resolution / fps | up to **1440p / 4K**, **120/144 fps** | parameterized in `VideoConfig` |
+| Multi-monitor | pick which display | reserved in `VideoConfig.displayId` |
+| Audio | Opus stereo, in sync | reserved as a parallel track (`SessionConfig.audio`) |
+| Resilience | clean reconnect; no wedge on loss | Phase 3 |
+
+**Discipline:** everything above is *anticipated by the frozen foundation now*
+(so nothing needs a rearchitect later), but **implemented in phases** — do NOT
+build all of it before the core path works. Default config ships conservative
+(1080p60, H.264, 4:2:0, 8-bit, no audio); the "best" knobs turn on as each is
+proven on real hardware. Best foundation now; best features incrementally.
 
 ---
 

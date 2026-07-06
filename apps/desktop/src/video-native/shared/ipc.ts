@@ -11,7 +11,7 @@
 // Both are separate native processes outside Chromium; main only relays their
 // SDP/ICE over the existing signaling and positions the receiver's render.
 
-import type { NativeVideoStats, VideoConfig } from './contract'
+import type { NativeVideoStats, SessionConfig } from './contract'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Sender = agent (Windows). Owns DXGI capture + HW encode + the outbound track.
@@ -26,7 +26,7 @@ export type VideoSenderToMain =
   | { evt: 'fatal'; message: string }
 
 export type MainToVideoSender =
-  | { cmd: 'start-session'; config: VideoConfig }
+  | { cmd: 'start-session'; config: SessionConfig }
   | { cmd: 'remote-answer'; sdp: string }
   | { cmd: 'remote-ice'; candidate: string; sdpMid: string | null; sdpMLineIndex: number | null }
   | { cmd: 'stop-session' }
@@ -35,7 +35,7 @@ export type MainToVideoSender =
 /** Main-side handle over the sender helper (mirror of InputHelperHost). */
 export interface VideoSenderHost {
   isReady(): boolean
-  startSession(config: VideoConfig): void
+  startSession(config: SessionConfig): void
   remoteAnswer(sdp: string): void
   remoteIce(candidate: string, sdpMid: string | null, sdpMLineIndex: number | null): void
   stopSession(): void
