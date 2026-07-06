@@ -523,7 +523,9 @@
    region would swallow mouse events meant for the remote machine. */
 .session-float {
   position: absolute;
-  top: 8px;
+  /* Below the 34px app title bar so the pill/controls sit clear of it and stay
+     clickable (they used to overlap and read as "stuck in the bar"). */
+  top: 42px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
