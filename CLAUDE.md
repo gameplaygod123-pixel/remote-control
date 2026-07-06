@@ -344,23 +344,38 @@ Lessons:
 8. **Input elevation (SYSTEM service)** — owner-picked 2026-07-07 after "open
    Task Manager → mouse dies instantly". Root cause: Windows UIPI/integrity — our
    medium-integrity injector can't `SendInput` into high-integrity windows (Task
-   Manager, admin apps, UAC, Ctrl+Alt+Del, lock). **HANDOFF SCAFFOLD WRITTEN on
-   the Mac (2026-07-07), ALL UNTESTED — for Windows-Claude to build + test.** Plan
-   + phasing + session-0 correction in
+   Manager, admin apps, UAC, Ctrl+Alt+Del, lock). Mac wrote the scaffold; Windows-
+   Claude is building + testing it phase by phase on real hardware. Plan + phasing
+   + session-0 correction in
    [`docs/input-elevation-plan.md`](docs/input-elevation-plan.md); code +
    test-order in `apps/desktop/src/input-service/README.md`. Architecture (Parsec
    model, corrected for session-0 isolation): a session-0 LocalSystem **launcher**
    (`service.ts`) spawns via `CreateProcessAsUserW` an **injector-in-session**
    (`index.ts`, SYSTEM/high) that hosts a named pipe, follows the active desktop
-   (`syncInputDesktop()` DONE), and raw-`SendInput`s (`rawInject.ts`, mouse+kbd);
-   the medium helper forwards over the pipe (`serviceClient.ts`) with local-inject
+   (`syncInputDesktop()`), and raw-`SendInput`s (`rawInject.ts`, mouse+kbd); the
+   medium helper forwards over the pipe (`serviceClient.ts`) with local-inject
    fallback. SAFETY BAR: gated behind `PR_INPUT_SERVICE=1`, default build
-   byte-identical. NOT wired into any build yet (needs electron-vite entries +
-   build-win.sh verify). Riskiest FFI = `spawnInjectorInSession()` (WTSQueryUser
-   Token+DuplicateTokenEx+CreateProcessAsUserW) — left as a SCAFFOLD with exact
-   signatures; golden rule #1 (PRERELEASE, real-hardware, native segfaults). Task
-   Manager (Ctrl+Shift+Esc) fully fixed once done; secure-desktop cases land
-   input-only (video stays frozen there = separate SYSTEM-capture project).
+   byte-identical; both processes wired as electron-vite entries
+   (`input-service.js` + `input-injector.js`) but inert unless installed.
+   **PROGRESS (real hardware):**
+   - ✅ **Phase 0 DONE** — `rawInject` (raw SendInput) verified auto (GetCursorPos
+     px-exact, clipboard byte-compare for Thai text, EM_GETFIRSTVISIBLELINE for
+     wheel). koffi mouse+kbd struct/signature PROVEN on hardware. `WHEEL_DELTA=120`
+     = Windows-standard (no tuning). Bug fixed: `injectKey` evaluated `scanCodeFor`
+     before `sendKey`'s `ensureInit` → null `mapVirtualKeyFn` on a process's first
+     keydown; fixed by `ensureInit()` at the top of `scanCodeFor` (idempotent).
+   - ✅ **Phase 1 DONE** — pipe transport/framing/fallback verified: FrameDecoder
+     6/6 (partial/corrupt/malformed), forward helper→pipe→injector px-exact, 240-
+     move burst coalesced+split correctly, **fallback seamless (kill injector mid-
+     session → local inject, 0 frames dropped)**. koffi-under-plain-node OK.
+     Harnesses: `input-service/dev/phase{0,1}-*.ts` + `scripts/phase{0,1}.ps1`.
+   - ⏭ **Phase 2 NEXT (riskiest FFI)** — `spawnInjectorInSession()`
+     (WTSQueryUserToken + DuplicateTokenEx + CreateProcessAsUserW): launch the
+     injector as SYSTEM-in-session so Task Manager (Ctrl+Shift+Esc) + admin apps
+     take input. Then Phase 3 desktop-follow (UAC/lock), Phase 4 harden.
+   - Golden rule #1 throughout: PRERELEASE + real-hardware before any full release.
+     Secure-desktop cases land input-only (video stays frozen = separate SYSTEM-
+     capture project).
 9. **Auto-reconnect resilience** — DONE this session (Mac repo, shared
    `signalingClient.ts`): added a liveness watchdog. Root cause of "agent stayed
    offline until I restarted it after closing the MacBook lid": the client pinged
