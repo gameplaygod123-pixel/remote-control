@@ -65,17 +65,23 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.4** (device card = the v1.20.3 spacious styling — icon
-52px, card radius 22px, thumb aspect 16/10, Connect button a full-capsule pill
-`border-radius:999px`, 14px pad / 15px font, name 17px — BUT with the live
-screen preview RESTORED: `{device.thumbnail ? <img/> : <MonitorIcon/>}` again,
-so a streaming machine shows its live screen and everything else shows the
-floating icon. LESSON: v1.20.3 misread "make the card look like the MacBook
-mock" as "remove the live preview" and shipped icon-only → owner complained
-"จอแสดงภาพไม่ขึ้น" (they wanted the mock's *card styling*, not the preview
-gone). Card sizing is being fine-tuned via a **card-tuner artifact** (owner
-adjusts width/radius/pad/gap/icon/aspect/name/button + exports exact values →
-apply 1:1); watch for those numbers to land, then apply + release). v1.20.2 = transparent thumb bg so placeholder icon floats, 40px icon, 18px card radius, 12px rounder Connect button, bigger name/status; live thumbnails still shown when sent. v1.20.1 = taller thumbnail + ID line removed. v1.20.0 = **light mode (Amber Light) + a sliding sun/moon
+Latest release: **v1.20.5** (device card rebuilt from the owner's own
+**card-tuner** export: name + online status now FLOAT over the screen preview
+— an abs-positioned `.dl-overlay` INSIDE `.dl-thumb`, bottom-left `left:17%;
+top:90%`, white text `#fff`/`#e8e0d8` with a strong outline shadow, no scrim
+box — Parsec-style. Card is a fixed ~302px, `.dl-grid`
+`repeat(auto-fill,minmax(258px,302px))` so it no longer stretches full-width;
+card radius 34, padding 8, gap 4; thumb radius 12, aspect 16/10, still
+transparent bg + live thumbnail when streaming else 28px MonitorIcon; name
+12px, status 10px, Connect pill padding 8 / font 12. KNOWN weak spot: light
+theme + icon-fallback (online but not yet streaming) = white text on cream,
+legible via the outline shadow but not pretty; real machines stream a dark
+screen so it's transient — offer theme-aware text color if it bugs the owner.
+The **card-tuner artifact** (scratchpad `card-tuner.html`, favicon 🖥️) has a
+canvas mock desktop + draggable text overlay + Export → owner sends the JSON,
+we apply 1:1. LESSON from v1.20.3/4: don't infer card intent from screenshots
+— the tuner ended the guessing loop. v1.20.4 restored the live preview
+(v1.20.3 had wrongly removed it). v1.20.2 = transparent thumb bg so placeholder icon floats, 40px icon, 18px card radius, 12px rounder Connect button, bigger name/status; live thumbnails still shown when sent. v1.20.1 = taller thumbnail + ID line removed. v1.20.0 = **light mode (Amber Light) + a sliding sun/moon
 theme toggle** at the bottom of the controller sidebar. The whole controller
 shell themes through `--dl-*` tokens (deviceList.css); a
 `:root[data-theme='light'] .ctl-shell` block redefines them. Persisted per
