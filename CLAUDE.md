@@ -65,8 +65,12 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.9** (in-session floating control bar now starts
-COLLAPSED — `ControllerSession` `panelOpen` initial state `true`→`false`; on
+Latest release: **v1.20.10** (Connect button inset 4px from the card
+left/right/bottom via `.dl-btn { margin:0 4px 4px }` — dropped `width:100%` so
+flex-stretch keeps it full-width-minus-margins, else it'd overflow; name
+14→12, status 11→10. From a 3rd card-tuner export; the tuner grew a "ระยะปุ่ม
+จากขอบ" (btnm) slider + a "ความมนจอ"/padding-min-0 pass earlier). v1.20.9 =
+in-session floating control bar now starts COLLAPSED — `ControllerSession` `panelOpen` initial state `true`→`false`; on
 connect you see just the small dim status-dot pill (`.session-float__toggle`,
 top-center, opacity .45) and click it to expand the Back/name/stats/status
 bar). v1.20.8 = thinner frame around the card's screen preview:
