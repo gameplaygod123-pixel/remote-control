@@ -344,14 +344,23 @@ Lessons:
 8. **Input elevation (SYSTEM service)** — owner-picked 2026-07-07 after "open
    Task Manager → mouse dies instantly". Root cause: Windows UIPI/integrity — our
    medium-integrity injector can't `SendInput` into high-integrity windows (Task
-   Manager, admin apps, UAC, Ctrl+Alt+Del, lock). Fix = a LocalSystem Windows
-   Service that receives input from the user-session helper over a named pipe and
-   injects with `OpenInputDesktop`/`SetThreadDesktop` desktop-switching. Full plan
-   + phasing in [`docs/input-elevation-plan.md`](docs/input-elevation-plan.md).
-   PLANNED, not started — native + privileged → golden rule #1 (PRERELEASE first),
-   Windows-Claude implements/tests. Task Manager (Ctrl+Shift+Esc) fully fixed;
-   secure-desktop cases land input-only (video stays frozen there = bigger future
-   work).
+   Manager, admin apps, UAC, Ctrl+Alt+Del, lock). **HANDOFF SCAFFOLD WRITTEN on
+   the Mac (2026-07-07), ALL UNTESTED — for Windows-Claude to build + test.** Plan
+   + phasing + session-0 correction in
+   [`docs/input-elevation-plan.md`](docs/input-elevation-plan.md); code +
+   test-order in `apps/desktop/src/input-service/README.md`. Architecture (Parsec
+   model, corrected for session-0 isolation): a session-0 LocalSystem **launcher**
+   (`service.ts`) spawns via `CreateProcessAsUserW` an **injector-in-session**
+   (`index.ts`, SYSTEM/high) that hosts a named pipe, follows the active desktop
+   (`syncInputDesktop()` DONE), and raw-`SendInput`s (`rawInject.ts`, mouse+kbd);
+   the medium helper forwards over the pipe (`serviceClient.ts`) with local-inject
+   fallback. SAFETY BAR: gated behind `PR_INPUT_SERVICE=1`, default build
+   byte-identical. NOT wired into any build yet (needs electron-vite entries +
+   build-win.sh verify). Riskiest FFI = `spawnInjectorInSession()` (WTSQueryUser
+   Token+DuplicateTokenEx+CreateProcessAsUserW) — left as a SCAFFOLD with exact
+   signatures; golden rule #1 (PRERELEASE, real-hardware, native segfaults). Task
+   Manager (Ctrl+Shift+Esc) fully fixed once done; secure-desktop cases land
+   input-only (video stays frozen there = separate SYSTEM-capture project).
 9. **Auto-reconnect resilience** — DONE this session (Mac repo, shared
    `signalingClient.ts`): added a liveness watchdog. Root cause of "agent stayed
    offline until I restarted it after closing the MacBook lid": the client pinged

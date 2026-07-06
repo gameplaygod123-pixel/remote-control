@@ -5,6 +5,7 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/input-helper/**/*",
+    "src/input-service/**/*",
     "src/video-native/shared/**/*",
     "src/video-native/sender/**/*"
   ],

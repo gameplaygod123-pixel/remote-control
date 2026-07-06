@@ -36,56 +36,78 @@ Injected input lands on: Task Manager, elevated apps, the UAC consent prompt,
 Ctrl+Alt+Del, and the lock screen — i.e. a high-integrity injector that follows
 whatever desktop currently has input focus.
 
-## Architecture (Parsec/AnyDesk model)
+## CRITICAL: session-0 isolation (why a service alone can't inject)
+
+A Windows **service runs in session 0**, a separate, non-interactive session
+from the logged-in user (session 1+). Session 0 has its OWN window station
+(`Service-0x0-3e7$`), not the interactive `WinSta0`. Consequences the first
+draft of this plan got wrong:
+
+- A session-0 thread **cannot** `SetThreadDesktop` onto the user's `Default`
+  (or `Winlogon`) desktop — those live in a different session's window station.
+  `SendInput` from session 0 lands nowhere the user can see.
+- To inject into the interactive session you must have a process **running
+  inside that session**. Only SYSTEM (via `WTSQueryUserToken` +
+  `CreateProcessAsUser`) can spawn one there on demand.
+- Only **SYSTEM** integrity (not merely "administrator") can `OpenDesktop`
+  the **Winlogon** secure desktop with switch rights — that's the whole reason
+  we need a service, not just "run the agent as admin".
+
+So the real Parsec/AnyDesk shape is **two processes**, not one:
 
 ```
-Controller (Mac) --WebRTC input pc--> input-helper (Windows, user session, medium)
-                                           |
-                                           |  named pipe (RemoteInputMessage)
-                                           v
-                                  Input Service (LocalSystem, session 0)
-                                           |  OpenInputDesktop + SetThreadDesktop
-                                           v
-                                  SendInput on the ACTIVE desktop
+Controller(Mac) --WebRTC--> input-helper (session 1, MEDIUM)   [network endpoint, unchanged]
+                                   |  named pipe (both ends in session 1 -> trivial ACL)
+                                   v
+                       injector-in-session (session 1, SYSTEM/high)   [does SendInput]
+                                   ^  spawned + respawned via CreateProcessAsUser
+                                   |
+                       Input Service (session 0, LocalSystem)   [launcher/supervisor only]
 ```
-
-Keep the network endpoint where it is; move ONLY the injection call across the
-privilege boundary. Minimal blast radius.
 
 ### Components
 
-1. **Input Service** — a new long-lived process installed as a Windows Service,
-   `Start=auto`, account **LocalSystem**. Responsibilities:
-   - Create a named pipe `\\.\pipe\personal-remote-input` with a tight security
-     descriptor: allow the **interactive user** to connect+write, SYSTEM full,
-     nobody else.
-   - Read length-prefixed JSON `RemoteInputMessage`s (same shape as today:
-     move/down/up/wheel/keydown/keyup/text).
-   - **Desktop switching** before each inject (or on a change watcher):
-     - `WTSGetActiveConsoleSessionId()` → the interactive session.
-     - `OpenInputDesktop(0, FALSE, GENERIC_ALL)` → a handle to whatever desktop
-       currently receives input (flips to `Winlogon` on the secure desktop).
-     - `SetThreadDesktop(hDesk)` on the injecting thread, then `SendInput`.
-     - Re-open/re-attach when the input desktop changes (cheap to re-check; the
-       secure desktop appears/disappears around UAC prompts).
-   - Injection itself is the **same Win32 calls we already use** (`SendInput`
-     with `KEYEVENTF_UNICODE` for text, VK + `MapVirtualKeyW` scan codes for
-     held keys/shortcuts, mouse move/click/wheel).
+1. **Input Service (session 0, LocalSystem, `Start=auto`)** — a *launcher*, it
+   never injects itself. Responsibilities:
+   - Enable `SeTcbPrivilege` / `SeAssignPrimaryTokenPrivilege` (SYSTEM has them).
+   - `WTSGetActiveConsoleSessionId()` → the current interactive session; watch
+     for changes (fast-user-switch, logon/logoff) and re-target.
+   - `WTSQueryUserToken(sessionId, &hUserToken)` → duplicate it
+     (`DuplicateTokenEx`, primary) → **`CreateProcessAsUserW`** to spawn the
+     injector-in-session **as SYSTEM but inside session 1**, attached to
+     `WinSta0\Default`.
+   - Respawn the injector if it exits or the active session changes.
 
-2. **input-helper (existing, user session)** — unchanged on the network side
-   (owns the node-datachannel input pc, clipboard, liveness). Change: instead of
-   calling koffi `SendInput` **directly**, it connects to the service's named
-   pipe and **forwards** each `RemoteInputMessage`. Fallback: if the pipe isn't
-   available (service not installed / stopped), inject locally as today (medium
-   integrity) so a machine without the service still works for non-elevated
-   windows — graceful degradation, never a hard dependency.
+2. **injector-in-session (session 1, SYSTEM/high integrity)** — the process that
+   actually injects. Responsibilities:
+   - Host the named pipe `\\.\pipe\personal-remote-input` (both it and the
+     helper are in session 1, so a default ACL already lets the interactive user
+     connect — no custom SDDL needed; pipe-squatting hardening is a TODO).
+   - Read length-prefixed JSON `RemoteInputMessage`s.
+   - **Desktop follow**: before injecting, `OpenInputDesktop(0, FALSE,
+     GENERIC_ALL)` → if its name (`GetUserObjectInformationW`/`UOI_NAME`)
+     changed since last, `SetThreadDesktop` to it (flips `Default`↔`Winlogon`
+     around UAC/lock), close the old handle. Same thread does the `SendInput`.
+   - Inject via **raw `SendInput`** for BOTH mouse and keyboard (see
+     `src/input-service/rawInject.ts`) — NOT nut.js: SetThreadDesktop only
+     retargets the calling thread, and nut.js does its own thing that won't
+     respect it. Mouse uses absolute normalized coords
+     (`MOUSEEVENTF_ABSOLUTE|VIRTUALDESK`, x/y × 65535) so no screen-size query.
 
-3. **Installer / lifecycle** — the service is installed once (needs admin):
-   - electron-builder **NSIS** installer already runs elevated → install +
-     start the service at app install, remove it on uninstall.
-   - Also a runtime self-heal: if the agent starts and the service is missing,
-     offer a one-click "enable full control" that elevates (UAC once) and
-     installs it.
+3. **input-helper (session 1, MEDIUM, existing)** — unchanged on the network
+   side. Change: instead of calling koffi `SendInput` directly, connect to the
+   pipe and **forward** each `RemoteInputMessage` (see
+   `src/input-helper/serviceClient.ts`). **Fallback**: if the pipe isn't there
+   (service not installed / injector not up yet), inject locally as today
+   (medium integrity) — a machine without the service still controls
+   non-elevated windows. Never a hard dependency.
+
+4. **Installer / lifecycle** — service installed once (needs admin):
+   - electron-builder **NSIS** runs elevated → `scripts/install-input-service.ps1`
+     (`sc create`, LocalSystem, auto-start, set the ELECTRON_RUN_AS_NODE env via
+     the service's `Environment` registry key); uninstall reverses it.
+   - Runtime self-heal: if the agent starts and the service is missing, offer a
+     one-click "enable full control" that elevates (UAC once) and installs it.
 
 ### Language / reuse decision (open)
 
@@ -125,16 +147,46 @@ project. The owner's actual pain (Task Manager via Ctrl+Shift+Esc) is on the
 NORMAL desktop, so it's **fully** fixed by this plan (video already works there);
 the secure-desktop rows are a bonus that lands input-only for now.
 
-## Phasing
+## Phasing (each phase verified on real hardware before the next)
 
-1. **Service skeleton**: install/uninstall via NSIS, LocalSystem, named pipe up,
-   log to `%TEMP%`. No injection yet — prove lifecycle + pipe ACL.
-2. **Inject on Default desktop**: forward from helper → service → SendInput.
-   Verify Task Manager (Ctrl+Shift+Esc) + a "run as admin" app now take input.
-3. **Desktop switching**: OpenInputDesktop/SetThreadDesktop watcher → verify
-   UAC consent + lock screen take input (video still frozen there, expected).
-4. **Hardening**: fallback-to-local-inject, service crash-respawn, ACL review,
-   PRERELEASE → real-hardware sign-off → full release.
+De-risk the native FFI in the order it's most likely to break. Log everything to
+`%TEMP%\input-service.log` / the injector's own log.
+
+0. **`rawInject.ts` standalone (session 1, MEDIUM)** — prove raw `SendInput` for
+   mouse (absolute) + keyboard (VK/scan/unicode) works from a plain user-session
+   Node process, matching today's nut.js+injectorWin32 behavior (Thai text,
+   shortcuts, wheel). No pipe, no service. Cheapest thing that can be wrong;
+   nail it first. This file is written already (UNTESTED) — start here.
+1. **Pipe forward (both ends session 1, MEDIUM)** — helper → `serviceClient.ts`
+   → a plain session-1 process hosting the pipe → `rawInject`. Still medium
+   integrity (won't beat Task Manager yet), but proves the transport + framing +
+   fallback end to end without any service/token complexity.
+2. **Service launches injector as SYSTEM-in-session** — the hard part:
+   `WTSQueryUserToken` + `DuplicateTokenEx` + `CreateProcessAsUserW` from the
+   session-0 service, injector attaches to `WinSta0\Default`. Verify Task
+   Manager (Ctrl+Shift+Esc) + a "run as admin" app NOW take input.
+3. **Desktop follow**: `OpenInputDesktop`/`SetThreadDesktop` watcher → verify UAC
+   consent + lock screen take input (video still frozen there, expected).
+4. **Hardening**: active-session change (fast-user-switch) re-targeting,
+   injector crash-respawn, pipe-squatting check, uninstall cleanup, PRERELEASE →
+   real-hardware sign-off → full release.
+
+## Handoff status (2026-07-07, prepared on the Mac, ALL UNTESTED)
+
+Written for Windows-Claude to build + test — **none of it has run on Windows**;
+treat every FFI signature as a hypothesis until a real round confirms it
+(golden rule #1). Nothing is wired into the shipping build yet (SAFETY BAR).
+
+- `src/input-service/rawInject.ts` — raw SendInput mouse+keyboard (phase 0).
+- `src/input-service/win32Session.ts` — koffi bindings + `syncInputDesktop()`
+  implemented; `spawnInjectorInSession()` scaffolded with the exact call
+  sequence + signatures (phase 2/3).
+- `src/input-service/protocol.ts` — length-prefixed JSON pipe framing.
+- `src/input-service/index.ts` — injector-in-session entry (pipe server + loop).
+- `src/input-service/service.ts` — session-0 launcher entry.
+- `src/input-helper/serviceClient.ts` — helper-side forward-or-fallback.
+- `scripts/install-input-service.ps1` / `uninstall-input-service.ps1`.
+- `src/input-service/README.md` — build/run/test notes for each phase.
 
 ## Cross-refs
 

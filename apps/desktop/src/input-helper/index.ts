@@ -26,6 +26,7 @@ import {
   getScreenSize
 } from '../main/input/injector'
 import type { RemoteInputMessage } from '../renderer/src/shared/input/inputProtocol'
+import { startServiceClient, maybeForwardInput } from './serviceClient'
 import {
   runClipboardSync,
   type ClipboardChannelLike
@@ -122,6 +123,11 @@ let sessionCounter = 0
 let cachedScreenSize: { width: number; height: number } | null = null
 
 async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
+  // Elevated path (gated behind PR_INPUT_SERVICE=1, off by default): forward to
+  // the SYSTEM injector so input reaches Task Manager / elevated apps / the
+  // secure desktop. Returns false when the service isn't available, in which
+  // case we fall through to local injection exactly as before.
+  if (maybeForwardInput(message)) return
   switch (message.t) {
     case 'move': {
       if (!cachedScreenSize) cachedScreenSize = await getScreenSize()
@@ -507,5 +513,8 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   log(currentSession?.session ?? sessionCounter, `unhandledRejection: ${reason}`)
 })
+
+// Start trying to reach the elevated injector (no-op unless PR_INPUT_SERVICE=1).
+startServiceClient()
 
 send({ evt: 'ready' })

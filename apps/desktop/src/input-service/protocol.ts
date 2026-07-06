@@ -1,0 +1,53 @@
+// Named-pipe framing between the user-session input-helper (sender) and the
+// SYSTEM injector-in-session (receiver). A pipe is a byte stream, so frame each
+// RemoteInputMessage as a 4-byte little-endian length prefix + UTF-8 JSON.
+// UNTESTED handoff code (docs/input-elevation-plan.md).
+
+import type { RemoteInputMessage } from '../renderer/src/shared/input/inputProtocol'
+
+// Both endpoints are in the interactive session (session 1), so the default
+// pipe ACL already lets the medium-integrity user connect to the SYSTEM-hosted
+// pipe — no custom SDDL. Pipe-name squatting is a documented hardening TODO.
+export const PIPE_NAME = '\\\\.\\pipe\\personal-remote-input'
+
+const LEN_BYTES = 4
+// Guard against a corrupt/hostile length prefix wedging the reader on a huge
+// allocation. Input messages are tiny (a few hundred bytes at most).
+const MAX_FRAME = 64 * 1024
+
+export function encodeFrame(message: RemoteInputMessage): Buffer {
+  const json = Buffer.from(JSON.stringify(message), 'utf8')
+  const frame = Buffer.allocUnsafe(LEN_BYTES + json.length)
+  frame.writeUInt32LE(json.length, 0)
+  json.copy(frame, LEN_BYTES)
+  return frame
+}
+
+// Stateful stream decoder: feed it whatever chunk arrived, get back the
+// complete messages it now holds; partial tails are buffered for next time.
+export class FrameDecoder {
+  private buf: Buffer = Buffer.alloc(0)
+
+  push(chunk: Buffer): RemoteInputMessage[] {
+    this.buf = this.buf.length === 0 ? chunk : Buffer.concat([this.buf, chunk])
+    const out: RemoteInputMessage[] = []
+    while (this.buf.length >= LEN_BYTES) {
+      const len = this.buf.readUInt32LE(0)
+      if (len === 0 || len > MAX_FRAME) {
+        // Unrecoverable desync — drop everything rather than loop forever.
+        this.buf = Buffer.alloc(0)
+        break
+      }
+      if (this.buf.length < LEN_BYTES + len) break // wait for the rest
+      const json = this.buf.subarray(LEN_BYTES, LEN_BYTES + len).toString('utf8')
+      this.buf = this.buf.subarray(LEN_BYTES + len)
+      try {
+        out.push(JSON.parse(json) as RemoteInputMessage)
+      } catch {
+        // Skip a single malformed frame; framing stays aligned (we already
+        // advanced past it by its declared length).
+      }
+    }
+    return out
+  }
+}
