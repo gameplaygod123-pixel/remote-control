@@ -649,12 +649,14 @@
   object-fit: contain;
 }
 
-/* Native video mode: decoded frames are presented by a SEPARATE native window
-   that sits BEHIND the transparent macOS controller window. Clear every opaque
-   layer from the window down to the <video> so the native frames show through,
-   while the floating controls (opaque) stay visible + clickable on top. The
-   <video> element stays laid out at opacity 0 so it still captures mouse events
-   for input. Scoped to .native-video, so the default WebRTC path is untouched. */
+/* Native video mode: decoded frames are composited by an AVSampleBufferDisplayLayer
+   subview added INSIDE this window, BEHIND the web content (embed.swift). Clear
+   every opaque layer from the window down to the <video> so those frames show
+   through, while the floating controls (opaque) stay visible + clickable on top.
+   The <video> element stays laid out at opacity 0 so it still captures mouse
+   events for input -- and because the session window is locked to the remote's
+   aspect (main setAspectRatio) it fills the window exactly, so the input mapping
+   is pixel-accurate. Scoped to .native-video: the WebRTC path is untouched. */
 body:has(.session-shell.native-video),
 #root:has(.session-shell.native-video) {
   background: transparent !important;
@@ -667,18 +669,23 @@ body:has(.session-shell.native-video),
   opacity: 0;
 }
 
-/* Draggable title bar shown only in native mode (see ControllerSession). It's a
-   flex child so it pushes the video area -- and thus the native render window
-   positioned over it -- down below the macOS traffic lights, and it's the one
-   -webkit-app-region drag handle for the otherwise frameless transparent window. */
+/* Draggable title bar shown only in native mode (see ControllerSession). An
+   ABSOLUTE overlay (not a flex child) so the video area stays the FULL window --
+   the native subview fills it edge-to-edge and the <video> hit-target maps 1:1.
+   It's a slim drag strip on top that also clears the macOS traffic lights, and is
+   the one -webkit-app-region drag handle for the frameless transparent window. */
 .session-titlebar {
-  flex: 0 0 34px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding-left: 78px; /* clear the traffic lights on the left */
   -webkit-app-region: drag;
-  background: rgba(20, 16, 14, 0.92);
+  background: rgba(20, 16, 14, 0.72);
   color: #e8e0d8;
   font-size: 12px;
   letter-spacing: 0.02em;

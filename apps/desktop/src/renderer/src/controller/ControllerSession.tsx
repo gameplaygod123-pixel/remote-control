@@ -68,11 +68,10 @@ export default function ControllerSession({
   // sits BEHIND the transparent macOS window) shows through, while the opaque
   // floating controls stay on top and clickable.
   const [nativeActive, setNativeActive] = useState(false)
-  // OS fullscreen state (native mode auto-enters it -- fullscreen is where the
-  // separate render window has no drag/cover/rounded-corner quirks). The drag
-  // titlebar is only shown when native AND windowed.
+  // OS fullscreen state. Native video composites inside this window now, so
+  // fullscreen "just works" (one window); we only use this to hide the drag
+  // titlebar in fullscreen, where the OS traffic-lights/exit are available.
   const [fullscreen, setFullscreen] = useState(false)
-  const renderRectTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   // Fetched from a main-process file rather than localStorage, which is
   // scoped to the Vite dev server's origin and would reset this identity
   // if the dev-server port ever shifted between runs.
@@ -316,23 +315,9 @@ export default function ControllerSession({
       const sessionCaps = (): string[] =>
         nativeReady ? [INPUT_HELPER_CAP, NATIVE_VIDEO_CAP] : [INPUT_HELPER_CAP]
 
-      // The native video renders in a separate borderless window; tell it where
-      // the <video> element sits in screen space so it overlays exactly. Sent on
-      // first frame, on resize, and polled (the renderer has no window-move event).
-      let lastRectKey = ''
-      const pushRenderRect = (): void => {
-        const el = videoRef.current
-        if (!el) return
-        const r = el.getBoundingClientRect()
-        if (r.width < 2 || r.height < 2) return
-        const x = window.screenX + r.left
-        const y = window.screenY + r.top
-        const scale = window.devicePixelRatio || 1
-        const key = `${Math.round(x)},${Math.round(y)},${Math.round(r.width)},${Math.round(r.height)},${scale}`
-        if (key === lastRectKey) return
-        lastRectKey = key
-        void window.api.videoReceiver.setRenderRect({ x, y, width: r.width, height: r.height, scale })
-      }
+      // Native video now composites INSIDE this window (main pushes each AU into
+      // the in-process render surface), so the renderer no longer positions a
+      // separate window -- no render-rect / reposition plumbing at all.
 
       const client = await connectSignaling(resolveSignalingUrl, {
         onDisconnect: () => setStatus('disconnected, reconnecting...'),
@@ -390,10 +375,6 @@ export default function ControllerSession({
         )
         window.api.videoReceiver.onFirstFrame(() => {
           setStatus('connection: connected (native video)')
-          pushRenderRect()
-          if (!renderRectTimerRef.current) {
-            renderRectTimerRef.current = setInterval(pushRenderRect, 500)
-          }
         })
         window.api.videoReceiver.onStats((s: NativeVideoStats) =>
           setNativeStats({
@@ -409,10 +390,6 @@ export default function ControllerSession({
           })
         )
         window.api.videoReceiver.onDown(() => setStatus('native video down -- repairing'))
-        // Re-place the native window immediately whenever the controller window
-        // moves/resizes (main fires this), so it tracks a drag smoothly instead
-        // of catching up on the 500ms poll.
-        window.api.videoReceiver.onReposition(() => pushRenderRect())
         window.api.window.onFullScreen((v) => setFullscreen(v))
       }
 
@@ -659,10 +636,6 @@ export default function ControllerSession({
       inputPcRef.current = null
       inputChannelRef.current = null
       moveChannelRef.current = null
-      if (renderRectTimerRef.current) {
-        clearInterval(renderRectTimerRef.current)
-        renderRectTimerRef.current = undefined
-      }
       // No-op in a default build (host never spawned -> optional-chained away).
       void window.api.videoReceiver.stopSession()
       window.api.window.setFullScreen(false)
@@ -731,10 +704,10 @@ export default function ControllerSession({
         )}
       </div>
 
-      {/* In native mode the video is drawn by a separate always-on-top window;
-          without an opaque frame the transparent controller has nothing to grab.
-          This slim draggable title bar gives a move handle AND pushes the video
-          down out from under the traffic lights. WebRTC path never renders it. */}
+      {/* In native mode the video composites behind this transparent web UI, so
+          the shell has no opaque frame to grab. This slim draggable title bar
+          gives a move handle AND keeps the video clear of the traffic lights.
+          Hidden in fullscreen (OS handles it). WebRTC path never renders it. */}
       {nativeActive && !fullscreen && (
         <div className="session-titlebar">{nameDraft || deviceId}</div>
       )}

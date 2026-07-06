@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { UpdaterStatus } from '../main/updater'
 import type { NativeVideoStats, VideoConfig } from '../video-native/shared/contract'
-import type { RenderRect } from '../video-native/shared/ipc'
 
 type AppMode = 'agent' | 'controller'
 
@@ -179,8 +178,6 @@ const api = {
       sdpMLineIndex: number | null
     ): Promise<void> =>
       ipcRenderer.invoke('video-receiver:remote-ice', candidate, sdpMid, sdpMLineIndex),
-    setRenderRect: (rect: RenderRect): Promise<void> =>
-      ipcRenderer.invoke('video-receiver:set-render-rect', rect),
     onAnswer: (handler: (sdp: string) => void): void => {
       ipcRenderer.on('video-receiver:answer', (_event, sdp) => handler(sdp))
     },
@@ -199,11 +196,6 @@ const api = {
     },
     onDown: (handler: () => void): void => {
       ipcRenderer.on('video-receiver:down', () => handler())
-    },
-    // Fired by main on every controller-window move/resize so the renderer can
-    // re-send an up-to-date render-rect (smooth native-window tracking).
-    onReposition: (handler: () => void): void => {
-      ipcRenderer.on('video-receiver:reposition', () => handler())
     }
   }
 }

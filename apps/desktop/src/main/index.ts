@@ -50,7 +50,12 @@ import { getCachedPin, setCachedPin, clearCachedPin, setLastDeviceId } from './c
 import { startInputHelperHost, type InputHelperHost } from './inputHelperHost'
 import { startVideoSenderHost } from './videoSenderHost'
 import { startVideoReceiverHost } from './videoReceiverHost'
-import type { VideoSenderHost, VideoReceiverHost, RenderRect } from '../video-native/shared/ipc'
+import {
+  attachNativeSurface,
+  detachNativeSurface,
+  pushNativeAccessUnit
+} from './nativeRenderSurface'
+import type { VideoSenderHost, VideoReceiverHost } from '../video-native/shared/ipc'
 import type { VideoConfig } from '../video-native/shared/contract'
 import { VIDEO_PIPELINE_ENV } from '../video-native/shared/contract'
 
@@ -205,6 +210,22 @@ let agentWindow: BrowserWindow | undefined
 // agentWindow; only one controller window per process.
 let controllerWindow: BrowserWindow | undefined
 
+// Forward a host-process event to a window's renderer, safely. The host
+// callbacks (input/sender/receiver) fire from a ChildProcess, so a stats/ice
+// message can arrive AFTER the window has been destroyed (session ended, app
+// quitting) -- the `win?.` guard only catches null, not a destroyed webContents,
+// and `.send()` on a destroyed object throws "Object has been destroyed" as an
+// uncaught exception in the main process. Gate on isDestroyed() for both.
+function sendToWindow(
+  win: BrowserWindow | undefined,
+  channel: string,
+  ...args: unknown[]
+): void {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send(channel, ...args)
+  }
+}
+
 function createWindow(appMode: AppMode): void {
   // The agent window is a fixed-size credentials card -- everything on it
   // has one natural size, so resizing only ever makes it look broken. The
@@ -235,26 +256,14 @@ function createWindow(appMode: AppMode): void {
     setupAgentTray(win)
   } else if (appMode === 'controller') {
     controllerWindow = win
-    // In native-video mode the decoded frames are drawn by a separate native
-    // window at .floating; bump this window one level higher so it sits just
-    // above that (its transparent video area lets the frames show through) and
-    // the opaque floating controls stay on top + clickable. Only when opted in
-    // (VIDEO_PIPELINE=native) so the default WebRTC window behaves exactly as
-    // before. 'floating' + relativeLevel 1 = NSWindow level 4 (native uses 3).
+    // In native-video mode the decoded frames are composited INSIDE this window
+    // (an AVSampleBufferDisplayLayer subview added by librvr.dylib -- see
+    // nativeRenderSurface.ts / embed.swift), NOT a separate floating NSWindow, so
+    // there is no second window to track/stutter/cover/clip. We only need to tell
+    // the renderer when the OS fullscreen state changes so it can hide the drag
+    // titlebar (pointless + would cover the controls in fullscreen). Gated on
+    // VIDEO_PIPELINE=native so the default WebRTC window is byte-identical.
     if (process.env[VIDEO_PIPELINE_ENV] === 'native') {
-      win.setAlwaysOnTop(true, 'floating', 1)
-      // The native render window is a SEPARATE OS window kept over the video
-      // area via render-rect. Poll-based tracking (500ms) visibly stutters when
-      // the window is dragged/resized, so push a reposition signal on every
-      // move/resize for the renderer to re-send an up-to-date render-rect
-      // immediately -- the window server fires these continuously during a drag.
-      const reposition = (): void => win.webContents.send('video-receiver:reposition')
-      win.on('move', reposition)
-      win.on('resize', reposition)
-      // Native video's natural home is fullscreen (no window to drag/cover, no
-      // rounded corners to clip). Tell the renderer when the OS fullscreen state
-      // changes so it can hide the drag titlebar (pointless + it covers the
-      // controls in fullscreen) and re-place the native window.
       win.on('enter-full-screen', () => win.webContents.send('window:fullscreen', true))
       win.on('leave-full-screen', () => win.webContents.send('window:fullscreen', false))
     }
@@ -379,10 +388,10 @@ app.whenReady().then(async () => {
   let inputHelperHost: InputHelperHost | undefined
   if (appMode === 'agent') {
     inputHelperHost = startInputHelperHost({
-      onOffer: (sdp) => agentWindow?.webContents.send('input-helper:offer', sdp),
+      onOffer: (sdp) => sendToWindow(agentWindow, 'input-helper:offer', sdp),
       onIce: (candidate, sdpMid, sdpMLineIndex) =>
-        agentWindow?.webContents.send('input-helper:ice', candidate, sdpMid, sdpMLineIndex),
-      onDown: () => agentWindow?.webContents.send('input-helper:down')
+        sendToWindow(agentWindow, 'input-helper:ice', candidate, sdpMid, sdpMLineIndex),
+      onDown: () => sendToWindow(agentWindow, 'input-helper:down')
     })
     app.on('before-quit', () => inputHelperHost?.destroy())
   }
@@ -397,11 +406,11 @@ app.whenReady().then(async () => {
   let videoSenderHost: VideoSenderHost | undefined
   if (appMode === 'agent' && process.env[VIDEO_PIPELINE_ENV] === 'native') {
     videoSenderHost = startVideoSenderHost({
-      onOffer: (sdp) => agentWindow?.webContents.send('video-sender:offer', sdp),
+      onOffer: (sdp) => sendToWindow(agentWindow, 'video-sender:offer', sdp),
       onIce: (candidate, sdpMid, sdpMLineIndex) =>
-        agentWindow?.webContents.send('video-sender:ice', candidate, sdpMid, sdpMLineIndex),
-      onStats: (stats) => agentWindow?.webContents.send('video-sender:stats', stats),
-      onDown: () => agentWindow?.webContents.send('video-sender:down')
+        sendToWindow(agentWindow, 'video-sender:ice', candidate, sdpMid, sdpMLineIndex),
+      onStats: (stats) => sendToWindow(agentWindow, 'video-sender:stats', stats),
+      onDown: () => sendToWindow(agentWindow, 'video-sender:down')
     })
     app.on('before-quit', () => videoSenderHost?.destroy())
   }
@@ -412,14 +421,45 @@ app.whenReady().then(async () => {
   // isReady() is always false and ControllerSession never engages the native
   // path: the WebRTC <video> path stays byte-identical to today.
   let videoReceiverHost: VideoReceiverHost | undefined
+  // Attach the in-process render surface (librvr.dylib) lazily on the first AU,
+  // when the window is realized + shown. Idempotent in the dylib, but we also
+  // gate here so we only pass the NSView handle once per session.
+  let surfaceAttached = false
+  const detachSurface = (): void => {
+    if (!surfaceAttached) return
+    surfaceAttached = false
+    detachNativeSurface()
+    // Release the aspect lock so the window is free-form again for the
+    // computers-list / file-transfer views.
+    if (controllerWindow && !controllerWindow.isDestroyed()) {
+      controllerWindow.setAspectRatio(0)
+    }
+  }
   if (appMode === 'controller' && process.env[VIDEO_PIPELINE_ENV] === 'native') {
     videoReceiverHost = startVideoReceiverHost({
-      onAnswer: (sdp) => controllerWindow?.webContents.send('video-receiver:answer', sdp),
+      onAnswer: (sdp) => sendToWindow(controllerWindow, 'video-receiver:answer', sdp),
       onIce: (candidate, sdpMid, sdpMLineIndex) =>
-        controllerWindow?.webContents.send('video-receiver:ice', candidate, sdpMid, sdpMLineIndex),
-      onFirstFrame: () => controllerWindow?.webContents.send('video-receiver:first-frame'),
-      onStats: (stats) => controllerWindow?.webContents.send('video-receiver:stats', stats),
-      onDown: () => controllerWindow?.webContents.send('video-receiver:down')
+        sendToWindow(controllerWindow, 'video-receiver:ice', candidate, sdpMid, sdpMLineIndex),
+      // Each reassembled Annex-B access unit -> the in-process render surface,
+      // which decodes (VideoToolbox) + composites it inside THIS window.
+      onAu: (au) => {
+        if (!surfaceAttached && controllerWindow && !controllerWindow.isDestroyed()) {
+          surfaceAttached = attachNativeSurface(controllerWindow.getNativeWindowHandle())
+          if (surfaceAttached) {
+            // Lock the session window to the remote's aspect (1920x1080 agent) so
+            // the in-window video fills it with no letterbox + the input mapping
+            // is pixel-exact. Released on detach.
+            controllerWindow.setAspectRatio(16 / 9)
+          }
+        }
+        pushNativeAccessUnit(au)
+      },
+      onFirstFrame: () => sendToWindow(controllerWindow, 'video-receiver:first-frame'),
+      onStats: (stats) => sendToWindow(controllerWindow, 'video-receiver:stats', stats),
+      onDown: () => {
+        detachSurface()
+        sendToWindow(controllerWindow, 'video-receiver:down')
+      }
     })
     app.on('before-quit', () => videoReceiverHost?.destroy())
   }
@@ -490,7 +530,10 @@ app.whenReady().then(async () => {
   // ControllerSession never engages the native path -- the WebRTC default stands.
   ipcMain.handle('video-receiver:is-ready', (): boolean => videoReceiverHost?.isReady() ?? false)
   ipcMain.handle('video-receiver:start-session', (): void => videoReceiverHost?.startSession())
-  ipcMain.handle('video-receiver:stop-session', (): void => videoReceiverHost?.stopSession())
+  ipcMain.handle('video-receiver:stop-session', (): void => {
+    detachSurface()
+    videoReceiverHost?.stopSession()
+  })
   ipcMain.handle('video-receiver:remote-offer', (_event, sdp: string): void =>
     videoReceiverHost?.remoteOffer(sdp)
   )
@@ -502,9 +545,6 @@ app.whenReady().then(async () => {
       sdpMid: string | null,
       sdpMLineIndex: number | null
     ): void => videoReceiverHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
-  )
-  ipcMain.handle('video-receiver:set-render-rect', (_event, rect: RenderRect): void =>
-    videoReceiverHost?.setRenderRect(rect)
   )
 
   // Explicit escape hatch for the "deleted and reinstalled, mode picker

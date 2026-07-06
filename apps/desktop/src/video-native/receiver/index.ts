@@ -2,21 +2,19 @@
 //
 // Spawned with ELECTRON_RUN_AS_NODE=1 by main/videoReceiverHost.ts (same trick as
 // the input helper / video sender). It answers the agent's native offer on
-// channel:'video-native', receives the H.264 RTP track via node-datachannel,
+// channel:'video-native', receives the H.264 RTP track via node-datachannel, and
 // reassembles Annex-B access units (ndc has no H.264 depacketizer -- see
-// rtpDepacketizer.ts), and streams them to the Swift render binary for
-// VideoToolbox decode + AVSampleBufferVideoRenderer present. The agent is the SDP
-// offerer (unchanged); we ANSWER. Talks to Electron main ONLY over the frozen IPC
-// contract in ../shared/ipc.ts.
+// rtpDepacketizer.ts). It then hands each AU back to Electron MAIN (evt:'au'),
+// which pushes it into the in-process render surface (librvr.dylib) so the video
+// composites INSIDE the Electron window -- NO separate Swift render process/window
+// (native-video-plan §3a fix). The agent is the SDP offerer (unchanged); we
+// ANSWER. Talks to Electron main ONLY over the frozen IPC contract in
+// ../shared/ipc.ts.
 //
 // This is the inverse of sender/index.ts and shares its shape (raw ndc media API,
 // wall-clock-free since we only consume, RtcpReceivingSession for RTCP + the
 // track.requestKeyframe() PLI the sender's item-A recovery listens for).
 
-import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import type { Writable } from 'node:stream'
 import {
   PeerConnection,
   RtcpReceivingSession,
@@ -48,28 +46,11 @@ initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Warning', (le
   log(`[ndc:${level}] ${message}`)
 })
 
-// The Swift render binary: explicit path (dev/test) else bundled under Resources.
-// Not committed to the repo build yet (Phase 2 packaging); until then set
-// VIDEO_RENDER_PATH. --selftest verified it standalone (render/README.md).
-function resolveRenderPath(): string | null {
-  const fromEnv = process.env.VIDEO_RENDER_PATH
-  if (fromEnv && existsSync(fromEnv)) return fromEnv
-  const resDir = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
-  if (resDir) {
-    const bundled = join(resDir, 'video-render', 'video-render')
-    if (existsSync(bundled)) return bundled
-  }
-  return null
-}
-
 interface Session {
   id: number
   pc: InstanceType<typeof PeerConnection>
   track: Track | null
   depacketizer: H264Depacketizer
-  render: ChildProcess | null
-  renderStdin: Writable | null
-  renderControl: Writable | null
   firstFrameSeen: boolean
   lastKeyframeRequestAt: number
   framesInWindow: number
@@ -88,28 +69,9 @@ function closeSession(): void {
   log(`closeSession id=${s.id}`)
   if (s.statsTimer) clearInterval(s.statsTimer)
   try {
-    s.render?.kill()
-  } catch (e) {
-    log(`render.kill threw: ${(e as Error).message}`)
-  }
-  try {
     s.pc.close()
   } catch (e) {
     log(`pc.close threw: ${(e as Error).message}`)
-  }
-}
-
-// Length-prefix an access unit and hand it to the Swift binary's stdin. The
-// binary reads [4-byte BE length][AU bytes] (render/README.md).
-function feedRender(s: Session, au: Buffer): void {
-  if (!s.renderStdin) return
-  const head = Buffer.allocUnsafe(4)
-  head.writeUInt32BE(au.length, 0)
-  try {
-    s.renderStdin.write(head)
-    s.renderStdin.write(au)
-  } catch (e) {
-    log(`render stdin write threw: ${(e as Error).message}`)
   }
 }
 
@@ -128,79 +90,16 @@ function requestKeyframe(s: Session, reason: string): void {
   }
 }
 
-function spawnRender(s: Session): void {
-  const renderPath = resolveRenderPath()
-  if (!renderPath) {
-    send({ evt: 'fatal', message: 'render binary not found (set VIDEO_RENDER_PATH)' })
-    return
-  }
-  log(`spawning render binary: ${renderPath}`)
-  // stdio: 0=stdin(AUs), 1=stdout(events), 2=stderr(logs), 3=control(render-rect/stop)
-  const proc = spawn(renderPath, [], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] })
-  s.render = proc
-  s.renderStdin = proc.stdin
-  s.renderControl = proc.stdio[3] as Writable
-
-  let outAcc = ''
-  proc.stdout?.on('data', (chunk: Buffer) => {
-    if (current !== s) return
-    outAcc += chunk.toString()
-    let nl: number
-    while ((nl = outAcc.indexOf('\n')) >= 0) {
-      const line = outAcc.slice(0, nl)
-      outAcc = outAcc.slice(nl + 1)
-      handleRenderEvent(s, line)
-    }
-  })
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    const line = chunk.toString().trim()
-    if (line) log(`render: ${line}`)
-  })
-  proc.on('exit', (code, signal) => {
-    log(`render binary exit code=${code} signal=${signal}`)
-    if (current === s) {
-      s.render = null
-      s.renderStdin = null
-      s.renderControl = null
-    }
-  })
-}
-
-function handleRenderEvent(s: Session, line: string): void {
-  let obj: { evt?: string; [k: string]: unknown }
-  try {
-    obj = JSON.parse(line)
-  } catch {
-    return
-  }
-  switch (obj.evt) {
-    case 'ready':
-      log('render binary ready')
-      break
-    case 'first-frame':
-      if (!s.firstFrameSeen) {
-        s.firstFrameSeen = true
-        log('first-frame on screen')
-        send({ evt: 'first-frame' })
-      }
-      break
-    case 'stats':
-      // Decode/render ms come from the binary; fps/kbps we compute from RTP.
-      if (typeof obj.decodeMs === 'number') s.lastStats.decodeMs = obj.decodeMs
-      if (typeof obj.renderMs === 'number') s.lastStats.renderMs = obj.renderMs
-      break
-    case 'need-keyframe':
-      requestKeyframe(s, 'render decode error')
-      break
-  }
-}
-
-function sendControl(s: Session, obj: Record<string, unknown>): void {
-  if (!s.renderControl) return
-  try {
-    s.renderControl.write(JSON.stringify(obj) + '\n')
-  } catch (e) {
-    log(`render control write threw: ${(e as Error).message}`)
+// Hand one reassembled Annex-B access unit to Electron main; it pushes it into
+// the in-process render surface (librvr.dylib). Sent over the 'advanced'-
+// serialized fork channel so the Buffer transfers efficiently at 60fps.
+function feedRender(s: Session, au: Buffer): void {
+  if (current !== s) return
+  send({ evt: 'au', data: au })
+  if (!s.firstFrameSeen) {
+    s.firstFrameSeen = true
+    log('first AU forwarded to main render surface')
+    send({ evt: 'first-frame' })
   }
 }
 
@@ -216,9 +115,6 @@ function startSession(): void {
     pc,
     track: null,
     depacketizer: new H264Depacketizer(),
-    render: null,
-    renderStdin: null,
-    renderControl: null,
     firstFrameSeen: false,
     lastKeyframeRequestAt: 0,
     framesInWindow: 0,
@@ -227,8 +123,6 @@ function startSession(): void {
     lastStats: {}
   }
   current = session
-
-  spawnRender(session)
 
   // We ANSWER: ndc generates the answer when we setRemoteDescription(offer).
   pc.onLocalDescription((sdp, type) => {
@@ -323,21 +217,8 @@ process.on('message', (raw: MainToVideoReceiver) => {
         log(`addRemoteCandidate threw: ${(e as Error).message}`)
       }
       break
-    case 'set-render-rect':
-      if (current) {
-        sendControl(current, {
-          cmd: 'render-rect',
-          x: raw.x,
-          y: raw.y,
-          width: raw.width,
-          height: raw.height,
-          scale: raw.scale
-        })
-      }
-      break
     case 'stop-session':
       log('stop-session')
-      if (current) sendControl(current, { cmd: 'stop' })
       closeSession()
       break
     case 'ping':

@@ -60,6 +60,14 @@ export type VideoReceiverToMain =
   | { evt: 'ready' }
   | { evt: 'answer'; sdp: string }
   | { evt: 'ice'; candidate: string; sdpMid: string | null; sdpMLineIndex: number | null }
+  /**
+   * One reassembled Annex-B access unit. The receiver child no longer spawns a
+   * Swift render process -- it hands compressed frames to MAIN, which pushes them
+   * into the in-process render surface (librvr.dylib, embed.swift) so the video
+   * composites INSIDE the Electron window. Sent over an 'advanced'-serialized fork
+   * channel so the Buffer transfers efficiently at 60fps.
+   */
+  | { evt: 'au'; data: Buffer }
   /** First decoded frame is on screen -- renderer can drop its "connecting…"
    *  overlay. Cheap signal that avoids guessing from stats. */
   | { evt: 'first-frame' }
@@ -71,23 +79,8 @@ export type MainToVideoReceiver =
   | { cmd: 'start-session' }
   | { cmd: 'remote-offer'; sdp: string }
   | { cmd: 'remote-ice'; candidate: string; sdpMid: string | null; sdpMLineIndex: number | null }
-  /**
-   * The seam that composites native video into the Electron window: main tells
-   * the receiver where (screen px + backing scale) to place its
-   * AVSampleBufferDisplayLayer window, re-sent on window resize / move /
-   * fullscreen. This is the crux of Phase 2 (native-video-plan §3, option a).
-   */
-  | { cmd: 'set-render-rect'; x: number; y: number; width: number; height: number; scale: number }
   | { cmd: 'stop-session' }
   | { cmd: 'ping' }
-
-export interface RenderRect {
-  x: number
-  y: number
-  width: number
-  height: number
-  scale: number
-}
 
 /** Main-side handle over the receiver helper. */
 export interface VideoReceiverHost {
@@ -95,7 +88,6 @@ export interface VideoReceiverHost {
   startSession(): void
   remoteOffer(sdp: string): void
   remoteIce(candidate: string, sdpMid: string | null, sdpMLineIndex: number | null): void
-  setRenderRect(rect: RenderRect): void
   stopSession(): void
   destroy(): void
 }
@@ -103,6 +95,8 @@ export interface VideoReceiverHost {
 export interface VideoReceiverCallbacks {
   onAnswer: (sdp: string) => void
   onIce: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+  /** One Annex-B access unit -> push into the in-process render surface. */
+  onAu: (au: Buffer) => void
   onFirstFrame: () => void
   onStats: (stats: NativeVideoStats) => void
   onDown: () => void

@@ -123,7 +123,6 @@ declare global {
           sdpMid: string | null,
           sdpMLineIndex: number | null
         ) => Promise<void>
-        setRenderRect: (rect: import('../video-native/shared/ipc').RenderRect) => Promise<void>
         onAnswer: (handler: (sdp: string) => void) => void
         onIce: (
           handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
@@ -133,7 +132,6 @@ declare global {
           handler: (stats: import('../video-native/shared/contract').NativeVideoStats) => void
         ) => void
         onDown: (handler: () => void) => void
-        onReposition: (handler: () => void) => void
       }
     }
   }
