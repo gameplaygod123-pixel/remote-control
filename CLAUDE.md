@@ -65,7 +65,26 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.10** (Connect button inset 4px from the card
+Latest release: **v1.21.0** — **'glass' translucent see-through theme** (3rd
+theme beside dark/light). The controller shell renders at ~12% opacity so the
+desktop shows through. Only the **macOS** controller window is created
+`transparent:true` (verified on the real Mac: over a white window it goes pale,
+over dark it stays dark — real see-through); **Windows keeps opaque** because
+`transparent:true` breaks the titleBarOverlay caption buttons, so glass there
+degrades to a solid dark tint (backgroundColor '#171210' shows through the
+alpha) — a Windows acrylic/`backgroundMaterial` pass is a TODO. Transparency is
+fixed at window creation, so `theme:set` in `main/index.ts` calls
+`app.relaunch()` when glass flips on macOS. New `GlassToggle.tsx` (droplet) in
+the sidebar; `ThemeToggle` is now a CONTROLLED component — `ControllerView`
+owns `theme` state and passes both toggles an `onChange`. `themeConfig` Theme is
+now `'dark'|'light'|'glass'`; glass tokens live in `deviceList.css`
+(`:root[data-theme='glass'] .ctl-shell` + a `body`/`#root` transparent
+override). KNOWN: near-white shell text can wash out over a light wallpaper (no
+text-shadow on the heading/footer yet — card name/status already have one);
+owner picked 12%/no-blur in the glass-theme mockup artifact. To try on Mac:
+`env -u ELECTRON_RUN_AS_NODE APP_MODE=controller ./node_modules/.bin/electron
+out/main/index.js` (seed userData `theme.txt`=glass at ~/Library/Application
+Support/Electron). v1.20.10 = Connect button inset 4px from the card
 left/right/bottom via `.dl-btn { margin:0 4px 4px }` — dropped `width:100%` so
 flex-stretch keeps it full-width-minus-margins, else it'd overflow; name
 14→12, status 11→10. From a 3rd card-tuner export; the tuner grew a "ระยะปุ่ม
