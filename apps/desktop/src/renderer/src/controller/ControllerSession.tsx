@@ -63,6 +63,15 @@ export default function ControllerSession({
   // True for this session once BOTH ends advertised native-video (set in
   // pair-result). Gates the native-only signaling branches below.
   const useNativeVideoRef = useRef(false)
+  // Reactive mirror of useNativeVideoRef used only for styling: when true, the
+  // session shell + video area go transparent so the native render window (which
+  // sits BEHIND the transparent macOS window) shows through, while the opaque
+  // floating controls stay on top and clickable.
+  const [nativeActive, setNativeActive] = useState(false)
+  // OS fullscreen state (native mode auto-enters it -- fullscreen is where the
+  // separate render window has no drag/cover/rounded-corner quirks). The drag
+  // titlebar is only shown when native AND windowed.
+  const [fullscreen, setFullscreen] = useState(false)
   const renderRectTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   // Fetched from a main-process file rather than localStorage, which is
   // scoped to the Vite dev server's origin and would reset this identity
@@ -400,6 +409,11 @@ export default function ControllerSession({
           })
         )
         window.api.videoReceiver.onDown(() => setStatus('native video down -- repairing'))
+        // Re-place the native window immediately whenever the controller window
+        // moves/resizes (main fires this), so it tracks a drag smoothly instead
+        // of catching up on the 500ms poll.
+        window.api.videoReceiver.onReposition(() => pushRenderRect())
+        window.api.window.onFullScreen((v) => setFullscreen(v))
       }
 
       transport.onMessage(async (raw) => {
@@ -452,8 +466,14 @@ export default function ControllerSession({
           const useNativeVideo =
             nativeReady && (message.caps?.includes(NATIVE_VIDEO_CAP) ?? false)
           useNativeVideoRef.current = useNativeVideo
+          setNativeActive(useNativeVideo)
           if (useNativeVideo) {
             void window.api.videoReceiver.startSession()
+            // NOTE: auto-fullscreen was tried but macOS fullscreen Spaces + the
+            // separate .floating render window broke mouse routing to the <video>
+            // hit-target. Left windowed (mouse works); polishing the overlay
+            // compositing (fullscreen mouse, hide-on-blur, rounded corners) is
+            // the native-video-plan §3a crux, deferred to a focused pass.
           }
 
           // The input PC itself is NOT created here -- it's built fresh from
@@ -651,7 +671,7 @@ export default function ControllerSession({
   }, [deviceId, pin, controllerId])
 
   return (
-    <div className="session-shell">
+    <div className={`session-shell${nativeActive ? ' native-video' : ''}`}>
       <div className={`session-float${panelOpen ? ' is-open' : ''}`}>
         {panelOpen ? (
           <div className="session-float__panel">
@@ -710,6 +730,14 @@ export default function ControllerSession({
           </button>
         )}
       </div>
+
+      {/* In native mode the video is drawn by a separate always-on-top window;
+          without an opaque frame the transparent controller has nothing to grab.
+          This slim draggable title bar gives a move handle AND pushes the video
+          down out from under the traffic lights. WebRTC path never renders it. */}
+      {nativeActive && !fullscreen && (
+        <div className="session-titlebar">{nameDraft || deviceId}</div>
+      )}
 
       <div className="session-video-area">
         <video

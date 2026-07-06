@@ -52,7 +52,10 @@ const api = {
   window: {
     setFullScreen: (value: boolean): Promise<void> =>
       ipcRenderer.invoke('window:set-fullscreen', value),
-    show: (): Promise<void> => ipcRenderer.invoke('window:show')
+    show: (): Promise<void> => ipcRenderer.invoke('window:show'),
+    onFullScreen: (handler: (value: boolean) => void): void => {
+      ipcRenderer.on('window:fullscreen', (_event, value) => handler(value))
+    }
   },
   trusted: {
     list: (): Promise<{ id: string; trustedAt: number }[]> => ipcRenderer.invoke('trusted:list'),
@@ -196,6 +199,11 @@ const api = {
     },
     onDown: (handler: () => void): void => {
       ipcRenderer.on('video-receiver:down', () => handler())
+    },
+    // Fired by main on every controller-window move/resize so the renderer can
+    // re-send an up-to-date render-rect (smooth native-window tracking).
+    onReposition: (handler: () => void): void => {
+      ipcRenderer.on('video-receiver:reposition', () => handler())
     }
   }
 }

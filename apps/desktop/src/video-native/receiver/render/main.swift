@@ -279,6 +279,12 @@ final class RenderApp: NSObject, NSApplicationDelegate {
     window.backgroundColor = .clear
     window.hasShadow = false
     window.ignoresMouseEvents = true
+    // .floating: above other apps' normal windows (so the video isn't buried
+    // behind them), but the Electron controller window is bumped one level HIGHER
+    // still (setAlwaysOnTop 'floating'+1 in main) so it sits just above this and
+    // its transparent video area lets these native frames show through, with the
+    // opaque floating controls on top. (Below-normal buried the whole session
+    // behind every other window; plain .floating covered the controls.)
     window.level = .floating
     window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     window.contentView = view

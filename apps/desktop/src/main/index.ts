@@ -235,6 +235,29 @@ function createWindow(appMode: AppMode): void {
     setupAgentTray(win)
   } else if (appMode === 'controller') {
     controllerWindow = win
+    // In native-video mode the decoded frames are drawn by a separate native
+    // window at .floating; bump this window one level higher so it sits just
+    // above that (its transparent video area lets the frames show through) and
+    // the opaque floating controls stay on top + clickable. Only when opted in
+    // (VIDEO_PIPELINE=native) so the default WebRTC window behaves exactly as
+    // before. 'floating' + relativeLevel 1 = NSWindow level 4 (native uses 3).
+    if (process.env[VIDEO_PIPELINE_ENV] === 'native') {
+      win.setAlwaysOnTop(true, 'floating', 1)
+      // The native render window is a SEPARATE OS window kept over the video
+      // area via render-rect. Poll-based tracking (500ms) visibly stutters when
+      // the window is dragged/resized, so push a reposition signal on every
+      // move/resize for the renderer to re-send an up-to-date render-rect
+      // immediately -- the window server fires these continuously during a drag.
+      const reposition = (): void => win.webContents.send('video-receiver:reposition')
+      win.on('move', reposition)
+      win.on('resize', reposition)
+      // Native video's natural home is fullscreen (no window to drag/cover, no
+      // rounded corners to clip). Tell the renderer when the OS fullscreen state
+      // changes so it can hide the drag titlebar (pointless + it covers the
+      // controls in fullscreen) and re-place the native window.
+      win.on('enter-full-screen', () => win.webContents.send('window:fullscreen', true))
+      win.on('leave-full-screen', () => win.webContents.send('window:fullscreen', false))
+    }
   }
 }
 

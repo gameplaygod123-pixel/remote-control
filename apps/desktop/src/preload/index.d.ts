@@ -39,6 +39,7 @@ declare global {
       window: {
         setFullScreen: (value: boolean) => Promise<void>
         show: () => Promise<void>
+        onFullScreen: (handler: (value: boolean) => void) => void
       }
       trusted: {
         list: () => Promise<{ id: string; trustedAt: number }[]>
@@ -132,6 +133,7 @@ declare global {
           handler: (stats: import('../video-native/shared/contract').NativeVideoStats) => void
         ) => void
         onDown: (handler: () => void) => void
+        onReposition: (handler: () => void) => void
       }
     }
   }
