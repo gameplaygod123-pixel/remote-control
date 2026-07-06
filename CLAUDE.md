@@ -65,7 +65,36 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.21.2** — **glass opacity 12% → 40%** (owner asked; the
+Latest release: **v1.22.0** — **video quality now matches Parsec** (1920×1080 @
+~37 Mbps, verified side-by-side on the same machines). Root cause the owner hit:
+on a flawless path (Network 11ms, 0% loss, 0ms jitter, direct P2P) the stream
+was still a blurry 480×270 @ 0.1 Mbps — WebRTC's bandwidth estimator (BWE)
+starts ultra-conservative and never probes back up on a quiet link, and
+`degradationPreference='maintain-framerate'` let the quality scaler nuke
+resolution to protect fps. Fixes (all in `agent/AgentView.tsx`, the encoder =
+agent side):
+- `maxBitrate` 15→30 Mbps; `scaleResolutionDownBy=1` (forbid downscale);
+  `degradationPreference` → **`maintain-resolution`** (hold 1080p, flex fps
+  only under genuine pressure).
+- **SDP munge** on the offer: append `x-google-min-bitrate=6000;
+  x-google-start-bitrate=20000;x-google-max-bitrate=30000` to the H.264 fmtp
+  line (`profile-level-id`) — the min/start floor is what actually stops the
+  0.1 Mbps collapse and makes it begin high instead of ramping from ~0.
+- HUD (`useVideoStats.ts` + `ControllerSession.tsx`) now also shows **Loss %**
+  and **Jitter ms** (were the two missing diagnostics; RTT/decode already there).
+- Shipped via prereleases first (beta.1 fixed bitrate → 720p; beta.2 locked
+  1080p) tested on the real Windows agent before this full release.
+
+KNOWN CEILING (documented for future): with every measurable now matching
+Parsec, the remaining "not glued to the mouse" feel is **pipeline latency**, not
+tunable via settings — Chromium's `desktopCapturer` capture (Windows agent) +
+`<video>`/compositor render (Mac controller) each add ~1-2 frames. The only way
+past it is a **native receiver** (receive RTP via node-datachannel outside
+Chromium → VideoToolbox decode → AVSampleBufferDisplayLayer/Metal render,
+mirroring how input was moved to the native helper). Big native/FFI project,
+deferred by the owner ("เก็บของก่อน") — the encoder/bitrate tuning is exhausted.
+
+Prior release: **v1.21.2** — **glass opacity 12% → 40%** (owner asked; the
 shell is more solid / less washed out) + a dev-launcher crash fix:
 - **Glass opacity 12% → 40%.** `deviceList.css`
   `:root[data-theme='glass'] .ctl-shell`: `--dl-bg` .12→.40; rail .34→.55,
@@ -257,3 +286,9 @@ Lessons:
 4. No TURN relay (only matters for CGNAT↔CGNAT pairs).
 5. Mac installer (.dmg) — deferred by owner decision.
 6. Owner plans a UI redesign + playful feature additions next.
+7. **Native video receiver** for Parsec-level "glued to the mouse" latency
+   (see v1.22.0 KNOWN CEILING note). Bypass Chromium's `<video>` render on the
+   Mac controller: receive RTP via node-datachannel → VideoToolbox HW decode →
+   AVSampleBufferDisplayLayer/Metal direct-to-screen. Big native/FFI project
+   (weeks, prerelease+verify each step); the closest we can get to Parsec's
+   core. Encoder/bitrate tuning is already maxed as of v1.22.0.

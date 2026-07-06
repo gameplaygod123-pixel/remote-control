@@ -12,6 +12,15 @@ export interface VideoStats {
   processingMs: number
   rttMs: number | null
   codec: string | null
+  // Fraction of video packets lost over the last interval, 0-100. Only
+  // meaningful inbound (the receiver is the side that counts what didn't
+  // arrive); null outbound / when nothing's been received yet. High loss is
+  // the classic cause of a "not smooth" feel that lowering the jitter buffer
+  // can't fix -- the lever for it is less bitrate/resolution, not less buffer.
+  lossPct: number | null
+  // Inter-packet arrival variance in ms (inbound RTP `jitter`). High jitter
+  // with a zeroed jitter buffer is what shows through as micro-stutter.
+  jitterMs: number | null
 }
 
 // Shows what's actually happening on the wire (not what was asked for --
@@ -34,6 +43,8 @@ export function useVideoStats(
     let prevTimestamp = 0
     let prevProcessingTime = 0
     let prevFrames = 0
+    let prevPacketsLost = 0
+    let prevPacketsReceived = 0
 
     const interval = setInterval(() => {
       pc.getStats().then((report) => {
@@ -82,6 +93,26 @@ export function useVideoStats(
           )
         }
 
+        // Packet loss % and jitter only exist on the inbound side -- the
+        // receiver is what tallies sequence-number gaps and arrival timing.
+        // Loss is measured over the last interval (delta lost / delta total)
+        // so a burst that's since cleared doesn't stay pinned high forever.
+        let lossPct: number | null = null
+        let jitterMs: number | null = null
+        if (direction === 'inbound') {
+          const packetsLost = rtpEntry.packetsLost
+          const packetsReceived = rtpEntry.packetsReceived
+          if (typeof packetsLost === 'number' && typeof packetsReceived === 'number') {
+            const dLost = packetsLost - prevPacketsLost
+            const dRecv = packetsReceived - prevPacketsReceived
+            const dTotal = dLost + dRecv
+            if (prevTimestamp && dTotal > 0) lossPct = Math.max(0, (dLost / dTotal) * 100)
+            prevPacketsLost = packetsLost
+            prevPacketsReceived = packetsReceived
+          }
+          if (typeof rtpEntry.jitter === 'number') jitterMs = Math.round(rtpEntry.jitter * 1000)
+        }
+
         if (typeof bytes === 'number') prevBytes = bytes
         prevTimestamp = timestamp
         if (typeof totalProcessingTime === 'number') prevProcessingTime = totalProcessingTime
@@ -99,7 +130,9 @@ export function useVideoStats(
           kbps,
           processingMs,
           rttMs,
-          codec
+          codec,
+          lossPct,
+          jitterMs
         })
       })
     }, 1000)

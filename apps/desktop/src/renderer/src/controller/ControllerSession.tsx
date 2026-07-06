@@ -543,6 +543,8 @@ export default function ControllerSession({
                 title="What's actually being received -- not just what was requested"
               >
                 Decode {videoStats.processingMs}ms · Network {videoStats.rttMs ?? '?'}ms ·{' '}
+                {videoStats.jitterMs != null ? `Jitter ${videoStats.jitterMs}ms · ` : ''}
+                {videoStats.lossPct != null ? `Loss ${videoStats.lossPct.toFixed(1)}% · ` : ''}
                 {videoStats.fps}fps · {videoStats.width}×{videoStats.height} ·{' '}
                 {(videoStats.kbps / 1000).toFixed(1)} Mbps
                 {videoStats.codec ? ` · ${videoStats.codec}` : ''}

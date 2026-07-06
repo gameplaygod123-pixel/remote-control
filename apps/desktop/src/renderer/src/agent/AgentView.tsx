@@ -512,7 +512,15 @@ function AgentView(): React.JSX.Element {
             // more, never hurts otherwise.
             const params = sender.getParameters()
             if (!params.encodings?.length) params.encodings = [{}]
-            params.encodings[0].maxBitrate = 15_000_000
+            params.encodings[0].maxBitrate = 30_000_000
+            // WebRTC's BWE was collapsing the stream to ~0.1 Mbps / 480x270 on
+            // a flawless 10ms/0%-loss path (Parsec pushes 30 Mbps / 1440p on
+            // the SAME path) -- it starts conservative and never probes back up
+            // when the link is quiet, so the picture stayed a blurry postage
+            // stamp for no reason. Forbid the encoder from scaling resolution
+            // down; combined with the SDP min/start bitrate floor below (and
+            // maintain-resolution) this holds full capture resolution.
+            params.encodings[0].scaleResolutionDownBy = 1
             // Real test showed only ~25fps actually achieved despite the
             // 60fps capture request and plenty of unused bitrate headroom
             // (bitrate was sitting right at the ceiling) -- the encoder was
@@ -523,12 +531,14 @@ function AgentView(): React.JSX.Element {
             // the direct way to tell the encoder what it should be aiming
             // for regardless of how much bitrate headroom it thinks it has.
             params.encodings[0].maxFramerate = 60
-            // Under bandwidth pressure, WebRTC's default ('balanced') will
-            // trade off *both* resolution and frame rate. For control feel,
-            // a choppier-but-clear frame is worse than a softer-but-smooth
-            // one -- explicitly prioritize keeping frame rate up and let
-            // resolution/sharpness degrade first instead.
-            params.degradationPreference = 'maintain-framerate'
+            // Even with a 30Mbps ceiling + bitrate floor, 'maintain-framerate'
+            // still let WebRTC's quality scaler downscale to 720p to protect
+            // 60fps -- on a flawless 10ms/0%-loss path that trade is pure lost
+            // sharpness. 'maintain-resolution' holds full 1080p and flexes
+            // frame rate only if it ever genuinely can't keep up (which, given
+            // ~4.5ms hardware encode + 30Mbps headroom, it shouldn't need to).
+            // Verified against Parsec on the same machines: 1920x1080 @ 37Mbps.
+            params.degradationPreference = 'maintain-resolution'
             sender.setParameters(params).catch(() => {})
           })
 
@@ -550,11 +560,25 @@ function AgentView(): React.JSX.Element {
           }
 
           const offer = await pc.createOffer()
-          await pc.setLocalDescription(offer)
+          // Force Chromium's rate controller off its ultra-conservative floor.
+          // `x-google-min-bitrate` stops it dropping below a real usable rate
+          // (which is what starved us to 0.1 Mbps / 480p on a quiet link);
+          // `x-google-start-bitrate` makes it BEGIN high instead of ramping up
+          // from ~0. These are Chromium-specific fmtp hints (kbps); harmless
+          // on codecs that ignore them. Applied to the video codec fmtp lines
+          // (the ones carrying profile-level-id, i.e. H.264/H.265).
+          const tunedSdp = (offer.sdp ?? '').replace(
+            /(a=fmtp:\d+ [^\r\n]*profile-level-id[^\r\n]*)/g,
+            (line) =>
+              line.includes('x-google-min-bitrate')
+                ? line
+                : `${line};x-google-min-bitrate=6000;x-google-start-bitrate=20000;x-google-max-bitrate=30000`
+          )
+          await pc.setLocalDescription({ type: 'offer', sdp: tunedSdp })
           transport.send({
             type: 'sdp-offer',
             deviceId: agentDeviceId,
-            sdp: offer.sdp,
+            sdp: tunedSdp,
             channel: 'video'
           })
         } else if (message.type === 'sdp-answer' && message.channel === 'input') {
