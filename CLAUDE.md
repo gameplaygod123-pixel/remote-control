@@ -65,7 +65,11 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.8** (thinner frame around the card's screen preview:
+Latest release: **v1.20.9** (in-session floating control bar now starts
+COLLAPSED — `ControllerSession` `panelOpen` initial state `true`→`false`; on
+connect you see just the small dim status-dot pill (`.session-float__toggle`,
+top-center, opacity .45) and click it to expand the Back/name/stats/status
+bar). v1.20.8 = thinner frame around the card's screen preview:
 `.dl-card` padding 8→4, `.dl-thumb` radius 12→30 so it nests concentrically in
 the 34px card corner and the screen hugs all 4 edges evenly). v1.20.7 = name +
 online status are now TWO independently
