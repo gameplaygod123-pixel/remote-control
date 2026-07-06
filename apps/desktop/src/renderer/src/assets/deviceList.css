@@ -373,7 +373,7 @@
   top: 92%;
   transform: translateY(-50%);
   padding: 3px 8px;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
   color: #ffffff;
   white-space: nowrap;
@@ -396,7 +396,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 10px;
   color: #e8e0d8;
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.9), 0 1px 4px rgba(0, 0, 0, 0.7);
   pointer-events: none;
@@ -422,7 +422,6 @@
 }
 
 .dl-btn {
-  width: 100%;
   padding: 8px 0;
   /* Full-capsule pill to match the owner's mock (Connect button). */
   border-radius: 999px;
@@ -433,6 +432,11 @@
   cursor: pointer;
   background: var(--dl-accent);
   color: var(--dl-accent-ink);
+  /* Inset from the card's left/right/bottom edges (owner's card-tuner btnm)
+     so the button breathes without thickening the thin screen frame. Width
+     comes from the card's flex stretch (no width:100%, which would overflow
+     by the margins). */
+  margin: 0 4px 4px;
 }
 
 .dl-btn:hover {
