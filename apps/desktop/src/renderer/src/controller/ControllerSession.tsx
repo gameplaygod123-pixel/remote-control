@@ -8,7 +8,7 @@ import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
 import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
 import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
-import { useVideoStats } from '../shared/webrtc/useVideoStats'
+import { useVideoStats, type VideoStats } from '../shared/webrtc/useVideoStats'
 import { attachClipboardChannel } from '../shared/clipboard/clipboardSync'
 import {
   RemoteInputMessage,
@@ -17,6 +17,7 @@ import {
   videoRelativePosition
 } from '../shared/input/inputProtocol'
 import { INPUT_HELPER_CAP } from '../shared/input/capabilities'
+import { NATIVE_VIDEO_CAP, type NativeVideoStats } from '../../../video-native/shared/contract'
 
 // Mousemove fires far more often than the remote side needs to react to --
 // this caps how frequently position updates cross the data channel without
@@ -54,6 +55,15 @@ export default function ControllerSession({
   // mutating a ref doesn't trigger a re-render on its own.
   const [activePc, setActivePc] = useState<RTCPeerConnection | null>(null)
   const videoStats = useVideoStats(activePc, 'inbound')
+  // Native pipeline stats come over IPC from the receiver helper (not from a
+  // WebRTC pc), so they live in their own state; the HUD shows whichever path
+  // is live. Null in the default WebRTC build -- displayStats then == videoStats.
+  const [nativeStats, setNativeStats] = useState<VideoStats | null>(null)
+  const displayStats = nativeStats ?? videoStats
+  // True for this session once BOTH ends advertised native-video (set in
+  // pair-result). Gates the native-only signaling branches below.
+  const useNativeVideoRef = useRef(false)
+  const renderRectTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   // Fetched from a main-process file rather than localStorage, which is
   // scoped to the Vite dev server's origin and would reset this identity
   // if the dev-server port ever shifted between runs.
@@ -264,6 +274,35 @@ export default function ControllerSession({
       // House token rides every pair-request -- the server rejects the PIN
       // check outright without it. Guaranteed present by App.tsx's gate.
       const houseToken = (await window.api.houseToken.get()) ?? ''
+
+      // Native video path opt-in resolves once per session: true only if THIS
+      // build spawned the receiver helper (VIDEO_PIPELINE=native -> isReady()).
+      // caps then advertise native-video; the agent must advertise it too
+      // (checked in pair-result) for the native branch to actually engage.
+      // Default build: isReady()=false -> caps unchanged -> every session is
+      // WebRTC (the controller-side SAFETY BAR).
+      const nativeReady = await window.api.videoReceiver.isReady()
+      const sessionCaps = (): string[] =>
+        nativeReady ? [INPUT_HELPER_CAP, NATIVE_VIDEO_CAP] : [INPUT_HELPER_CAP]
+
+      // The native video renders in a separate borderless window; tell it where
+      // the <video> element sits in screen space so it overlays exactly. Sent on
+      // first frame, on resize, and polled (the renderer has no window-move event).
+      let lastRectKey = ''
+      const pushRenderRect = (): void => {
+        const el = videoRef.current
+        if (!el) return
+        const r = el.getBoundingClientRect()
+        if (r.width < 2 || r.height < 2) return
+        const x = window.screenX + r.left
+        const y = window.screenY + r.top
+        const scale = window.devicePixelRatio || 1
+        const key = `${Math.round(x)},${Math.round(y)},${Math.round(r.width)},${Math.round(r.height)},${scale}`
+        if (key === lastRectKey) return
+        lastRectKey = key
+        void window.api.videoReceiver.setRenderRect({ x, y, width: r.width, height: r.height, scale })
+      }
+
       const client = await connectSignaling(resolveSignalingUrl, {
         onDisconnect: () => setStatus('disconnected, reconnecting...'),
         onReconnect: () => {
@@ -284,7 +323,7 @@ export default function ControllerSession({
             deviceId,
             pin,
             controllerId,
-            caps: [INPUT_HELPER_CAP]
+            caps: sessionCaps()
           })
         }
       })
@@ -297,6 +336,48 @@ export default function ControllerSession({
       const transport: SignalTransport = {
         send: (message) => client.send(message),
         onMessage: (handler) => client.onMessage(handler)
+      }
+
+      // Native video signaling: the receiver helper produces the answer + ICE
+      // for the video-native pc; relay them on channel:'video-native' (the
+      // agent's sender consumes them, kept separate from the renderer 'video' pc
+      // that still carries file transfer). Registered once per session. All
+      // dormant in a default build -- these events never fire (host not spawned).
+      if (nativeReady) {
+        window.api.videoReceiver.onAnswer((sdp) =>
+          transport.send({ type: 'sdp-answer', deviceId, sdp, channel: 'video-native' })
+        )
+        window.api.videoReceiver.onIce((candidate, sdpMid, sdpMLineIndex) =>
+          transport.send({
+            type: 'ice-candidate',
+            deviceId,
+            candidate,
+            sdpMid,
+            sdpMLineIndex,
+            channel: 'video-native'
+          })
+        )
+        window.api.videoReceiver.onFirstFrame(() => {
+          setStatus('connection: connected (native video)')
+          pushRenderRect()
+          if (!renderRectTimerRef.current) {
+            renderRectTimerRef.current = setInterval(pushRenderRect, 500)
+          }
+        })
+        window.api.videoReceiver.onStats((s: NativeVideoStats) =>
+          setNativeStats({
+            fps: s.fps,
+            width: s.width,
+            height: s.height,
+            kbps: s.kbps,
+            processingMs: s.decodeMs ?? 0,
+            rttMs: s.rttMs,
+            codec: s.codec,
+            lossPct: null,
+            jitterMs: null
+          })
+        )
+        window.api.videoReceiver.onDown(() => setStatus('native video down -- repairing'))
       }
 
       transport.onMessage(async (raw) => {
@@ -317,7 +398,7 @@ export default function ControllerSession({
                   deviceId,
                   pin,
                   controllerId,
-                  caps: [INPUT_HELPER_CAP]
+                  caps: sessionCaps()
                 })
               }, PAIR_RETRY_DELAY_MS)
               return
@@ -339,6 +420,19 @@ export default function ControllerSession({
           // one of the two branches below runs -- never both -- so input is
           // never double-injected.
           const useHelper = message.caps?.includes(INPUT_HELPER_CAP) ?? false
+
+          // Native video engages only when BOTH ends advertised it: we did
+          // (nativeReady) AND the agent did (echoed in message.caps). Then the
+          // agent sends its native offer on channel:'video-native' and the
+          // receiver helper answers it; the renderer 'video' pc below still gets
+          // created for file transfer, it just carries no video track. Default
+          // build: nativeReady=false -> this stays false -> pure WebRTC video.
+          const useNativeVideo =
+            nativeReady && (message.caps?.includes(NATIVE_VIDEO_CAP) ?? false)
+          useNativeVideoRef.current = useNativeVideo
+          if (useNativeVideo) {
+            void window.api.videoReceiver.startSession()
+          }
 
           // The input PC itself is NOT created here -- it's built fresh from
           // whichever sdp-offer (channel:'input') actually arrives, below.
@@ -403,7 +497,7 @@ export default function ControllerSession({
                   deviceId,
                   pin,
                   controllerId,
-                  caps: [INPUT_HELPER_CAP]
+                  caps: sessionCaps()
                 })
               }, PAIR_RETRY_DELAY_MS)
             }
@@ -466,6 +560,17 @@ export default function ControllerSession({
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
           transport.send({ type: 'sdp-answer', deviceId, sdp: answer.sdp, channel: 'input' })
+        } else if (message.type === 'sdp-offer' && message.channel === 'video-native') {
+          // Native video offer -> the receiver helper (VideoToolbox), NOT the
+          // WebRTC pc. Must precede the generic sdp-offer branch below, which
+          // would otherwise apply it to the renderer 'video' pc.
+          void window.api.videoReceiver.remoteOffer(message.sdp)
+        } else if (message.type === 'ice-candidate' && message.channel === 'video-native') {
+          void window.api.videoReceiver.remoteIce(
+            message.candidate,
+            message.sdpMid,
+            message.sdpMLineIndex
+          )
         } else if (message.type === 'sdp-offer' && pcRef.current) {
           const pc = pcRef.current
           await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
@@ -498,7 +603,7 @@ export default function ControllerSession({
         deviceId,
         pin,
         controllerId,
-        caps: [INPUT_HELPER_CAP]
+        caps: sessionCaps()
       })
     }
 
@@ -512,6 +617,12 @@ export default function ControllerSession({
       inputPcRef.current = null
       inputChannelRef.current = null
       moveChannelRef.current = null
+      if (renderRectTimerRef.current) {
+        clearInterval(renderRectTimerRef.current)
+        renderRectTimerRef.current = undefined
+      }
+      // No-op in a default build (host never spawned -> optional-chained away).
+      void window.api.videoReceiver.stopSession()
       window.api.window.setFullScreen(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -537,17 +648,17 @@ export default function ControllerSession({
               onBlur={commitName}
               onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
             />
-            {videoStats && videoStats.fps > 0 && (
+            {displayStats && displayStats.fps > 0 && (
               <span
                 className="connection-type-badge"
                 title="What's actually being received -- not just what was requested"
               >
-                Decode {videoStats.processingMs}ms · Network {videoStats.rttMs ?? '?'}ms ·{' '}
-                {videoStats.jitterMs != null ? `Jitter ${videoStats.jitterMs}ms · ` : ''}
-                {videoStats.lossPct != null ? `Loss ${videoStats.lossPct.toFixed(1)}% · ` : ''}
-                {videoStats.fps}fps · {videoStats.width}×{videoStats.height} ·{' '}
-                {(videoStats.kbps / 1000).toFixed(1)} Mbps
-                {videoStats.codec ? ` · ${videoStats.codec}` : ''}
+                Decode {displayStats.processingMs}ms · Network {displayStats.rttMs ?? '?'}ms ·{' '}
+                {displayStats.jitterMs != null ? `Jitter ${displayStats.jitterMs}ms · ` : ''}
+                {displayStats.lossPct != null ? `Loss ${displayStats.lossPct.toFixed(1)}% · ` : ''}
+                {displayStats.fps}fps · {displayStats.width}×{displayStats.height} ·{' '}
+                {(displayStats.kbps / 1000).toFixed(1)} Mbps
+                {displayStats.codec ? ` · ${displayStats.codec}` : ''}
               </span>
             )}
             {connectionType && (
