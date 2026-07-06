@@ -24,7 +24,7 @@ function formatTime(date: Date): string {
 // streams one. A machine that IS streaming shows its live screen here instead.
 function MonitorIcon(): React.JSX.Element {
   return (
-    <svg width="52" height="52" viewBox="0 0 24 24" fill="none">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
       <rect x="3" y="4" width="18" height="13" rx="2.4" stroke="currentColor" strokeWidth="1.5" />
       <rect x="8" y="8" width="8" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
     </svg>
@@ -231,11 +231,15 @@ export default function DeviceListView({
               <div key={device.deviceId} className="dl-card">
                 <div className={`dl-thumb ${device.online ? '' : 'is-offline'}`}>
                   {device.thumbnail ? <img src={device.thumbnail} alt="" /> : <MonitorIcon />}
-                </div>
-                <div className="dl-name">{device.name || device.deviceId}</div>
-                <div className={`dl-status-row ${device.online ? 'is-ok' : ''}`}>
-                  <span className={`dl-status-dot ${device.online ? 'is-ok' : 'is-idle'}`} />
-                  {device.online ? 'online' : 'offline'}
+                  {/* Name + status float over the screen preview (bottom-left),
+                      Parsec-style, per the owner's card-tuner layout. */}
+                  <div className="dl-overlay">
+                    <div className="dl-name">{device.name || device.deviceId}</div>
+                    <div className={`dl-status-row ${device.online ? 'is-ok' : ''}`}>
+                      <span className={`dl-status-dot ${device.online ? 'is-ok' : 'is-idle'}`} />
+                      {device.online ? 'online' : 'offline'}
+                    </div>
+                  </div>
                 </div>
                 {pinPromptFor === device.deviceId ? (
                   <div className="dl-pin-prompt">

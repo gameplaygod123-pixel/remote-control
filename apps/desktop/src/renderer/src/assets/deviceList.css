@@ -309,23 +309,26 @@
 
 .dl-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  /* Fixed-ish ~302px cards (not stretched full-width) per the owner's
+     card-tuner spec; cap at 302, allow a little shrink on narrow windows. */
+  grid-template-columns: repeat(auto-fill, minmax(258px, 302px));
   gap: 16px;
 }
 
 .dl-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px;
-  border-radius: 22px;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 34px;
   background: var(--dl-card-bg);
   border: 1px solid var(--dl-border);
 }
 
 .dl-thumb {
+  position: relative;
   aspect-ratio: 16 / 10;
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   /* Transparent so a machine with no live preview shows just the monitor
      icon floating on the card, no contrasting "screen" box (matches the
@@ -335,6 +338,24 @@
   align-items: center;
   justify-content: center;
   color: var(--dl-accent);
+}
+
+/* Name + online status float over the screen preview (bottom-left by
+   default), Parsec-style. Position/size come from the owner's card-tuner
+   export (tx 17%, ty 90%). White text with a strong outline shadow so it
+   stays readable on any screenshot AND on the icon-fallback card bg (in
+   both themes), without a solid scrim box. */
+.dl-overlay {
+  position: absolute;
+  left: 17%;
+  top: 90%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  max-width: 88%;
+  pointer-events: none;
 }
 
 .dl-thumb.is-offline {
@@ -352,8 +373,11 @@
 }
 
 .dl-name {
-  font-size: 17px;
+  font-size: 12px;
   font-weight: 700;
+  color: #ffffff;
+  white-space: nowrap;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.9), 0 1px 4px rgba(0, 0, 0, 0.7);
 }
 
 .dl-id {
@@ -365,9 +389,10 @@
 .dl-status-row {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  color: var(--dl-text-dim);
+  gap: 6px;
+  font-size: 10px;
+  color: #e8e0d8;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.9), 0 1px 4px rgba(0, 0, 0, 0.7);
 }
 
 .dl-status-dot {
@@ -391,12 +416,12 @@
 
 .dl-btn {
   width: 100%;
-  padding: 14px 0;
+  padding: 8px 0;
   /* Full-capsule pill to match the owner's mock (Connect button). */
   border-radius: 999px;
   border: none;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   background: var(--dl-accent);
