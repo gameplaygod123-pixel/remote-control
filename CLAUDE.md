@@ -65,16 +65,21 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.21.0** — **'glass' translucent see-through theme** (3rd
+Latest release: **v1.21.1** — **'glass' translucent see-through theme** (3rd
 theme beside dark/light). The controller shell renders at ~12% opacity so the
-desktop shows through. Only the **macOS** controller window is created
-`transparent:true` (verified on the real Mac: over a white window it goes pale,
-over dark it stays dark — real see-through); **Windows keeps opaque** because
-`transparent:true` breaks the titleBarOverlay caption buttons, so glass there
-degrades to a solid dark tint (backgroundColor '#171210' shows through the
-alpha) — a Windows acrylic/`backgroundMaterial` pass is a TODO. Transparency is
-fixed at window creation, so `theme:set` in `main/index.ts` calls
-`app.relaunch()` when glass flips on macOS. New `GlassToggle.tsx` (droplet) in
+desktop shows through. The **macOS** controller window is now created
+`transparent:true` **ALWAYS** (v1.21.0 gated it to the saved theme + relaunched
+on toggle, but the owner runs the Mac controller via `electron-vite dev` where
+`app.relaunch()`+exit just KILLS the app — the vite dev server dies with it).
+Dark/light paint an opaque `.ctl-shell` over the transparent window (normal
+look, rounded corners + shadow intact — verified on the real Mac), glass drops
+to ~12%. So the theme toggle is fully LIVE, no relaunch, works in dev +
+packaged. Verified on the real Mac: over a white window the glass shell goes
+pale, over dark it stays dark (real see-through); dark theme stays opaque.
+**Windows keeps opaque** because `transparent:true` breaks the titleBarOverlay
+caption buttons, so glass there degrades to a solid dark tint (backgroundColor
+'#171210' under the alpha) — a Windows acrylic/`backgroundMaterial` pass is a
+TODO. New `GlassToggle.tsx` (droplet) in
 the sidebar; `ThemeToggle` is now a CONTROLLED component — `ControllerView`
 owns `theme` state and passes both toggles an `onChange`. `themeConfig` Theme is
 now `'dark'|'light'|'glass'`; glass tokens live in `deviceList.css`
