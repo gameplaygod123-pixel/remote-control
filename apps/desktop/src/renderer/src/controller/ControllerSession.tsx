@@ -167,10 +167,32 @@ export default function ControllerSession({
     return null
   }
 
+  // Mouse -> remote position. The WebRTC path derives it from the <video>'s
+  // intrinsic size (videoWidth/Height) for object-fit letterboxing. In native
+  // mode that element carries NO video track (videoWidth=0), so we map linearly
+  // over the element box instead -- which matches the native render window that
+  // fills the same box (videoGravity .resize). Without this, native input got
+  // null (no move) and clicks landed at the stale cursor position.
+  function relativePosition(
+    el: HTMLVideoElement,
+    clientX: number,
+    clientY: number
+  ): { x: number; y: number } | null {
+    if (useNativeVideoRef.current) {
+      const rect = el.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return null
+      const x = (clientX - rect.left) / rect.width
+      const y = (clientY - rect.top) / rect.height
+      if (x < 0 || x > 1 || y < 0 || y > 1) return null
+      return { x, y }
+    }
+    return videoRelativePosition(el, clientX, clientY)
+  }
+
   function handleMouseMove(e: React.MouseEvent<HTMLVideoElement>): void {
     const now = performance.now()
     if (now - lastMoveSentRef.current < MOUSE_MOVE_THROTTLE_MS) return
-    const pos = videoRelativePosition(e.currentTarget, e.clientX, e.clientY)
+    const pos = relativePosition(e.currentTarget, e.clientX, e.clientY)
     if (!pos) return
     lastMoveSentRef.current = now
     sendInput({ t: 'move', x: pos.x, y: pos.y })
@@ -186,7 +208,7 @@ export default function ControllerSession({
     // reliable channel, ordered right before the 'down' -- stamped from the
     // same seq counter so the agent won't later apply an older in-flight
     // move on top of it.
-    const pos = videoRelativePosition(e.currentTarget, e.clientX, e.clientY)
+    const pos = relativePosition(e.currentTarget, e.clientX, e.clientY)
     const channel = inputChannelRef.current
     if (pos && channel?.readyState === 'open') {
       channel.send(JSON.stringify({ t: 'move', x: pos.x, y: pos.y, seq: ++moveSeqRef.current }))

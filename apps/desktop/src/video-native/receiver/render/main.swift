@@ -295,8 +295,9 @@ final class RenderApp: NSObject, NSApplicationDelegate {
 
   func setRenderRect(_ x: Double, _ y: Double, _ w: Double, _ h: Double, _ scale: Double) {
     // Incoming: top-left origin screen points. NSWindow uses bottom-left origin.
-    guard let screen = NSScreen.screens.first else { return }
+    guard let screen = NSScreen.screens.first else { logErr("setRenderRect: no screen"); return }
     let flippedY = screen.frame.height - y - h
+    logErr("setRenderRect in x=\(x) y=\(y) w=\(w) h=\(h) scale=\(scale) | screenH=\(screen.frame.height) screens=\(NSScreen.screens.count) -> frame(x=\(x),y=\(flippedY),w=\(w),h=\(h))")
     DispatchQueue.main.async {
       self.window.setFrame(NSRect(x: x, y: flippedY, width: w, height: h), display: true)
     }
@@ -318,11 +319,12 @@ final class RenderApp: NSObject, NSApplicationDelegate {
 
   private func startControlReader() {
     Thread.detachNewThread {
+      logErr("control reader started (fd 3)")
       let fh = FileHandle(fileDescriptor: 3, closeOnDealloc: false)
       var acc = Data()
       while true {
         let chunk = fh.availableData
-        if chunk.isEmpty { break }
+        if chunk.isEmpty { logErr("control fd 3 EOF"); break }
         acc.append(chunk)
         while let nl = acc.firstIndex(of: 0x0a) {
           let line = acc.subdata(in: acc.startIndex..<nl)
