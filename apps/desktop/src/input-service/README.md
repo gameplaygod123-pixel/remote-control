@@ -39,12 +39,23 @@ helper (session1, medium) --pipe--> injector (session1, SYSTEM) --SendInput--> a
 | `../input-helper/serviceClient.ts` | helper forward-or-fallback (gated) | written |
 | `../../../scripts/{install,uninstall}-input-service.ps1` | service lifecycle | written, UNTESTED |
 
-## Build (TODO for Windows-Claude)
+## Build
 
-Not wired into any build yet (SAFETY BAR). `service.ts` and `index.ts` need to
-become electron-vite build entries (like the input-helper) so they emit
-`out/input-service/{service,index}.js`, and `scripts/build-win.sh` must verify
-the koffi/user32 usage packs. Keep asar disabled (golden rule #6).
+WIRED into electron-vite (2026-07-07) as two Node-target entries, mirroring the
+input-helper — verified `pnpm build` emits them on macOS:
+
+- `service.ts`  → `out/main/input-service.js`   (session-0 launcher)
+- `index.ts`    → `out/main/input-injector.js`  (SYSTEM injector-in-session)
+
+They are always built but **inert** — nothing spawns them; the default runtime
+is byte-identical (SAFETY BAR). koffi is externalized (required at runtime from
+node_modules), same as the helper. `install-input-service.ps1` should point
+`-ScriptPath` at the packaged `.../out/main/input-service.js`; the launcher finds
+the injector as its `input-injector.js` sibling automatically.
+
+STILL TODO for Windows-Claude: confirm `scripts/build-win.sh` packs koffi for the
+win32 target for these entries too (it already does for the helper), and keep
+asar disabled (golden rule #6).
 
 ## Test order (matches plan phases — verify each before the next)
 

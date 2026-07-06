@@ -28,8 +28,10 @@ function log(msg: string): void {
 const NO_SESSION = 0xffffffff
 
 // The injector runs the same electron.exe as this service, ELECTRON_RUN_AS_NODE,
-// pointing at the built index.js sibling. process.execPath is electron.exe.
-const injectorScript = join(dirname(__filename), 'index.js')
+// pointing at the built injector sibling. process.execPath is electron.exe.
+// NOTE: the electron-vite entry name is 'input-injector' (electron.vite.config),
+// so the emitted file is out/main/input-injector.js next to this service.js.
+const injectorScript = join(dirname(__filename), 'input-injector.js')
 
 let currentSessionId = NO_SESSION
 const POLL_MS = 2000

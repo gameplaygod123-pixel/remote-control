@@ -24,7 +24,15 @@ export default defineConfig({
           // spawned by main/videoReceiverHost.ts. Answers on channel:'video-native',
           // reassembles RTP -> Annex-B, and drives the Swift render binary.
           // See src/video-native/receiver/index.ts.
-          'video-receiver': resolve('src/video-native/receiver/index.ts')
+          'video-receiver': resolve('src/video-native/receiver/index.ts'),
+          // Elevated input feature (Windows), both pure-Node Node-target like the
+          // input-helper. Always BUILT but inert -- nothing spawns them unless the
+          // LocalSystem service is installed (scripts/install-input-service.ps1) and
+          // the agent runs with PR_INPUT_SERVICE=1. See docs/input-elevation-plan.md.
+          // 'input-service' = session-0 launcher (service.ts); 'input-injector' =
+          // the SYSTEM injector-in-session it spawns (index.ts). UNTESTED.
+          'input-service': resolve('src/input-service/service.ts'),
+          'input-injector': resolve('src/input-service/index.ts')
         }
       }
     }
