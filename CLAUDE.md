@@ -379,14 +379,42 @@ Lessons:
      every struct size/offset (STARTUPINFOW/PROCESS_INFORMATION/TOKEN_PRIVILEGES)
      against known x64 values BEFORE any pointer is passed (golden-rule-1 guard).
      Harness `dev/phase2-spawn.ts` + `scripts/phase2.ps1`.
-   - ⏭ **Phase 2 END-TO-END NEXT (the payoff)** — install the service
-     (`install-input-service.ps1`, elevated) → session-0 service auto-spawns the
-     injector → run agent `PR_INPUT_SERVICE=1` → drive a real session FROM THE
-     MAC → open Task Manager (Ctrl+Shift+Esc) / a run-as-admin app → confirm
-     mouse+keyboard actually work there. This also covers the Phase-1 real-agent
-     e2e that was skipped to jump to Phase 2. NEEDS the owner driving from the Mac.
+   - **BIG SIMPLIFICATION (owner tested 2026-07-07): running the AGENT elevated
+     (Run as administrator) ALREADY fixes Task Manager** — the forked input-helper
+     inherits the agent's high integrity, so its existing local `SendInput`
+     reaches Task Manager + every run-as-admin app. No service needed for that.
+     Covers everything EXCEPT the secure desktop (UAC consent / Ctrl+Alt+Del /
+     lock), which needs SYSTEM.
+   - **DECISION (owner, 2026-07-07):** ship BOTH, layered:
+     - **(TRACK 1, quick win) auto-elevate the agent** via a **Scheduled Task at
+       logon with "highest privileges"** (elevated, NO per-launch UAC nag, works
+       with tray auto-start). This is the Task-Manager fix. Windows-Claude to
+       script + integrate. Caveat: dragging a file from a medium Explorer ONTO the
+       elevated agent window is UIPI-blocked (receiving files from the controller
+       is unaffected).
+     - **(TRACK 2, continue) finish the SYSTEM service** for the secure-desktop
+       cases only. Once done it routes ALL input through the SYSTEM injector
+       (helper forwards; local elevated inject is the fallback) → resilient layers.
+   - **Phase 2 e2e findings (real hardware):** ✅ service→CreateProcessAsUser→
+     injector-hosts-pipe auto-spawn works; ✅ full medium→medium chain injects
+     px-exact via pipe (forwarded, not fallback). **Two blockers found:**
+     1. **Pipe ACL** — a SYSTEM injector hosting a libuv/`net` pipe gets a default
+        DACL (SYSTEM+Admins only) → the medium helper is denied ("Access is
+        denied", node mangles to ENOENT). Cleanly isolated (medium-injector
+        connects, SYSTEM-injector denied). FIX: **A now** (swap roles: helper
+        hosts, SYSTEM injector connects — SYSTEM opens any user pipe), **B in
+        Phase 4** (injector owns pipe via koffi `CreateNamedPipeW`+SDDL+
+        `FIRST_PIPE_INSTANCE` — correct trust model). Residual same-user→SYSTEM
+        EoP with A is accepted for a sole-user home tool + documented.
+     2. **SCM 1053** — `service.ts` is plain Node with no `StartServiceCtrlDispatcher`,
+        so `sc start` times out (1053) and SCM kills it (injector orphaned). FIX:
+        run the session-0 launcher as a **Scheduled Task `/ru SYSTEM /rl HIGHEST`**
+        instead of an SCM service (no dispatcher needed; still session 0 → still
+        uses the working `CreateProcessAsUser` primitive). Do NOT hand-roll the
+        dispatcher in koffi (callback-from-native segfault risk).
    - ⏭ Phase 3 desktop-follow (UAC/lock via `syncInputDesktop()`), Phase 4 harden
-     (session-change re-target, injector crash-respawn, pipe-squatting, uninstall).
+     (Fix B pipe SDDL + squat guard, session-change re-target, injector crash-
+     respawn, uninstall cleanup).
    - Golden rule #1 throughout: PRERELEASE + real-hardware before any full release.
      Secure-desktop cases land input-only (video stays frozen = separate SYSTEM-
      capture project).
