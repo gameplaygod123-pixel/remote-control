@@ -574,13 +574,25 @@
 .session-float__panel {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap; /* wrap to more rows on a narrow window instead of overflowing */
+  gap: 6px 10px; /* row-gap col-gap */
   padding: 6px 10px;
+  /* Never wider than the window -- the whole point of "usable when shrunk". */
+  max-width: calc(100vw - 24px);
   background: rgba(20, 21, 26, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
   backdrop-filter: blur(16px);
-  white-space: nowrap;
+}
+
+/* The long diagnostic/connection badges shrink + wrap their text first (before
+   the essential buttons) so a small window stays operable. */
+.session-float__panel .connection-type-badge {
+  white-space: normal;
+  text-align: center;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .session-float__grip {
@@ -590,6 +602,7 @@
   font-size: 14px;
   padding: 0 2px;
   user-select: none;
+  flex-shrink: 0;
 }
 
 .session-float__btn {
@@ -613,7 +626,9 @@
 }
 
 .session-float__name {
+  flex: 0 1 130px;
   width: 130px;
+  min-width: 60px;
   font-family: inherit;
   font-size: 13px;
   font-weight: 600;
