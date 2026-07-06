@@ -319,7 +319,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px;
+  padding: 4px;
   border-radius: 34px;
   background: var(--dl-card-bg);
   border: 1px solid var(--dl-border);
@@ -328,7 +328,9 @@
 .dl-thumb {
   position: relative;
   aspect-ratio: 16 / 10;
-  border-radius: 12px;
+  /* Rounded to nest concentrically inside the card corner (card 34 − 4px
+     padding) so the thin frame hugs the screen evenly on all 4 sides. */
+  border-radius: 30px;
   overflow: hidden;
   /* Transparent so a machine with no live preview shows just the monitor
      icon floating on the card, no contrasting "screen" box (matches the
