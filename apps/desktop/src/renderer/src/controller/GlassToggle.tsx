@@ -2,9 +2,9 @@ import type { ThemeName } from './ThemeToggle'
 
 // Toggles the translucent 'glass' theme (see-through controller over the
 // desktop). Controlled by ControllerView. Turning glass ON remembers the
-// previous dark/light choice so turning it OFF restores it. On macOS the main
-// process relaunches the window when glass flips (transparency is fixed at
-// window creation) -- so expect a brief restart on toggle.
+// previous dark/light choice so turning it OFF restores it. The macOS window
+// is always transparent, so this switches live (no relaunch); on Windows glass
+// shows a solid dark tint instead of true see-through.
 const PREV_KEY = 'pr-prev-theme'
 
 export default function GlassToggle({

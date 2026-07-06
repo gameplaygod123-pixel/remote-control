@@ -64,8 +64,8 @@ function ControllerView(): React.JSX.Element {
     })
   }, [])
 
-  // Persist + apply live. Flipping into/out of glass relaunches the window on
-  // macOS (main/index.ts) because window transparency is fixed at creation.
+  // Persist + apply live. The macOS window is always transparent, so every
+  // theme (including glass) just re-skins via CSS -- no relaunch.
   function changeTheme(next: ThemeName): void {
     setTheme(next)
     document.documentElement.dataset.theme = next

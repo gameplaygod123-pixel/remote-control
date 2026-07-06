@@ -200,19 +200,21 @@ function createWindow(appMode: AppMode): void {
   // has one natural size, so resizing only ever makes it look broken. The
   // controller stays fully resizable: the Computers grid reflows and the
   // session view needs maximize/fullscreen.
-  // The 'glass' theme is a see-through controller window. Only macOS can be
-  // truly transparent without breaking the Windows titleBarOverlay caption
-  // buttons, so transparency is macOS-only; elsewhere glass degrades to a
-  // solid dark tint (backgroundColor shows through the translucent CSS).
-  // Transparency is fixed at window creation, so it's read from the saved
-  // theme here and the theme:set handler relaunches when it changes.
-  const controllerGlass = process.platform === 'darwin' && getTheme() === 'glass'
+  // The 'glass' theme is a see-through controller. Transparency is fixed at
+  // window creation, so on macOS the controller window is ALWAYS created
+  // transparent -- dark/light just paint an opaque .ctl-shell over it (looks
+  // normal, keeps rounded corners + shadow), glass drops it to ~12% so the
+  // desktop shows through. That way the theme toggle works live with no
+  // relaunch (important: the owner runs the Mac controller via `electron-vite
+  // dev`, where app.relaunch() would just kill the app). Windows can't be
+  // transparent without breaking its titleBarOverlay caption buttons, so glass
+  // there degrades to a solid dark tint (backgroundColor under the alpha).
   const win = createBrowserWindow(
     undefined,
     appMode === 'agent' && startHidden,
     appMode === 'agent'
       ? { width: 680, height: 700, resizable: false, maximizable: false, fullscreenable: false }
-      : controllerGlass
+      : process.platform === 'darwin'
         ? { transparent: true, backgroundColor: '#00000000' }
         : { backgroundColor: '#171210' }
   )
@@ -365,17 +367,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('house-token:get', (): string | null => getHouseToken())
   ipcMain.handle('house-token:set', (_event, token: string): void => saveHouseToken(token))
   ipcMain.handle('theme:get', (): Theme => getTheme())
-  ipcMain.handle('theme:set', (_event, theme: Theme): void => {
-    const prev = getTheme()
-    saveTheme(theme)
-    // Window transparency (the 'glass' see-through) is fixed at creation, so
-    // toggling into or out of glass on macOS needs a relaunch to recreate the
-    // window transparent/opaque. Other themes just re-skin via CSS live.
-    if (process.platform === 'darwin' && (prev === 'glass') !== (theme === 'glass')) {
-      app.relaunch()
-      app.exit(0)
-    }
-  })
+  // The macOS controller window is always transparent (see createWindow), so
+  // every theme -- including glass -- just re-skins live via CSS; no relaunch.
+  ipcMain.handle('theme:set', (_event, theme: Theme): void => saveTheme(theme))
 
   // Bridges the agent renderer to the input-helper process (see
   // inputHelperHost.ts). No-ops in controller mode, where inputHelperHost is
