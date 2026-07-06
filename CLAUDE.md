@@ -65,7 +65,10 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.7** (name + online status are now TWO independently
+Latest release: **v1.20.8** (thinner frame around the card's screen preview:
+`.dl-card` padding 8→4, `.dl-thumb` radius 12→30 so it nests concentrically in
+the 34px card corner and the screen hugs all 4 edges evenly). v1.20.7 = name +
+online status are now TWO independently
 placed labels over the screen — `.dl-name` at `left:2%;top:92%` (bottom-left),
 `.dl-status-row` at `right:4px;top:92%` (bottom-right, right-anchored so
 "online" can't clip on a narrower card); name 14px, status 11px; both
