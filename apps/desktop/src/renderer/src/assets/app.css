@@ -705,7 +705,8 @@ body:has(.session-shell.native-video),
   padding-left: 82px; /* clear the traffic lights on the left */
   padding-right: 12px;
   -webkit-app-region: drag;
-  background: linear-gradient(to bottom, rgba(18, 14, 12, 0.92), rgba(18, 14, 12, 0.66));
+  /* Neutral VS Code-style dark chrome (Light/Glass overrides below). */
+  background: linear-gradient(to bottom, rgba(30, 30, 30, 0.94), rgba(30, 30, 30, 0.7));
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   user-select: none;
   z-index: 8;

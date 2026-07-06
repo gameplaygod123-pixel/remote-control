@@ -21,18 +21,20 @@
      data-theme block below and is toggled by the sidebar switch (persisted
      per machine via main/themeConfig). Everything themable references these
      tokens so one attribute flip re-skins the whole controller shell. */
-  --dl-bg: #171210;
-  --dl-text: #f0e6dc;
-  --dl-rail: #120e0b;
-  --dl-thumb: #120d0b;
+  /* Neutral grays matching VS Code's dark theme (editor #1e1e1e / sidebar
+     #252526 / text #d4d4d4), keeping the amber accent for brand identity. */
+  --dl-bg: #1e1e1e;
+  --dl-text: #d4d4d4;
+  --dl-rail: #181818;
+  --dl-thumb: #181818;
   --dl-accent: #e0793f;
   --dl-accent-ink: #1a1008;
-  --dl-accent-dim: #8a6a52;
-  --dl-text-dim: #9c8a7c;
-  --dl-border: #332822;
-  --dl-card-bg: #1f1712;
+  --dl-accent-dim: #6e6e6e;
+  --dl-text-dim: #858585;
+  --dl-border: #2d2d2d;
+  --dl-card-bg: #252526;
   --dl-ok: #4ade80;
-  --dl-idle: #6b6058;
+  --dl-idle: #6e6e6e;
   --dl-hover: rgba(255, 255, 255, 0.06);
   transition: background 0.25s ease, color 0.25s ease;
 }
