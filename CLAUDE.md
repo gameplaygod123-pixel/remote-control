@@ -369,10 +369,24 @@ Lessons:
      move burst coalesced+split correctly, **fallback seamless (kill injector mid-
      session → local inject, 0 frames dropped)**. koffi-under-plain-node OK.
      Harnesses: `input-service/dev/phase{0,1}-*.ts` + `scripts/phase{0,1}.ps1`.
-   - ⏭ **Phase 2 NEXT (riskiest FFI)** — `spawnInjectorInSession()`
-     (WTSQueryUserToken + DuplicateTokenEx + CreateProcessAsUserW): launch the
-     injector as SYSTEM-in-session so Task Manager (Ctrl+Shift+Esc) + admin apps
-     take input. Then Phase 3 desktop-follow (UAC/lock), Phase 4 harden.
+   - ✅ **Phase 2 spawn primitive DONE (the riskiest FFI)** —
+     `spawnInjectorInSession()` implemented + verified in isolation: the token
+     dance + `CreateProcessAsUserW` spawns the injector as **SYSTEM-in-session**
+     (session 1, high integrity) which hosts the pipe. Chose SYSTEM-in-session
+     (retarget the SYSTEM token's `TokenSessionId` to the interactive session)
+     over `WTSQueryUserToken` — the latter gives the USER token = medium
+     integrity, not enough for Task Manager/UAC. `checkSpawnLayout()` asserts
+     every struct size/offset (STARTUPINFOW/PROCESS_INFORMATION/TOKEN_PRIVILEGES)
+     against known x64 values BEFORE any pointer is passed (golden-rule-1 guard).
+     Harness `dev/phase2-spawn.ts` + `scripts/phase2.ps1`.
+   - ⏭ **Phase 2 END-TO-END NEXT (the payoff)** — install the service
+     (`install-input-service.ps1`, elevated) → session-0 service auto-spawns the
+     injector → run agent `PR_INPUT_SERVICE=1` → drive a real session FROM THE
+     MAC → open Task Manager (Ctrl+Shift+Esc) / a run-as-admin app → confirm
+     mouse+keyboard actually work there. This also covers the Phase-1 real-agent
+     e2e that was skipped to jump to Phase 2. NEEDS the owner driving from the Mac.
+   - ⏭ Phase 3 desktop-follow (UAC/lock via `syncInputDesktop()`), Phase 4 harden
+     (session-change re-target, injector crash-respawn, pipe-squatting, uninstall).
    - Golden rule #1 throughout: PRERELEASE + real-hardware before any full release.
      Secure-desktop cases land input-only (video stays frozen = separate SYSTEM-
      capture project).
