@@ -341,3 +341,24 @@ Lessons:
    rule #1 (default stays WebRTC) and verify on the real agent before a full
    release; (d) optional polish — real decodeMs/renderMs in `stats`,
    keyframe-needed signal from the decode path, Windows NVENC preset/bitrate sweep.
+8. **Input elevation (SYSTEM service)** — owner-picked 2026-07-07 after "open
+   Task Manager → mouse dies instantly". Root cause: Windows UIPI/integrity — our
+   medium-integrity injector can't `SendInput` into high-integrity windows (Task
+   Manager, admin apps, UAC, Ctrl+Alt+Del, lock). Fix = a LocalSystem Windows
+   Service that receives input from the user-session helper over a named pipe and
+   injects with `OpenInputDesktop`/`SetThreadDesktop` desktop-switching. Full plan
+   + phasing in [`docs/input-elevation-plan.md`](docs/input-elevation-plan.md).
+   PLANNED, not started — native + privileged → golden rule #1 (PRERELEASE first),
+   Windows-Claude implements/tests. Task Manager (Ctrl+Shift+Esc) fully fixed;
+   secure-desktop cases land input-only (video stays frozen there = bigger future
+   work).
+9. **Auto-reconnect resilience** — DONE this session (Mac repo, shared
+   `signalingClient.ts`): added a liveness watchdog. Root cause of "agent stayed
+   offline until I restarted it after closing the MacBook lid": the client pinged
+   every 25s but never checked for a pong and relied only on the WS `close` event,
+   which never fires on a HALF-OPEN socket (tunnel host sleeps → no FIN/RST). Now
+   force-closes + reconnects (re-resolving the URL) after 65s of silence. Benefits
+   agent + controller. Untested on the real half-open path yet — verify by
+   sleeping one machine mid-session and confirming auto-recovery without a manual
+   restart. Optional follow-up the owner deferred: (ค) auto-fallback input→video
+   pc if the input pc never opens.
