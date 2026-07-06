@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { UpdaterStatus } from '../main/updater'
 import type { NativeVideoStats, VideoConfig } from '../video-native/shared/contract'
+import type { RenderRect } from '../video-native/shared/ipc'
 
 type AppMode = 'agent' | 'controller'
 
@@ -158,6 +159,43 @@ const api = {
     },
     onDown: (handler: () => void): void => {
       ipcRenderer.on('video-sender:down', () => handler())
+    }
+  },
+  // Bridges the controller renderer to the native video-receiver process (see
+  // main/videoReceiverHost.ts). Always-not-ready unless VIDEO_PIPELINE=native
+  // spawned the host; agent mode never calls these.
+  videoReceiver: {
+    isReady: (): Promise<boolean> => ipcRenderer.invoke('video-receiver:is-ready'),
+    startSession: (): Promise<void> => ipcRenderer.invoke('video-receiver:start-session'),
+    stopSession: (): Promise<void> => ipcRenderer.invoke('video-receiver:stop-session'),
+    remoteOffer: (sdp: string): Promise<void> =>
+      ipcRenderer.invoke('video-receiver:remote-offer', sdp),
+    remoteIce: (
+      candidate: string,
+      sdpMid: string | null,
+      sdpMLineIndex: number | null
+    ): Promise<void> =>
+      ipcRenderer.invoke('video-receiver:remote-ice', candidate, sdpMid, sdpMLineIndex),
+    setRenderRect: (rect: RenderRect): Promise<void> =>
+      ipcRenderer.invoke('video-receiver:set-render-rect', rect),
+    onAnswer: (handler: (sdp: string) => void): void => {
+      ipcRenderer.on('video-receiver:answer', (_event, sdp) => handler(sdp))
+    },
+    onIce: (
+      handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+    ): void => {
+      ipcRenderer.on('video-receiver:ice', (_event, candidate, sdpMid, sdpMLineIndex) =>
+        handler(candidate, sdpMid, sdpMLineIndex)
+      )
+    },
+    onFirstFrame: (handler: () => void): void => {
+      ipcRenderer.on('video-receiver:first-frame', () => handler())
+    },
+    onStats: (handler: (stats: NativeVideoStats) => void): void => {
+      ipcRenderer.on('video-receiver:stats', (_event, stats) => handler(stats))
+    },
+    onDown: (handler: () => void): void => {
+      ipcRenderer.on('video-receiver:down', () => handler())
     }
   }
 }

@@ -49,7 +49,8 @@ import { saveToDownloads } from './fileTransfer'
 import { getCachedPin, setCachedPin, clearCachedPin, setLastDeviceId } from './controllerMemory'
 import { startInputHelperHost, type InputHelperHost } from './inputHelperHost'
 import { startVideoSenderHost } from './videoSenderHost'
-import type { VideoSenderHost } from '../video-native/shared/ipc'
+import { startVideoReceiverHost } from './videoReceiverHost'
+import type { VideoSenderHost, VideoReceiverHost, RenderRect } from '../video-native/shared/ipc'
 import type { VideoConfig } from '../video-native/shared/contract'
 import { VIDEO_PIPELINE_ENV } from '../video-native/shared/contract'
 
@@ -199,6 +200,11 @@ function createBrowserWindow(
 // agent window per process.
 let agentWindow: BrowserWindow | undefined
 
+// Set when appMode === 'controller' so the native video-receiver host has
+// somewhere to forward its answer/ice/first-frame/stats/down events. Mirror of
+// agentWindow; only one controller window per process.
+let controllerWindow: BrowserWindow | undefined
+
 function createWindow(appMode: AppMode): void {
   // The agent window is a fixed-size credentials card -- everything on it
   // has one natural size, so resizing only ever makes it look broken. The
@@ -227,6 +233,8 @@ function createWindow(appMode: AppMode): void {
   if (appMode === 'agent') {
     agentWindow = win
     setupAgentTray(win)
+  } else if (appMode === 'controller') {
+    controllerWindow = win
   }
 }
 
@@ -375,6 +383,24 @@ app.whenReady().then(async () => {
     app.on('before-quit', () => videoSenderHost?.destroy())
   }
 
+  // Native video RECEIVER helper (controller only), and ONLY when explicitly
+  // opted in via VIDEO_PIPELINE=native -- the controller-side SAFETY BAR, exact
+  // mirror of the sender above. A default build (no env) never spawns it, so
+  // isReady() is always false and ControllerSession never engages the native
+  // path: the WebRTC <video> path stays byte-identical to today.
+  let videoReceiverHost: VideoReceiverHost | undefined
+  if (appMode === 'controller' && process.env[VIDEO_PIPELINE_ENV] === 'native') {
+    videoReceiverHost = startVideoReceiverHost({
+      onAnswer: (sdp) => controllerWindow?.webContents.send('video-receiver:answer', sdp),
+      onIce: (candidate, sdpMid, sdpMLineIndex) =>
+        controllerWindow?.webContents.send('video-receiver:ice', candidate, sdpMid, sdpMLineIndex),
+      onFirstFrame: () => controllerWindow?.webContents.send('video-receiver:first-frame'),
+      onStats: (stats) => controllerWindow?.webContents.send('video-receiver:stats', stats),
+      onDown: () => controllerWindow?.webContents.send('video-receiver:down')
+    })
+    app.on('before-quit', () => videoReceiverHost?.destroy())
+  }
+
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
@@ -433,6 +459,29 @@ app.whenReady().then(async () => {
       sdpMid: string | null,
       sdpMLineIndex: number | null
     ): void => videoSenderHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
+  )
+
+  // Bridges the controller renderer to the native video-receiver process (see
+  // videoReceiverHost.ts). All no-op / not-ready unless VIDEO_PIPELINE=native
+  // spawned the host above, so a default build reports not-ready and
+  // ControllerSession never engages the native path -- the WebRTC default stands.
+  ipcMain.handle('video-receiver:is-ready', (): boolean => videoReceiverHost?.isReady() ?? false)
+  ipcMain.handle('video-receiver:start-session', (): void => videoReceiverHost?.startSession())
+  ipcMain.handle('video-receiver:stop-session', (): void => videoReceiverHost?.stopSession())
+  ipcMain.handle('video-receiver:remote-offer', (_event, sdp: string): void =>
+    videoReceiverHost?.remoteOffer(sdp)
+  )
+  ipcMain.handle(
+    'video-receiver:remote-ice',
+    (
+      _event,
+      candidate: string,
+      sdpMid: string | null,
+      sdpMLineIndex: number | null
+    ): void => videoReceiverHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
+  )
+  ipcMain.handle('video-receiver:set-render-rect', (_event, rect: RenderRect): void =>
+    videoReceiverHost?.setRenderRect(rect)
   )
 
   // Explicit escape hatch for the "deleted and reinstalled, mode picker

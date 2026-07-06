@@ -112,6 +112,27 @@ declare global {
         ) => void
         onDown: (handler: () => void) => void
       }
+      videoReceiver: {
+        isReady: () => Promise<boolean>
+        startSession: () => Promise<void>
+        stopSession: () => Promise<void>
+        remoteOffer: (sdp: string) => Promise<void>
+        remoteIce: (
+          candidate: string,
+          sdpMid: string | null,
+          sdpMLineIndex: number | null
+        ) => Promise<void>
+        setRenderRect: (rect: import('../video-native/shared/ipc').RenderRect) => Promise<void>
+        onAnswer: (handler: (sdp: string) => void) => void
+        onIce: (
+          handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+        ) => void
+        onFirstFrame: (handler: () => void) => void
+        onStats: (
+          handler: (stats: import('../video-native/shared/contract').NativeVideoStats) => void
+        ) => void
+        onDown: (handler: () => void) => void
+      }
     }
   }
 }
