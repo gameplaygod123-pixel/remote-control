@@ -705,11 +705,18 @@ export default function ControllerSession({
       </div>
 
       {/* In native mode the video composites behind this transparent web UI, so
-          the shell has no opaque frame to grab. This slim draggable title bar
-          gives a move handle AND keeps the video clear of the traffic lights.
-          Hidden in fullscreen (OS handles it). WebRTC path never renders it. */}
-      {nativeActive && !fullscreen && (
-        <div className="session-titlebar">{nameDraft || deviceId}</div>
+          the shell has no opaque frame to grab. This slim title bar carries the
+          app name, clears the traffic lights, and is the one window-drag handle.
+          Sits BELOW the floating controls (z-index) so they stay clickable. Shown
+          in windowed AND fullscreen (the owner wants the app name always visible);
+          `fullscreen` just drops the traffic-light gap. WebRTC path never renders it. */}
+      {nativeActive && (
+        <div className={`session-titlebar${fullscreen ? ' is-fullscreen' : ''}`}>
+          <span className="session-titlebar__app">Personal Remote</span>
+          {(nameDraft || deviceId) && (
+            <span className="session-titlebar__device">· {nameDraft || deviceId}</span>
+          )}
+        </div>
       )}
 
       <div className="session-video-area">

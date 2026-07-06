@@ -669,11 +669,12 @@ body:has(.session-shell.native-video),
   opacity: 0;
 }
 
-/* Draggable title bar shown only in native mode (see ControllerSession). An
-   ABSOLUTE overlay (not a flex child) so the video area stays the FULL window --
-   the native subview fills it edge-to-edge and the <video> hit-target maps 1:1.
-   It's a slim drag strip on top that also clears the macOS traffic lights, and is
-   the one -webkit-app-region drag handle for the frameless transparent window. */
+/* App title bar shown in native mode (see ControllerSession). An ABSOLUTE overlay
+   (not a flex child) so the video area stays the FULL window -- the native subview
+   fills it edge-to-edge and the <video> hit-target maps 1:1. It's a slim strip on
+   top carrying the app name, clearing the macOS traffic lights, and is the one
+   -webkit-app-region drag handle for the frameless transparent window. z-index is
+   BELOW .session-float (10) so the floating controls stay clickable over it. */
 .session-titlebar {
   position: absolute;
   top: 0;
@@ -682,15 +683,33 @@ body:has(.session-shell.native-video),
   height: 34px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding-left: 78px; /* clear the traffic lights on the left */
+  justify-content: flex-start;
+  gap: 6px;
+  padding-left: 82px; /* clear the traffic lights on the left */
+  padding-right: 12px;
   -webkit-app-region: drag;
-  background: rgba(20, 16, 14, 0.72);
-  color: #e8e0d8;
+  background: linear-gradient(to bottom, rgba(18, 14, 12, 0.92), rgba(18, 14, 12, 0.66));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  user-select: none;
+  z-index: 8;
+}
+/* Fullscreen: no traffic lights to clear, so the app name starts at the edge. */
+.session-titlebar.is-fullscreen {
+  padding-left: 16px;
+}
+.session-titlebar__app {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #f2ede7;
+}
+.session-titlebar__device {
   font-size: 12px;
   letter-spacing: 0.02em;
-  user-select: none;
-  z-index: 20;
+  color: rgba(232, 224, 216, 0.62);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Shared by UpdateBadge and SwitchModeLink -- deliberately unstyled beyond
