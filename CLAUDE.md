@@ -65,7 +65,11 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.5** (device card rebuilt from the owner's own
+Latest release: **v1.20.6** (card thumbnail now `object-fit: contain` — the
+live capture shows FULL/uncropped; `cover` had zoomed it and clipped the
+left/right edges of the screen. A streaming card gets `.dl-thumb.has-screen {
+background:#0d0f14 }` so contain's letterbox bars read as a monitor bezel).
+v1.20.5 rebuilt the device card from the owner's own
 **card-tuner** export: name + online status now FLOAT over the screen preview
 — an abs-positioned `.dl-overlay` INSIDE `.dl-thumb`, bottom-left `left:17%;
 top:90%`, white text `#fff`/`#e8e0d8` with a strong outline shadow, no scrim
