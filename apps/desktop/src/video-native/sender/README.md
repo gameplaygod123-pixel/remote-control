@@ -43,8 +43,11 @@ The real forked helper is now implemented, wired strictly to the frozen
   (not the polyfill — it has no tracks): `Video` SendOnly + `H264RtpPacketizer`
   (`LongStartSequence`) + `RtcpSrReporter` + `RtcpNackResponder`. Agent = offerer.
   Wires all 4 risk items: **A** parse incoming RTCP on the send track → PLI forces
-  an IDR; **B** low-latency ffmpeg flags; **C** wall-clock 90 kHz RTP timestamps;
-  **D** fixed CBR at `startBitrateKbps`. Emits `NativeVideoStats` per second
+  an IDR, **debounced** with a 400 ms cooldown (> the ~265 ms respawn) so PLIs that
+  arrive before a forced keyframe lands are coalesced instead of stacking respawns
+  (Mac-review MUST FIX; agreed two-sided: receiver ≤1 PLI/s, sender cooldown
+  ≥300–500 ms); **B** low-latency ffmpeg flags; **C** wall-clock 90 kHz RTP
+  timestamps; **D** fixed CBR at `startBitrateKbps`. Emits `NativeVideoStats` per second
   (capture/encode `null` — ffmpeg exposes no split).
 - [`ffmpegArgs.ts`](ffmpegArgs.ts) — the measured-good `ddagrab → nvenc/mf → Annex-B
   pipe:1` argv (NVENC primary, MF fallback). Pure/testable.
@@ -63,8 +66,9 @@ The real forked helper is now implemented, wired strictly to the frozen
   esbuild, forks it like the host would against `dev/verify-receiver.mjs`, relaying
   SDP/ICE over the ipc.ts shapes. **PASS on this machine:** negotiates SRTP media →
   connected, ~100% frame delivery, per-second stats emitted, and a receiver PLI
-  reaches the helper → `forcing IDR` (item A end-to-end). Uses `VIDEO_FAKE_SOURCE=1`
-  (synthetic frames) so it needs no ffmpeg.
+  reaches the helper → `forcing IDR` (item A end-to-end), and the **PLI debounce**
+  (a PLI inside the cooldown is coalesced, spaced ones honoured → 2 forced, 1
+  coalesced). Uses `VIDEO_FAKE_SOURCE=1` (synthetic frames) so it needs no ffmpeg.
 - `node src/video-native/sender/dev/verify-units.mjs` — unit checks for the pure
   modules the e2e doesn't touch (NAL split/AU assembly across chunk boundaries,
   ffmpeg arg set, RTCP PLI parse). **PASS.**

@@ -18,7 +18,7 @@
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
-import { mkdirSync, readFileSync, existsSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 
@@ -51,6 +51,10 @@ async function bundleHelper() {
 
 function main(helperPath) {
   const logPath = join(tmpdir(), 'video-sender.log')
+  // The helper only APPENDS; in production main/videoSenderHost.ts truncates the
+  // log on spawn. This harness forks the helper directly, so it must do the same
+  // -- otherwise stale lines from a previous run inflate the forced-IDR count.
+  writeFileSync(logPath, '')
   console.log('[verify] forking real helper (VIDEO_FAKE_SOURCE=1) + receiver…')
 
   const helper = fork(helperPath, [], {
@@ -102,7 +106,8 @@ function main(helperPath) {
 
   setTimeout(() => {
     const log = existsSync(logPath) ? readFileSync(logPath, 'utf8') : ''
-    const forcedIdr = /forcing IDR/.test(log)
+    const forcedCount = (log.match(/-> forcing IDR/g) ?? []).length
+    const coalescedCount = (log.match(/coalesced/g) ?? []).length
     const r = report ?? lastProgress
     const lastStats = stats[stats.length - 1]
 
@@ -110,14 +115,17 @@ function main(helperPath) {
       'helper booted + ready': ready,
       'negotiated + frames delivered': (r.frames ?? 0) >= 60, // ~1s @ 60fps min
       'helper emitted per-second stats': stats.length >= 3 && !!lastStats && lastStats.fps > 0,
-      'PLI reached helper -> forced IDR (item A)': forcedIdr && (report?.pliTrue ?? 0) > 0
+      'PLI reached helper -> forced IDR (item A)': forcedCount >= 1 && (report?.pliTrue ?? 0) > 0,
+      // MUST FIX: the in-cooldown PLI (frame 45) is coalesced, the two spaced ones
+      // (40, 90) are honoured -> exactly 2 forced, >=1 coalesced.
+      'PLI debounce: in-cooldown coalesced, spaced honoured': forcedCount === 2 && coalescedCount >= 1
     }
 
     console.log('\n================ SENDER HELPER VERIFY ================')
     console.log(`frames delivered      : ${r.frames}  (packets ${r.packets})`)
     console.log(`stats msgs from helper: ${stats.length}` + (lastStats ? `  last: ${lastStats.fps}fps ${lastStats.kbps}kbps ${lastStats.width}x${lastStats.height} codec=${lastStats.codec} captureMs=${lastStats.captureMs}` : ''))
     console.log(`receiver PLI calls    : ${report?.pliCalls ?? '?'} (returned true: ${report?.pliTrue ?? '?'})`)
-    console.log(`helper log 'forcing IDR': ${forcedIdr ? 'yes ✅' : 'NO ❌'}`)
+    console.log(`helper forced IDRs    : ${forcedCount}  |  coalesced PLIs: ${coalescedCount}`)
     console.log('----')
     let pass = true
     for (const [name, ok] of Object.entries(gates)) {

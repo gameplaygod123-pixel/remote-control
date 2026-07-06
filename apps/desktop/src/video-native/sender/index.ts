@@ -44,6 +44,16 @@ const CNAME = 'video-native'
 const MAX_FRAGMENT = 1200 // MTU-safe FU-A fragment size (matches phase0 spike)
 const STATS_INTERVAL_MS = 1_000
 
+// Item A debounce (MUST FIX from Mac review). A forced IDR = an ffmpeg respawn,
+// ~210-265ms with NO frames on the wire; during that gap the receiver still has no
+// keyframe and (even rate-limited to <=1/s on the Mac side) can fire another PLI.
+// Acting on it would stack a second respawn and never let recovery complete. So
+// after forcing an IDR we IGNORE further PLIs for a cooldown longer than the worst
+// respawn (265ms) -- one respawn is guaranteed to finish and deliver the keyframe
+// before we'll honour another request. Agreed two-sided design: receiver <=1 PLI/s,
+// sender cooldown >=300-500ms. 400ms sits comfortably above 265ms and below 1s.
+const KEYFRAME_COOLDOWN_MS = 400
+
 // Same verified STUN pair as the input helper (input-helper/index.ts): a single
 // STUN server is a single point of failure, both of these are RFC 5389-verified.
 // No unverified ICE servers -- golden rule #4.
@@ -87,6 +97,8 @@ interface Session {
   rtpConfig: InstanceType<typeof RtpPacketizationConfig>
   source: FrameSource | null
   config: VideoConfig
+  /** performance.now() of the last honoured forceKeyframe -- PLI debounce (item A). */
+  lastKeyframeAt: number
   firstCaptureMs: number
   framesInWindow: number
   bytesInWindow: number
@@ -141,6 +153,7 @@ function startSession(config: VideoConfig): void {
     rtpConfig,
     source: null,
     config,
+    lastKeyframeAt: 0,
     firstCaptureMs: 0,
     framesInWindow: 0,
     bytesInWindow: 0,
@@ -166,13 +179,22 @@ function startSession(config: VideoConfig): void {
   })
 
   // ── item A: incoming RTCP on the send track -> detect PLI -> force IDR ──
+  // Debounced: coalesce PLIs that land within KEYFRAME_COOLDOWN_MS of a forced IDR
+  // (the respawn hasn't delivered the keyframe yet, so a repeat is redundant and
+  // stacking respawns would prevent recovery from ever completing).
   track.onMessage((msg: Buffer) => {
     if (current !== session) return
     const fb = parseRtcpFeedback(msg)
-    if (isKeyframeRequest(fb)) {
-      log(`RTCP keyframe request (pli=${fb.pli} fir=${fb.fir}) -> forcing IDR`)
-      session.source?.forceKeyframe()
+    if (!isKeyframeRequest(fb)) return
+    const now = performance.now()
+    const since = now - session.lastKeyframeAt
+    if (session.lastKeyframeAt !== 0 && since < KEYFRAME_COOLDOWN_MS) {
+      log(`RTCP keyframe request (pli=${fb.pli} fir=${fb.fir}) coalesced -- ${Math.round(since)}ms since last forced IDR (< ${KEYFRAME_COOLDOWN_MS}ms cooldown)`)
+      return
     }
+    session.lastKeyframeAt = now
+    log(`RTCP keyframe request (pli=${fb.pli} fir=${fb.fir}) -> forcing IDR`)
+    session.source?.forceKeyframe()
   })
   track.onError((err) => {
     if (current === session) log(`track error: ${err}`)

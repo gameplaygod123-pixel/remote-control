@@ -53,16 +53,21 @@ pc.onTrack((track) => {
     if (info.marker && !state.seenTs.has(info.timestamp)) {
       state.seenTs.add(info.timestamp)
       state.frames++
-      // Item A: once a stream is flowing, ask for a keyframe. The REAL helper
-      // parses this PLI on its send track and forces an IDR (proven via its log).
-      if (state.frames === 40) {
-        for (let i = 0; i < 3; i++) {
-          const ok = track.requestKeyframe()
-          state.pliCalls++
-          if (ok) state.pliTrue++
-        }
-        process.send({ t: 'log', line: `receiver sent ${state.pliCalls} requestKeyframe() (true=${state.pliTrue})` })
+      // Item A + debounce test. Fire PLIs at 3 points so the helper's cooldown is
+      // exercised on both sides of the boundary:
+      //   frame 40  -> HONOURED (first request)
+      //   frame 45  -> COALESCED (a few frames later, well within 400ms cooldown)
+      //   frame 90  -> HONOURED again (>400ms after the first)
+      // Expected on the sender: exactly 2 "forcing IDR" + >=1 "coalesced".
+      const firePli = (why) => {
+        const ok = track.requestKeyframe()
+        state.pliCalls++
+        if (ok) state.pliTrue++
+        process.send({ t: 'log', line: `receiver requestKeyframe() @frame ${state.frames} (${why}, ok=${ok})` })
       }
+      if (state.frames === 40) firePli('expect-honour')
+      else if (state.frames === 45) firePli('expect-coalesce')
+      else if (state.frames === 90) firePli('expect-honour-2')
     }
   })
 })
