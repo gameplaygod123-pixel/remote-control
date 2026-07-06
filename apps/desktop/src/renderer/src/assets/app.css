@@ -718,7 +718,7 @@ body:has(.session-shell.native-video),
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: #f2ede7;
+  color: #e0793f; /* brand accent -- reads well on every theme */
 }
 .session-titlebar__device {
   font-size: 12px;
@@ -727,6 +727,26 @@ body:has(.session-shell.native-video),
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The title bar follows the controller theme (dark default above) so switching to
+   Light / Glass stays consistent into a live session -- matches deviceList.css's
+   --dl-* palette. data-theme lives on <html>, set by ThemeToggle/main themeConfig. */
+:root[data-theme='light'] .session-titlebar {
+  background: linear-gradient(to bottom, rgba(244, 237, 227, 0.96), rgba(244, 237, 227, 0.74));
+  border-bottom-color: rgba(60, 40, 25, 0.12);
+}
+:root[data-theme='light'] .session-titlebar__app {
+  color: #cf5f26;
+}
+:root[data-theme='light'] .session-titlebar__device {
+  color: rgba(44, 33, 25, 0.58);
+}
+/* Glass: translucent bar so the see-through aesthetic carries onto the video. */
+:root[data-theme='glass'] .session-titlebar {
+  background: linear-gradient(to bottom, rgba(23, 18, 15, 0.5), rgba(23, 18, 15, 0.24));
+  border-bottom-color: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(14px);
 }
 
 /* Shared by UpdateBadge and SwitchModeLink -- deliberately unstyled beyond
