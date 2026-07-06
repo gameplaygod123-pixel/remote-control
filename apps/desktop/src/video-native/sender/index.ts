@@ -89,6 +89,20 @@ function resolveFfmpegPath(): string | null {
   return null
 }
 
+// ── quality-sweep knobs (env, opt-in) ────────────────────────────────────────
+// Both default to the contract values (preset p1 / config.startBitrateKbps), so
+// an unset env is byte-identical to before this knob existed. Set these at the
+// real-ffmpeg run to sweep the Mac-approved p1→p4 / 20→30 Mbps range without a
+// code change or re-review. VIDEO_NVENC_PRESET must be p1..p7 (else ignored).
+function resolveFfmpegTuning(): { preset?: string; bitrateKbps?: number } {
+  const tuning: { preset?: string; bitrateKbps?: number } = {}
+  const preset = process.env.VIDEO_NVENC_PRESET
+  if (preset && /^p[1-7]$/.test(preset)) tuning.preset = preset
+  const br = Number(process.env.VIDEO_NVENC_BITRATE_KBPS)
+  if (Number.isFinite(br) && br > 0) tuning.bitrateKbps = Math.round(br)
+  return tuning
+}
+
 // ── active session state ─────────────────────────────────────────────────────
 interface Session {
   id: number
@@ -249,7 +263,11 @@ function startFrameSource(session: Session): void {
       return
     }
     log(`ffmpeg: ${ffmpegPath}`)
-    session.source = new FfmpegFrameSource(ffmpegPath, session.config, gop, cb)
+    const tuning = resolveFfmpegTuning()
+    if (tuning.preset || tuning.bitrateKbps) {
+      log(`quality-sweep override: preset=${tuning.preset ?? 'p1'} bitrateKbps=${tuning.bitrateKbps ?? session.config.startBitrateKbps}`)
+    }
+    session.source = new FfmpegFrameSource(ffmpegPath, session.config, gop, cb, 'h264_nvenc', tuning)
   }
   session.source.start()
 }

@@ -24,6 +24,13 @@ export interface FfmpegArgOptions {
   encoder?: SenderEncoder
   /** DXGI output index to duplicate (0 = primary). Multi-monitor is Phase 3. */
   outputIdx?: number
+  /** NVENC preset p1 (fastest) .. p7 (slowest/best quality). Default 'p1'.
+   *  Quality-sweep knob (env VIDEO_NVENC_PRESET at the call site) — p1→p4 is the
+   *  Mac-approved sweep to try at the real-ffmpeg run. Ignored by the MF fallback. */
+  preset?: string
+  /** CBR target in kbps. Default = config.startBitrateKbps (20 Mbps). Quality-sweep
+   *  knob (env VIDEO_NVENC_BITRATE_KBPS) — the 20→30 Mbps sweep. Applies to both encoders. */
+  bitrateKbps?: number
 }
 
 /**
@@ -32,12 +39,17 @@ export interface FfmpegArgOptions {
  * at 16.55ms = 60fps exactly" -- change these only with a fresh pipe-cadence
  * measurement, not by eye.
  */
-function encoderArgs(encoder: SenderEncoder, config: VideoConfig, gop: number): string[] {
-  const bitrate = `${config.startBitrateKbps}k` // fixed CBR for v1 (item D); change = respawn
+function encoderArgs(
+  encoder: SenderEncoder,
+  gop: number,
+  preset: string,
+  bitrateKbps: number
+): string[] {
+  const bitrate = `${bitrateKbps}k` // fixed CBR for v1 (item D); change = respawn
   if (encoder === 'h264_nvenc') {
     return [
       '-c:v', 'h264_nvenc',
-      '-preset', 'p1', // fastest
+      '-preset', preset, // p1 (fastest) default; p1→p4 quality sweep
       '-tune', 'ull', // ultra-low-latency
       '-rc', 'cbr',
       '-b:v', bitrate,
@@ -83,11 +95,13 @@ export function buildFfmpegArgs(config: VideoConfig, opts: FfmpegArgOptions = {}
   const gop = opts.gop ?? 60
   const encoder = opts.encoder ?? 'h264_nvenc'
   const outputIdx = opts.outputIdx ?? 0
+  const preset = opts.preset ?? 'p1'
+  const bitrateKbps = opts.bitrateKbps ?? config.startBitrateKbps
   return [
     '-hide_banner',
     '-loglevel', 'error',
     '-filter_complex', filterChain(encoder, config, outputIdx),
-    ...encoderArgs(encoder, config, gop),
+    ...encoderArgs(encoder, gop, preset, bitrateKbps),
     '-bsf:v', 'dump_extra',
     '-f', 'h264',
     '-flush_packets', '1',

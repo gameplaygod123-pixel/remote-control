@@ -30,6 +30,14 @@ export interface FrameSource {
   stop(): void
 }
 
+/** Optional quality-sweep overrides for the ffmpeg encoder (see ffmpegArgs.ts).
+ *  Both default to the contract values (p1 / config.startBitrateKbps) when omitted,
+ *  so the production default is byte-identical to before this knob existed. */
+export interface FfmpegTuning {
+  preset?: string
+  bitrateKbps?: number
+}
+
 // If ffmpeg exits before EVER producing a frame and we're on NVENC, the GPU
 // probably has no NVENC (non-NVIDIA) -> fall back to Media Foundation once.
 export class FfmpegFrameSource implements FrameSource {
@@ -47,7 +55,8 @@ export class FfmpegFrameSource implements FrameSource {
     private readonly config: VideoConfig,
     private readonly gop: number,
     private readonly cb: FrameSourceCallbacks,
-    encoder: SenderEncoder = 'h264_nvenc'
+    encoder: SenderEncoder = 'h264_nvenc',
+    private readonly tuning: FfmpegTuning = {}
   ) {
     this.encoder = encoder
   }
@@ -91,8 +100,15 @@ export class FfmpegFrameSource implements FrameSource {
 
   private spawn(): void {
     if (this.stopped) return
-    const args = buildFfmpegArgs(this.config, { gop: this.gop, encoder: this.encoder })
-    this.cb.onLog?.(`spawn ffmpeg (${this.encoder}) ${this.config.width}x${this.config.height}@${this.config.fps} g=${this.gop}`)
+    const args = buildFfmpegArgs(this.config, {
+      gop: this.gop,
+      encoder: this.encoder,
+      preset: this.tuning.preset,
+      bitrateKbps: this.tuning.bitrateKbps
+    })
+    const brk = this.tuning.bitrateKbps ?? this.config.startBitrateKbps
+    const preset = this.tuning.preset ?? 'p1'
+    this.cb.onLog?.(`spawn ffmpeg (${this.encoder}) ${this.config.width}x${this.config.height}@${this.config.fps} g=${this.gop} preset=${preset} ${brk}k`)
     const proc = spawn(this.ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     this.proc = proc
 

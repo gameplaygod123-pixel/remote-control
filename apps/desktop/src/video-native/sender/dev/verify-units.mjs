@@ -93,6 +93,11 @@ bundle().then((m) => {
     check('nvenc: Annex-B pipe out with in-band params', nv.includes('-bsf:v dump_extra') && nv.includes('-f h264') && nv.includes('-flush_packets 1') && nv.endsWith('pipe:1'))
     const mf = buildFfmpegArgs(cfg, { gop: 60, encoder: 'h264_mf' }).join(' ')
     check('mf fallback: hwdownload + CPU scale + h264_mf', mf.includes('hwdownload,format=bgra,scale=1920:1080') && mf.includes('-c:v h264_mf'))
+    // quality-sweep knobs: default byte-identical (p1/20000k), override honoured
+    check('default preset is p1 (contract default)', nv.includes('-preset p1'))
+    const swept = buildFfmpegArgs(cfg, { gop: 60, preset: 'p4', bitrateKbps: 30000 }).join(' ')
+    check('sweep override: preset p4 + 30000k CBR', swept.includes('-preset p4') && swept.includes('-b:v 30000k') && !swept.includes('-b:v 20000k'))
+    check('sweep bitrate reaches mf fallback too', buildFfmpegArgs(cfg, { encoder: 'h264_mf', bitrateKbps: 30000 }).join(' ').includes('-b:v 30000k'))
   }
 
   // ── parseRtcpFeedback: a hand-built PLI compound packet ──

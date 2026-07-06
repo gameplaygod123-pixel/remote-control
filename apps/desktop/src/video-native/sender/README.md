@@ -93,11 +93,26 @@ The `VIDEO_PIPELINE=native` opt-in is now wired end-to-end on the agent side:
   advertised, and `git diff -w` shows zero WebRTC-video-block code changes (pure
   reindent under the new `if (!useNativeVideoRef.current)` guard).
 
+### Quality-sweep knobs (env, opt-in — for the real-ffmpeg run)
+
+The Mac-approved `p1→p4` preset / `20→30 Mbps` bitrate sweep is wired as env
+overrides so it's a plain env flip at run time — no code change, no re-review.
+**Both default to the contract values (`p1` / `startBitrateKbps`=20 Mbps), so an
+unset env is byte-identical to before the knob existed** (unit-asserted):
+- `VIDEO_NVENC_PRESET` — `p1`..`p7` (validated; anything else ignored). MF fallback
+  ignores preset.
+- `VIDEO_NVENC_BITRATE_KBPS` — CBR target in kbps; applies to NVENC and MF.
+
+Resolved values are logged (`quality-sweep override: …` / the `spawn ffmpeg …
+preset=… Nk` line) in `%TEMP%\video-sender.log`. Plumbed pure through
+`buildFfmpegArgs` → `FfmpegFrameSource` (`FfmpegTuning`) → env at `index.ts`.
+
 ### Still to do (real hardware + joint test)
 
 1. **Real-ffmpeg run (golden rule #1):** drop `ffmpeg.exe` in and run the helper
    without `VIDEO_FAKE_SOURCE` to exercise the actual `ddagrab → NVENC` + NAL
-   split + PLI→**respawn** path on the RTX 3060 Ti.
+   split + PLI→**respawn** path on the RTX 3060 Ti. Sweep preset/bitrate here via
+   the env knobs above.
 2. **Bundle ffmpeg** via `build-win.sh` into `resources/ffmpeg/ffmpeg.exe` (LGPL
    build, licensing settled) so `resolveFfmpegPath()` finds it in a packaged app.
 3. **Joint agent↔Mac-receiver e2e** on `channel: 'video-native'` (after the server
