@@ -1,30 +1,22 @@
-import { useEffect, useState } from 'react'
+export type ThemeName = 'dark' | 'light' | 'glass'
 
-// Sliding light/dark switch for the controller sidebar. Flips
-// `data-theme` on <html> (which re-skins the whole controller shell via the
-// token overrides in deviceList.css) and persists the choice per machine.
-// The knob carries the current mode's icon and slides between the sun (left,
-// light) and moon (right, dark) tracks.
-export default function ThemeToggle(): React.JSX.Element {
-  const [theme, setTheme] = useState<'dark' | 'light'>(
-    () => (document.documentElement.dataset.theme as 'dark' | 'light') || 'dark'
-  )
-
-  useEffect(() => {
-    window.api.theme.get().then((saved) => {
-      setTheme(saved)
-      document.documentElement.dataset.theme = saved
-    })
-  }, [])
-
+// Sliding light/dark switch for the controller sidebar. Controlled by
+// ControllerView (which owns the theme + persists it) so it stays in sync with
+// the glass toggle. The knob slides between sun (left, light) and moon (right,
+// dark) via the `data-theme` attribute on <html> (see deviceList.css). While
+// glass is active this toggle is dimmed; clicking it leaves glass for dark.
+export default function ThemeToggle({
+  theme,
+  onChange
+}: {
+  theme: ThemeName
+  onChange: (t: ThemeName) => void
+}): React.JSX.Element {
+  const isLight = theme === 'light'
   function toggle(): void {
-    const next = theme === 'light' ? 'dark' : 'light'
-    setTheme(next)
-    document.documentElement.dataset.theme = next
-    void window.api.theme.set(next)
+    onChange(isLight ? 'dark' : 'light')
   }
 
-  const isLight = theme === 'light'
   return (
     <button
       className="theme-toggle"

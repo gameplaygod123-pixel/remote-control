@@ -53,6 +53,37 @@
   --dl-hover: rgba(120, 80, 40, 0.08);
 }
 
+/* 'Glass' -- translucent, see-through controller. Only the macOS window is
+   actually created transparent (main/index.ts); on other platforms the dark
+   window backgroundColor shows through the alpha, so it degrades to a solid
+   dark tint. Amber-dark palette with alpha: shell is very see-through (~12%),
+   the rail and cards are progressively more opaque for readability. */
+:root[data-theme='glass'] .ctl-shell {
+  --dl-bg: rgba(23, 18, 15, 0.12);
+  --dl-text: #f5efe8;
+  --dl-rail: rgba(18, 13, 11, 0.34);
+  --dl-thumb: rgba(12, 14, 20, 0.55);
+  --dl-accent: #e0793f;
+  --dl-accent-ink: #1a1008;
+  --dl-accent-dim: #d3bcac;
+  --dl-text-dim: #d3c5b8;
+  --dl-border: rgba(255, 255, 255, 0.16);
+  --dl-card-bg: rgba(31, 24, 19, 0.44);
+  --dl-ok: #6ee79a;
+  --dl-idle: #9a8d80;
+  --dl-hover: rgba(255, 255, 255, 0.1);
+}
+
+/* The window itself is transparent, so clear the opaque body/#root (base.css
+   + main.css paint a dark background + wavy pattern) -- only under glass, so
+   the desktop shows through the translucent shell. */
+:root[data-theme='glass'],
+:root[data-theme='glass'] body,
+:root[data-theme='glass'] #root {
+  background: transparent !important;
+  background-image: none !important;
+}
+
 .ctl-main {
   flex: 1;
   min-height: 0;
@@ -97,6 +128,39 @@
 /* Pushes the theme toggle to the bottom of the rail, away from the nav. */
 .ctl-side__spacer {
   margin-top: auto;
+}
+
+/* Glass (see-through) theme toggle -- a droplet button above the sun/moon
+   slider. Accented when glass is active. */
+.glass-toggle {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--dl-text-dim);
+  cursor: pointer;
+}
+.glass-toggle:hover {
+  background: var(--dl-hover);
+  color: var(--dl-text);
+}
+.glass-toggle.is-on {
+  background: color-mix(in srgb, var(--dl-accent) 20%, transparent);
+  color: var(--dl-accent);
+}
+.glass-toggle svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+/* When glass is active the sun/moon slider doesn't apply -- dim it. */
+:root[data-theme='glass'] .theme-toggle {
+  opacity: 0.45;
 }
 
 /* Sliding sun/moon switch (see ThemeToggle.tsx). Track shows both icons

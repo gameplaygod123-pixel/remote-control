@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import DeviceListView from './DeviceListView'
 import FileTransferView from './FileTransferView'
 import ControllerSession from './ControllerSession'
-import ThemeToggle from './ThemeToggle'
+import ThemeToggle, { type ThemeName } from './ThemeToggle'
+import GlassToggle from './GlassToggle'
 import TitleBar from '../shared/components/TitleBar'
 import { AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
 
@@ -51,14 +52,25 @@ function FilesIcon(): React.JSX.Element {
 function ControllerView(): React.JSX.Element {
   const [activeDevice, setActiveDevice] = useState<ActiveDevice | null>(ENV_AUTO_CONNECT)
   const [page, setPage] = useState<Page>('computers')
+  const [theme, setTheme] = useState<ThemeName>('dark')
 
-  // Apply the saved light/dark choice as the controller mounts so there's no
-  // dark flash before the toggle's own effect runs.
+  // Apply the saved theme as the controller mounts so there's no flash before
+  // the toggles render. ControllerView owns the theme so the sun/moon slider
+  // and the glass toggle stay in sync.
   useEffect(() => {
     window.api.theme.get().then((t) => {
+      setTheme(t)
       document.documentElement.dataset.theme = t
     })
   }, [])
+
+  // Persist + apply live. Flipping into/out of glass relaunches the window on
+  // macOS (main/index.ts) because window transparency is fixed at creation.
+  function changeTheme(next: ThemeName): void {
+    setTheme(next)
+    document.documentElement.dataset.theme = next
+    void window.api.theme.set(next)
+  }
 
   function handleConnect(deviceId: string, pin: string, name?: string): void {
     window.api.controllerMemory.setLastDeviceId(deviceId)
@@ -98,7 +110,8 @@ function ControllerView(): React.JSX.Element {
             <FilesIcon />
           </button>
           <div className="ctl-side__spacer" />
-          <ThemeToggle />
+          <GlassToggle theme={theme} onChange={changeTheme} />
+          <ThemeToggle theme={theme} onChange={changeTheme} />
         </nav>
         <div className="ctl-content">
           {page === 'computers' ? <DeviceListView onConnect={handleConnect} /> : <FileTransferView />}

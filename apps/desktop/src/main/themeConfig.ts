@@ -2,11 +2,15 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 
-export type Theme = 'dark' | 'light'
+export type Theme = 'dark' | 'light' | 'glass'
 
-// The controller's light/dark choice, persisted in userData like the app
-// mode and house token so it survives updates and reinstalls. Dark ("Amber
-// Dark") is the default -- the look the app has always shipped with.
+const THEMES: readonly Theme[] = ['dark', 'light', 'glass']
+
+// The controller's theme choice, persisted in userData like the app mode and
+// house token so it survives updates and reinstalls. Dark ("Amber Dark") is
+// the default -- the look the app has always shipped with. 'glass' is the
+// translucent see-through theme (only the macOS controller window is created
+// transparent, so on other platforms it degrades to a solid dark tint).
 function filePath(): string {
   return join(app.getPath('userData'), 'theme.txt')
 }
@@ -15,7 +19,7 @@ export function getTheme(): Theme {
   try {
     if (existsSync(filePath())) {
       const saved = readFileSync(filePath(), 'utf-8').trim()
-      if (saved === 'light' || saved === 'dark') return saved
+      if ((THEMES as readonly string[]).includes(saved)) return saved as Theme
     }
   } catch {
     /* unreadable -> default */
@@ -24,5 +28,5 @@ export function getTheme(): Theme {
 }
 
 export function saveTheme(theme: Theme): void {
-  writeFileSync(filePath(), theme === 'light' ? 'light' : 'dark')
+  writeFileSync(filePath(), THEMES.includes(theme) ? theme : 'dark')
 }

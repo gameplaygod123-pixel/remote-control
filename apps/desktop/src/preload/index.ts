@@ -40,8 +40,9 @@ const api = {
     set: (token: string): Promise<void> => ipcRenderer.invoke('house-token:set', token)
   },
   theme: {
-    get: (): Promise<'dark' | 'light'> => ipcRenderer.invoke('theme:get'),
-    set: (theme: 'dark' | 'light'): Promise<void> => ipcRenderer.invoke('theme:set', theme)
+    get: (): Promise<'dark' | 'light' | 'glass'> => ipcRenderer.invoke('theme:get'),
+    set: (theme: 'dark' | 'light' | 'glass'): Promise<void> =>
+      ipcRenderer.invoke('theme:set', theme)
   },
   agent: {
     captureThumbnail: (): Promise<string | null> => ipcRenderer.invoke('agent:capture-thumbnail')
