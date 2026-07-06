@@ -19,10 +19,9 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString('th-TH', { hour12: false })
 }
 
-// The owner's mock shows every card with the same monitor icon floating on the
-// card (colored by online/offline), NOT a live screen preview -- so we always
-// render this, even for a device that streams a thumbnail. Keeps every card
-// looking identical/clean like the reference (MacBook card).
+// Placeholder shown in the card's screen area (colored by online/offline)
+// until a live thumbnail arrives, or permanently for a device that never
+// streams one. A machine that IS streaming shows its live screen here instead.
 function MonitorIcon(): React.JSX.Element {
   return (
     <svg width="52" height="52" viewBox="0 0 24 24" fill="none">
@@ -231,7 +230,7 @@ export default function DeviceListView({
             {devices.map((device) => (
               <div key={device.deviceId} className="dl-card">
                 <div className={`dl-thumb ${device.online ? '' : 'is-offline'}`}>
-                  <MonitorIcon />
+                  {device.thumbnail ? <img src={device.thumbnail} alt="" /> : <MonitorIcon />}
                 </div>
                 <div className="dl-name">{device.name || device.deviceId}</div>
                 <div className={`dl-status-row ${device.online ? 'is-ok' : ''}`}>
