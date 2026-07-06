@@ -64,10 +64,11 @@ export default function ControllerSession({
   // set-device-name message the agent itself uses; the server doesn't
   // check who sent it, so this "just works".
   const [nameDraft, setNameDraft] = useState(name ?? '')
-  // Parsec-style floating controls: collapsed to a small pill over the
-  // video by default, expanded on click. Starts open so a fresh session
-  // shows its status/stats until the person tucks it away.
-  const [panelOpen, setPanelOpen] = useState(true)
+  // Parsec-style floating controls: collapsed to a small status-dot pill by
+  // default (owner's preference -- the bar starts tucked away so it doesn't
+  // cover the screen), expanded on click when the person wants the
+  // Back/name/stats/status controls.
+  const [panelOpen, setPanelOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
