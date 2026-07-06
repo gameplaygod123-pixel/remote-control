@@ -65,14 +65,17 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.3** (device card now matches the owner's reference
-100%: the card ALWAYS renders the floating monitor icon and no longer shows a
-live screen thumbnail — every card looks identical/clean; icon 52px, card
-radius 22px, thumb area aspect 16/10, Connect button is a full-capsule pill
-`border-radius:999px` and taller (14px pad, 15px font), name 17px. NOTE: the
-`device-thumbnail` message + `thumbnail` state still flow but are no longer
-rendered on the card — flip `DeviceListView` line ~233 back to
-`{device.thumbnail ? <img/> : <MonitorIcon/>}` to restore live previews). v1.20.2 = transparent thumb bg so placeholder icon floats, 40px icon, 18px card radius, 12px rounder Connect button, bigger name/status; live thumbnails still shown when sent. v1.20.1 = taller thumbnail + ID line removed. v1.20.0 = **light mode (Amber Light) + a sliding sun/moon
+Latest release: **v1.20.4** (device card = the v1.20.3 spacious styling — icon
+52px, card radius 22px, thumb aspect 16/10, Connect button a full-capsule pill
+`border-radius:999px`, 14px pad / 15px font, name 17px — BUT with the live
+screen preview RESTORED: `{device.thumbnail ? <img/> : <MonitorIcon/>}` again,
+so a streaming machine shows its live screen and everything else shows the
+floating icon. LESSON: v1.20.3 misread "make the card look like the MacBook
+mock" as "remove the live preview" and shipped icon-only → owner complained
+"จอแสดงภาพไม่ขึ้น" (they wanted the mock's *card styling*, not the preview
+gone). Card sizing is being fine-tuned via a **card-tuner artifact** (owner
+adjusts width/radius/pad/gap/icon/aspect/name/button + exports exact values →
+apply 1:1); watch for those numbers to land, then apply + release). v1.20.2 = transparent thumb bg so placeholder icon floats, 40px icon, 18px card radius, 12px rounder Connect button, bigger name/status; live thumbnails still shown when sent. v1.20.1 = taller thumbnail + ID line removed. v1.20.0 = **light mode (Amber Light) + a sliding sun/moon
 theme toggle** at the bottom of the controller sidebar. The whole controller
 shell themes through `--dl-*` tokens (deviceList.css); a
 `:root[data-theme='light'] .ctl-shell` block redefines them. Persisted per
