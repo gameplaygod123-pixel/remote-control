@@ -65,7 +65,13 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Uncommitted-then-committed this session (no version bump yet, both dev-side):
+Latest release: **v1.21.2** — **glass opacity 12% → 40%** (owner asked; the
+shell is more solid / less washed out) + a dev-launcher crash fix:
+- **Glass opacity 12% → 40%.** `deviceList.css`
+  `:root[data-theme='glass'] .ctl-shell`: `--dl-bg` .12→.40; rail .34→.55,
+  card .44→.66 bumped alongside to keep the shell<rail<card readability
+  hierarchy. Controller-only theme (agent stays dark), so this only changes
+  the look of the Mac controller in glass mode.
 - **FIX: `start-controller.command` crashed on launch when started from an
   Electron parent** (VS Code integrated terminal / Claude Code). Those parents
   export `ELECTRON_RUN_AS_NODE=1` (we set it to fork the input-helper), it
@@ -77,15 +83,11 @@ Uncommitted-then-committed this session (no version bump yet, both dev-side):
   inheritance. Fix: the launcher now `unset ELECTRON_RUN_AS_NODE` before
   `pnpm dev`. Same root cause as the documented `env -u ELECTRON_RUN_AS_NODE`
   workaround. Verified: launching from a shell that has the var set now boots
-  real Electron, window stays alive.
-- **Glass opacity 12% → 40%** (owner asked). `deviceList.css`
-  `:root[data-theme='glass'] .ctl-shell`: `--dl-bg` .12→.40; rail .34→.55,
-  card .44→.66 bumped alongside to keep the shell<rail<card readability
-  hierarchy. Also `apps/desktop/.gitignore` now ignores `*.tsbuildinfo`.
+  real Electron, window stays alive. Also `apps/desktop/.gitignore` ignores
+  `*.tsbuildinfo` now.
 
-Latest release: **v1.21.1** — **'glass' translucent see-through theme** (3rd
-theme beside dark/light). The controller shell now renders at ~40% opacity
-(was ~12%) so the desktop shows through. The **macOS** controller window is now created
+Prior release: **v1.21.1** — **'glass' translucent see-through theme** (3rd
+theme beside dark/light). The **macOS** controller window is now created
 `transparent:true` **ALWAYS** (v1.21.0 gated it to the saved theme + relaunched
 on toggle, but the owner runs the Mac controller via `electron-vite dev` where
 `app.relaunch()`+exit just KILLS the app — the vite dev server dies with it).
