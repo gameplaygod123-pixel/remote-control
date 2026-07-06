@@ -524,6 +524,20 @@
   color: #f87171;
 }
 
+/* Armed second-step: unmistakably a warning so the confirm is deliberate. */
+.dl-card__remove.is-confirming {
+  color: #fff;
+  font-weight: 700;
+  background: #dc2626;
+  border-radius: 6px;
+  padding: 4px 0;
+  margin-top: 4px;
+}
+.dl-card__remove.is-confirming:hover {
+  color: #fff;
+  background: #b91c1c;
+}
+
 .dl-pin-prompt {
   display: flex;
   gap: 6px;

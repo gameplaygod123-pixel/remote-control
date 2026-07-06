@@ -53,6 +53,11 @@ export default function DeviceListView({
   // house token is wrong (mistyped, or rotated server-side). Routes back to
   // the token screen instead of looping on silent disconnects.
   const [tokenRejected, setTokenRejected] = useState(false)
+  // Remove needs a two-step confirm so a stray mouse bump can't wipe a device:
+  // the first click arms this (the button turns into "ยืนยันลบ?"), a second click
+  // within the timeout actually removes; otherwise it auto-disarms.
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
+  const confirmRemoveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const clientRef = useRef<SignalingClient | null>(null)
   // Loaded before connecting; rides list-devices/remove-device.
   const tokenRef = useRef('')
@@ -131,6 +136,7 @@ export default function DeviceListView({
     return () => {
       cancelled = true
       clientRef.current?.close()
+      if (confirmRemoveTimer.current) clearTimeout(confirmRemoveTimer.current)
     }
   }, [])
 
@@ -155,6 +161,18 @@ export default function DeviceListView({
   // reachable shouldn't disappear just because someone clicked cleanup.
   function handleRemoveDevice(deviceId: string): void {
     clientRef.current?.send({ type: 'remove-device', deviceId, token: tokenRef.current })
+  }
+
+  // Two-step: first click arms confirmation, second click (within 3s) removes.
+  function handleRemoveClick(deviceId: string): void {
+    if (confirmRemoveTimer.current) clearTimeout(confirmRemoveTimer.current)
+    if (confirmRemoveId === deviceId) {
+      setConfirmRemoveId(null)
+      handleRemoveDevice(deviceId)
+      return
+    }
+    setConfirmRemoveId(deviceId)
+    confirmRemoveTimer.current = setTimeout(() => setConfirmRemoveId(null), 3000)
   }
 
   async function submitAddDevice(): Promise<void> {
@@ -273,10 +291,12 @@ export default function DeviceListView({
                 )}
                 {!device.online && pinPromptFor !== device.deviceId && (
                   <button
-                    className="dl-card__remove"
-                    onClick={() => handleRemoveDevice(device.deviceId)}
+                    className={`dl-card__remove${
+                      confirmRemoveId === device.deviceId ? ' is-confirming' : ''
+                    }`}
+                    onClick={() => handleRemoveClick(device.deviceId)}
                   >
-                    Remove
+                    {confirmRemoveId === device.deviceId ? 'ยืนยันลบ?' : 'Remove'}
                   </button>
                 )}
               </div>
