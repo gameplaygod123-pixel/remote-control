@@ -87,6 +87,12 @@ export default function ControllerSession({
   // cover the screen), expanded on click when the person wants the
   // Back/name/stats/status controls.
   const [panelOpen, setPanelOpen] = useState(false)
+  // Whether the reliable 'input' data channel is currently open. Input rides a
+  // SEPARATE peer connection from video (the native input-helper's own pc in
+  // helper mode), so it can be dead while the video looks perfectly connected --
+  // the exact "mouse+keyboard die but the screen streams fine" symptom. Surface
+  // it in the HUD so that state is visible at a glance instead of guessed.
+  const [inputReady, setInputReady] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -107,6 +113,17 @@ export default function ControllerSession({
     const trimmed = nameDraft.trim()
     setNameDraft(trimmed)
     clientRef.current?.send({ type: 'set-device-name', deviceId, name: trimmed })
+  }
+
+  // Stores the reliable 'input' channel AND mirrors its open/closed state into
+  // inputReady for the HUD. Used at both spots that receive it (the video pc in
+  // non-helper mode, and the separate input pc in helper mode) so the indicator
+  // is correct regardless of which path this session negotiated.
+  function trackInputChannel(channel: RTCDataChannel): void {
+    inputChannelRef.current = channel
+    setInputReady(channel.readyState === 'open')
+    channel.addEventListener('open', () => setInputReady(true))
+    channel.addEventListener('close', () => setInputReady(false))
   }
 
   function handleDragOver(e: React.DragEvent<HTMLVideoElement>): void {
@@ -331,6 +348,7 @@ export default function ControllerSession({
           setActivePc(null)
           inputChannelRef.current = null
           moveChannelRef.current = null
+          setInputReady(false)
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, pairing')
           client.send({
@@ -471,9 +489,7 @@ export default function ControllerSession({
                 // (drag-and-drop, needs a visible window) stays on the video pc.
                 { onFileChannel: attachChannel }
               : {
-                  onInputChannel: (channel) => {
-                    inputChannelRef.current = channel
-                  },
+                  onInputChannel: trackInputChannel,
                   onMoveChannel: (channel) => {
                     moveChannelRef.current = channel
                   },
@@ -507,6 +523,7 @@ export default function ControllerSession({
               setActivePc(null)
               inputChannelRef.current = null
               moveChannelRef.current = null
+              setInputReady(false)
               setConnectionType(null)
               if (videoRef.current) videoRef.current.srcObject = null
               setTimeout(() => {
@@ -559,11 +576,10 @@ export default function ControllerSession({
           // in the gap before the new one's channels actually open.
           inputChannelRef.current = null
           moveChannelRef.current = null
+          setInputReady(false)
           const pc = createPeerConnection(transport, deviceId, {
             channel: 'input',
-            onInputChannel: (channel) => {
-              inputChannelRef.current = channel
-            },
+            onInputChannel: trackInputChannel,
             onMoveChannel: (channel) => {
               moveChannelRef.current = channel
             },
@@ -643,9 +659,20 @@ export default function ControllerSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId, pin, controllerId])
 
+  // Video is up (status went past pairing into a real connection) but the input
+  // channel isn't open -- the "screen streams, mouse+keyboard dead" case. Worth
+  // shouting about: force the floating pill fully visible + flag it red so it's
+  // obvious without expanding the panel.
+  const connectionLive = status.startsWith('connection')
+  const inputAlert = connectionLive && !inputReady
+
   return (
     <div className={`session-shell${nativeActive ? ' native-video' : ''}`}>
-      <div className={`session-float${panelOpen ? ' is-open' : ''}`}>
+      <div
+        className={`session-float${panelOpen ? ' is-open' : ''}${
+          inputAlert ? ' input-alert' : ''
+        }`}
+      >
         {panelOpen ? (
           <div className="session-float__panel">
             <span className="session-float__grip" title="Drag to move the window">
@@ -684,6 +711,18 @@ export default function ControllerSession({
                 {connectionType === 'relay' ? 'via relay' : 'direct connection'}
               </span>
             )}
+            {connectionLive && (
+              <span
+                className={`session-float__input is-${inputReady ? 'ok' : 'down'}`}
+                title={
+                  inputReady
+                    ? 'Mouse + keyboard channel is open'
+                    : 'INPUT DEAD -- video is connected but the input channel never opened (native input-helper pc not established). Check %TEMP%\\input-helper.log on the agent.'
+                }
+              >
+                ⌨ {inputReady ? 'input ✓' : 'input ✕'}
+              </span>
+            )}
             <StatusPill status={status} />
             <button
               className="session-float__btn session-float__collapse"
@@ -696,10 +735,19 @@ export default function ControllerSession({
         ) : (
           <button
             className="session-float__toggle"
-            title={`${nameDraft || deviceId} · ${status} · Esc = disconnect`}
+            title={`${nameDraft || deviceId} · ${status}${
+              inputAlert ? ' · INPUT DEAD (see panel)' : ''
+            } · Esc = disconnect`}
             onClick={() => setPanelOpen(true)}
           >
             <span className={`session-float__dot is-${classify(status)}`} />
+            {connectionLive && (
+              <span
+                className={`session-float__dot session-float__dot--input is-${
+                  inputReady ? 'ok' : 'error'
+                }`}
+              />
+            )}
           </button>
         )}
       </div>
