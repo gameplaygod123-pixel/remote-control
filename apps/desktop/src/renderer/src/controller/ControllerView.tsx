@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react'
 import DeviceListView from './DeviceListView'
 import FileTransferView from './FileTransferView'
 import ControllerSession from './ControllerSession'
-import ThemeToggle, { type ThemeName } from './ThemeToggle'
-import GlassToggle from './GlassToggle'
+import ThemeTriToggle, { type ThemeName } from './ThemeTriToggle'
 import TitleBar from '../shared/components/TitleBar'
 import { AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
 
@@ -110,8 +109,7 @@ function ControllerView(): React.JSX.Element {
             <FilesIcon />
           </button>
           <div className="ctl-side__spacer" />
-          <GlassToggle theme={theme} onChange={changeTheme} />
-          <ThemeToggle theme={theme} onChange={changeTheme} />
+          <ThemeTriToggle theme={theme} onChange={changeTheme} />
         </nav>
         <div className="ctl-content">
           {page === 'computers' ? <DeviceListView onConnect={handleConnect} /> : <FileTransferView />}
