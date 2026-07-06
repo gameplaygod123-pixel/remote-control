@@ -65,10 +65,17 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-06)
 
-Latest release: **v1.20.6** (card thumbnail now `object-fit: contain` — the
-live capture shows FULL/uncropped; `cover` had zoomed it and clipped the
-left/right edges of the screen. A streaming card gets `.dl-thumb.has-screen {
-background:#0d0f14 }` so contain's letterbox bars read as a monitor bezel).
+Latest release: **v1.20.7** (name + online status are now TWO independently
+placed labels over the screen — `.dl-name` at `left:2%;top:92%` (bottom-left),
+`.dl-status-row` at `right:4px;top:92%` (bottom-right, right-anchored so
+"online" can't clip on a narrower card); name 14px, status 11px; both
+`position:absolute` inside `.dl-thumb`, no `.dl-overlay` wrapper anymore. Came
+from a 2nd card-tuner export where the owner dragged name & status to separate
+corners — the tuner now supports independent drag of each). v1.20.6 = card
+thumbnail `object-fit: contain` — the live capture shows FULL/uncropped;
+`cover` had zoomed it and clipped the left/right edges of the screen. A
+streaming card gets `.dl-thumb.has-screen { background:#0d0f14 }` so contain's
+letterbox bars read as a monitor bezel.
 v1.20.5 rebuilt the device card from the owner's own
 **card-tuner** export: name + online status now FLOAT over the screen preview
 — an abs-positioned `.dl-overlay` INSIDE `.dl-thumb`, bottom-left `left:17%;
