@@ -362,10 +362,17 @@
   color: var(--dl-idle);
 }
 
+/* A card streaming a live preview gets a black backing so the full screen
+   shows uncropped (object-fit: contain) with monitor-like letterbox bars
+   instead of cover cropping the left/right edges of the capture. */
+.dl-thumb.has-screen {
+  background: #0d0f14;
+}
+
 .dl-thumb img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .dl-thumb.is-offline img {

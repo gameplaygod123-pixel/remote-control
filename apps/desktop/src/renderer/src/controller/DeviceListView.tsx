@@ -229,7 +229,11 @@ export default function DeviceListView({
           <div className="dl-grid">
             {devices.map((device) => (
               <div key={device.deviceId} className="dl-card">
-                <div className={`dl-thumb ${device.online ? '' : 'is-offline'}`}>
+                <div
+                  className={`dl-thumb ${device.online ? '' : 'is-offline'} ${
+                    device.thumbnail ? 'has-screen' : ''
+                  }`}
+                >
                   {device.thumbnail ? <img src={device.thumbnail} alt="" /> : <MonitorIcon />}
                   {/* Name + status float over the screen preview (bottom-left),
                       Parsec-style, per the owner's card-tuner layout. */}
