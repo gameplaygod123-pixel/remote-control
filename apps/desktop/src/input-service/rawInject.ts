@@ -89,6 +89,11 @@ function ensureInit(): void {
 
 const scanCodeCache = new Map<number, number>()
 function scanCodeFor(vk: number): number {
+  // injectKey evaluates scanCodeFor as a sendKey ARGUMENT, i.e. before sendKey
+  // (and its ensureInit) runs — so on the first keyboard event of a fresh
+  // process mapVirtualKeyFn is still null. Init here so any caller is safe;
+  // ensureInit is idempotent. (Caught in phase-0 hardware testing.)
+  ensureInit()
   let scan = scanCodeCache.get(vk)
   if (scan === undefined) {
     scan = mapVirtualKeyFn!(vk, MAPVK_VK_TO_VSC)
