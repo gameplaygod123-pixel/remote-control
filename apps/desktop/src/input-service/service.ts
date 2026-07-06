@@ -50,7 +50,7 @@ function tick(): void {
   if (sid !== currentSessionId) {
     log(`active session -> ${sid}; (re)spawning injector`)
     // TODO(win): kill any previous injector before spawning the new one.
-    const ok = spawnInjectorInSession(process.execPath, injectorScript, sid)
+    const ok = spawnInjectorInSession(process.execPath, injectorScript, sid, log)
     if (ok) {
       currentSessionId = sid
     } else {
