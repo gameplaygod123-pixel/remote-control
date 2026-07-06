@@ -286,9 +286,14 @@ Lessons:
 4. No TURN relay (only matters for CGNAT↔CGNAT pairs).
 5. Mac installer (.dmg) — deferred by owner decision.
 6. Owner plans a UI redesign + playful feature additions next.
-7. **Native video receiver** for Parsec-level "glued to the mouse" latency
-   (see v1.22.0 KNOWN CEILING note). Bypass Chromium's `<video>` render on the
-   Mac controller: receive RTP via node-datachannel → VideoToolbox HW decode →
-   AVSampleBufferDisplayLayer/Metal direct-to-screen. Big native/FFI project
-   (weeks, prerelease+verify each step); the closest we can get to Parsec's
-   core. Encoder/bitrate tuning is already maxed as of v1.22.0.
+7. **Native video pipeline** for Parsec-level "glued to the mouse" latency —
+   NOW A PLANNED PROJECT: full handoff plan at
+   [`docs/native-video-plan.md`](docs/native-video-plan.md). Owner chose the
+   native route (over a same-tech rebuild) 2026-07-06. Moves the video hot path
+   OUT of Chromium on both ends (Windows DXGI capture + MF/NVENC encode → RTP
+   over node-datachannel → Mac VideoToolbox decode + AVSampleBufferDisplayLayer
+   render), mirroring the input-helper pattern; keeps the whole UI + every
+   existing feature; WebRTC path stays the default fallback until native is
+   proven. Windows-side Claude owns the agent/sender half, Mac side owns the
+   controller/render half. Phase 0 is a de-risk spike. Encoder/bitrate tuning is
+   already maxed as of v1.22.0 — this is the only remaining lever.
