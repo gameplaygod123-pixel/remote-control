@@ -4,7 +4,9 @@
     "electron.vite.config.*",
     "src/main/**/*",
     "src/preload/**/*",
-    "src/input-helper/**/*"
+    "src/input-helper/**/*",
+    "src/video-native/shared/**/*",
+    "src/video-native/sender/**/*"
   ],
   "compilerOptions": {
     "composite": true,

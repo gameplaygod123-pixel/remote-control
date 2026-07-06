@@ -34,10 +34,52 @@ Build against the frozen foundation only: [`../shared/contract.ts`](../shared/co
 - Answers to all 4 (+ recommended low-latency flag set & recovery design):
   [`phase1/NOTES.md`](phase1/NOTES.md).
 
-## Status
+## Production sender (BUILT — pending Mac review + real-ffmpeg run)
 
-Branch `feat/native-video`. Phase 0 gate PASSED ([`phase0/NOTES.md`](phase0/NOTES.md)).
-Phase 1's 4 risk items answered with measured data ([`phase1/NOTES.md`](phase1/NOTES.md)).
-**Next (after Mac reviews the approach):** build the real forked `VideoSenderHost`
-(spawn/supervise ffmpeg, relay SDP/ICE via `ipc.ts`, feed NALs to the packetizer, parse
-PLI→respawn, report stats). Not started — pending review.
+The real forked helper is now implemented, wired strictly to the frozen
+[`../shared/ipc.ts`](../shared/ipc.ts) / [`../shared/contract.ts`](../shared/contract.ts):
+
+- [`index.ts`](index.ts) — the forked helper. node-datachannel **raw** media API
+  (not the polyfill — it has no tracks): `Video` SendOnly + `H264RtpPacketizer`
+  (`LongStartSequence`) + `RtcpSrReporter` + `RtcpNackResponder`. Agent = offerer.
+  Wires all 4 risk items: **A** parse incoming RTCP on the send track → PLI forces
+  an IDR; **B** low-latency ffmpeg flags; **C** wall-clock 90 kHz RTP timestamps;
+  **D** fixed CBR at `startBitrateKbps`. Emits `NativeVideoStats` per second
+  (capture/encode `null` — ffmpeg exposes no split).
+- [`ffmpegArgs.ts`](ffmpegArgs.ts) — the measured-good `ddagrab → nvenc/mf → Annex-B
+  pipe:1` argv (NVENC primary, MF fallback). Pure/testable.
+- [`nalSplitter.ts`](nalSplitter.ts) — Annex-B NAL split + access-unit assembly.
+- [`rtcpFeedback.ts`](rtcpFeedback.ts) — RTCP compound parser (PLI/FIR/NACK).
+- [`frameSource.ts`](frameSource.ts) — `FfmpegFrameSource` (spawn/supervise ffmpeg,
+  `forceKeyframe()` = respawn for a fresh IDR, NVENC→MF auto-fallback) and a
+  `SyntheticFrameSource` (ffmpeg-free, for the verification harness).
+- Host: [`../../main/videoSenderHost.ts`](../../main/videoSenderHost.ts) — mirror of
+  `inputHelperHost.ts` (fork-as-Node, ping/pong liveness, respawn, SDP/ICE relay).
+  Built to `out/main/video-sender.js` via the new `electron.vite.config.ts` entry.
+
+### Verification ([`dev/`](dev/))
+
+- `node src/video-native/sender/dev/verify.mjs` — bundles the **real** helper with
+  esbuild, forks it like the host would against `dev/verify-receiver.mjs`, relaying
+  SDP/ICE over the ipc.ts shapes. **PASS on this machine:** negotiates SRTP media →
+  connected, ~100% frame delivery, per-second stats emitted, and a receiver PLI
+  reaches the helper → `forcing IDR` (item A end-to-end). Uses `VIDEO_FAKE_SOURCE=1`
+  (synthetic frames) so it needs no ffmpeg.
+- `node src/video-native/sender/dev/verify-units.mjs` — unit checks for the pure
+  modules the e2e doesn't touch (NAL split/AU assembly across chunk boundaries,
+  ffmpeg arg set, RTCP PLI parse). **PASS.**
+
+### Still to do (real hardware + integration)
+
+1. **Real-ffmpeg run (golden rule #1):** drop `ffmpeg.exe` in and run the helper
+   without `VIDEO_FAKE_SOURCE` to exercise the actual `ddagrab → NVENC` + NAL
+   split + PLI→**respawn** path on the RTX 3060 Ti. (The transport/packetize/PLI
+   wiring is proven above; this proves the capture stage integration.)
+2. **Bundle ffmpeg** via `build-win.sh` into `resources/ffmpeg/ffmpeg.exe` (LGPL
+   build, licensing settled) so `resolveFfmpegPath()` finds it in a packaged app.
+3. **The one wiring point** in `agent/AgentView.tsx`: pick `native` vs `webrtc`
+   (behind `VIDEO_PIPELINE`/`NATIVE_VIDEO_CAP`), start `videoSenderHost`, relay its
+   offer/ice/stats through the existing signaling. Left untouched here so the WebRTC
+   default can't regress — proposed as a small, separate reviewed change.
+
+**Do not merge to main** — Mac side reviews + merges.

@@ -90,7 +90,12 @@ here; if tighter sync is ever needed, read ddagrab's PTS via a timestamped muxer
 ## Status / next
 
 All 4 risk items answered with measured data; recommended flags + recovery design
-above. **Not yet built:** the real forked `VideoSenderHost` (spawn/supervise ffmpeg,
-relay SDP/ICE through main per `ipc.ts`, feed NALs to the packetizer, parse PLI→respawn,
-report stats). Proposed as the next push **after Mac reviews this approach**
-(esp. the recovery design + flag set). Do not merge to main — Mac reviews + merges.
+above. **The real forked helper is now BUILT** (spawn/supervise ffmpeg, relay SDP/ICE
+through main per `ipc.ts`, feed NALs to the packetizer, parse PLI→respawn, report
+stats) — see [`../README.md`](../README.md) for the file map. Verified end-to-end on
+this machine via `dev/verify.mjs` (real helper, synthetic frame source): negotiate →
+connected, ~100% delivery, per-second stats, **item A PLI→forceKeyframe confirmed by
+the helper log**; pure modules unit-checked via `dev/verify-units.mjs`. **Remaining:**
+a real-ffmpeg run (drop `ffmpeg.exe` in, no `VIDEO_FAKE_SOURCE`) to exercise the actual
+`ddagrab→NVENC` + NAL-split + PLI→respawn on the GPU (golden rule #1), then the one
+`AgentView.tsx` wiring point. Do not merge to main — Mac reviews + merges.
