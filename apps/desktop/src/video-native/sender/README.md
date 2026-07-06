@@ -22,8 +22,22 @@ Build against the frozen foundation only: [`../shared/contract.ts`](../shared/co
   architecture answer in [`../native/phase0-ffmpeg/RESULTS.md`](../native/phase0-ffmpeg/RESULTS.md).
   The C++ spike `../native/dxdup_mf_encode.cpp` is reference-only (not compiled).
 
+## phase1/ — the 4 Mac-approved risk items, de-risked
+
+- [`phase1/pli-feedback.mjs`](phase1/pli-feedback.mjs) — **#1**: proves the receiver's
+  RTCP PLI reaches the SENDER via `track.onMessage` (PT=206/FMT=1), so keyframe-on-demand
+  works with standard WebRTC feedback.
+- [`phase1/ffmpeg-pipe.mjs`](phase1/ffmpeg-pipe.mjs) — **#1 action / #2 / #3**: spawns the
+  real `ddagrab → h264_nvenc → -f h264 pipe:1` command, splits Annex-B NALs, measures
+  respawn/first-IDR latency + per-frame pipe cadence, and generates wall-clock 90 kHz RTP
+  timestamps. Needs a portable ffmpeg: `FFMPEG=<path> node …/ffmpeg-pipe.mjs`.
+- Answers to all 4 (+ recommended low-latency flag set & recovery design):
+  [`phase1/NOTES.md`](phase1/NOTES.md).
+
 ## Status
 
-Phase 0 in progress on branch `feat/native-video`. See
-[`phase0/NOTES.md`](phase0/NOTES.md) for the gate assessment. Phase 1 (the real
-forked sender wired to `VideoSenderHost`) has not started.
+Branch `feat/native-video`. Phase 0 gate PASSED ([`phase0/NOTES.md`](phase0/NOTES.md)).
+Phase 1's 4 risk items answered with measured data ([`phase1/NOTES.md`](phase1/NOTES.md)).
+**Next (after Mac reviews the approach):** build the real forked `VideoSenderHost`
+(spawn/supervise ffmpeg, relay SDP/ICE via `ipc.ts`, feed NALs to the packetizer, parse
+PLI→respawn, report stats). Not started — pending review.
