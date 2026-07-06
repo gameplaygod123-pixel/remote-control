@@ -72,6 +72,11 @@ platforms in this project.
    render**, not the transport (SRTP/ICE ≈ what WebRTC already did).
 5. **One phase = one testable, revertible increment.** Each phase must be
    demoable and independently valuable, gated on a measurement.
+6. **Foundation before features (owner's explicit ask).** Get the *boundaries*
+   right before any feature code: the RTP track interface, the IPC contract, the
+   module layout (§3.5), and the fallback flag. These are the expensive-to-change
+   things. Nail them in Phase 0 and freeze them; do not let feature work start
+   until they're agreed. The goal is to not have to re-lay this foundation later.
 
 ---
 
@@ -124,6 +129,37 @@ Mac.** Two candidate approaches — pick during Phase 2 after a spike:
 - (b) **Transparent Electron region + native layer behind:** make the session
   area transparent, put the native `AVSampleBufferDisplayLayer` window behind.
 Both are proven techniques; (a) is usually simpler to keep in sync.
+
+---
+
+## 3.5 Project layout — keep it isolated (owner's explicit ask)
+
+Put **all** new native-video code in one self-contained folder, separate from
+the existing renderer video path, so the two never entangle and the old path
+stays trivially removable/keepable as the fallback:
+
+```
+apps/desktop/src/video-native/     ← NEW, isolated. Sits beside src/input-helper/.
+  sender/     Windows agent: DXGI capture · MF/NVENC encode · RTP packetize + send
+  receiver/   Mac controller: RTP recv · VideoToolbox decode · AVSampleBufferDisplayLayer render
+  shared/     the RTP track interface · IPC message contract · the VIDEO_PIPELINE flag
+  native/     FFI bindings / native addons (DXGI, MF, VideoToolbox, Metal) — form decided in Phase 0
+  README.md   how to build/run this subsystem in isolation
+```
+
+Rules for keeping it un-mixed:
+- The existing WebRTC video path (`agent/AgentView.tsx`, `shared/webrtc/*`, the
+  controller `<video>`) is **not edited** except at the **one branch point** that
+  picks `native` vs `webrtc`. Every new line lives under `video-native/`.
+- **Windows Claude works only inside `video-native/sender`, `shared`, `native`**
+  (+ that one wiring point), on a dedicated branch (e.g. `feat/native-video`).
+  Mac side owns `video-native/receiver`. Clean split, no toes stepped on.
+- One clean seam to the rest of the app: the subsystem is a **separate process**
+  forked like the input helper (`ELECTRON_RUN_AS_NODE=1`), talking to Electron
+  over the documented IPC contract in `video-native/shared`. Nothing reaches
+  into Electron internals.
+- Phase 0 writes `video-native/README.md` and the `shared/` interfaces **first**;
+  those are the frozen foundation everything else builds on.
 
 ---
 
