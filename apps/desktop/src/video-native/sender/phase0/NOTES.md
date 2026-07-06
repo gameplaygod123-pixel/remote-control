@@ -52,34 +52,36 @@ end-to-end delivery, NACK/loss recovery under real network, keyframe-on-request.
 
 ---
 
-## 0-B · DXGI capture → Media Foundation HW encode → decodable H.264 — ⛔ BLOCKED
+## 0-B · DXGI capture → HW encode → decodable H.264/HEVC — ✅ PASS (compiler-free)
 
-**Question:** DXGI Desktop Duplication → MF hardware H.264 encode → a decodable
-stream, with measured capture+encode latency.
+**Question:** DXGI Desktop Duplication → hardware H.264 encode → a decodable stream,
+with measured capture+encode latency.
 
-**Hardware is favourable (probed):** NVIDIA RTX 3060 Ti with **NVENC**
-(`nvEncodeAPI64.dll`), Intel UHD 770 QuickSync, and **Media Foundation**
-(`mfplat.dll`) all present → HW H.264 **and** HEVC encode available. A Parsec
-Virtual Display Adapter is also enumerated (owner runs Parsec).
+**Toolchain note:** this machine has **no MSVC/Windows SDK** (no `cl.exe`, no VS/Build
+Tools, no `dxgi.h`/`mfapi.h`), so the C++ spike `native/dxdup_mf_encode.cpp` could
+not be compiled here (kept as a reference; NOT run). Per owner's decision we proved
+the pipeline **compiler-free with a portable ffmpeg** — same OS APIs (`ddagrab` =
+DXGI Desktop Duplication; `h264_mf` = Media Foundation; `h264_nvenc`/`hevc_nvenc` =
+NVENC). Full numbers + repro: [`../../native/phase0-ffmpeg/RESULTS.md`](../../native/phase0-ffmpeg/RESULTS.md).
 
-**BLOCKER — no native build toolchain on this machine:** no MSVC `cl.exe`, no Visual
-Studio / Build Tools (`vswhere` absent), no Windows SDK (`dxgi.h`/`mfapi.h` nowhere),
-no clang, no ffmpeg. DXGI+D3D11+MF require compiled native C++ against the SDK.
-(Consistent with the app never needing a compiler — `koffi`/`node-datachannel` ship
-prebuilt, per CLAUDE.md.)
+**Result — PASS (measured on RTX 3060 Ti, native 2560×1440 display):**
+- **Capture:** `ddagrab` opened DXGI output 0 at 2560×1440 8-bit RGB, GPU frames. ✅
+- **HW encode:** all of h264_nvenc / h264_mf / hevc_nvenc encode ~30 Mbps CBR with
+  **5–12× realtime headroom** (~1.4–3.6 ms/frame) → encode is not the bottleneck.
+  (`hevc_mf` unavailable on this box.)
+- **Realistic path** ddagrab **GPU→NVENC zero-copy** sustains **1440p60 at ~7 % CPU**
+  (H.264) / **~4 %** (HEVC). Media Foundation needs a per-frame GPU→CPU `hwdownload`
+  → ~130 % CPU. **NVENC zero-copy wins decisively**; MF is the non-NVIDIA fallback.
+- **Decodable:** `ddagrab → h264_nvenc → cap.mp4` = h264 2560×1440 @ 59.5 fps,
+  26.75 Mbps, plays. ✅
 
-**Done anyway (foundation):** the real spike source is written and ready —
-[`../../native/dxdup_mf_encode.cpp`](../../native/dxdup_mf_encode.cpp) (DXGI
-Duplication → MF SinkWriter hardware H.264 → `out.mp4`, prints capture latency) +
-`native/build.bat`. **NOT COMPILED / NOT RUN** — golden rule #1: unverified native
-code, must be built + run on the real machine before any trust.
-
-**To unblock (owner decision — see report):**
-1. Install VS Build Tools + Windows SDK (`winget install
-   Microsoft.VisualStudio.2022.BuildTools`, "Desktop development with C++"). Multi-
-   GB, machine-modifying → needs owner OK. Then `build.bat` compiles the spike.
-2. Portable ffmpeg (`ddagrab` + `h264_mf`) — compiler-free proof of the SAME
-   DXGI-Duplication + MF-HW-encode pipeline + latency on this GPU.
+**Architecture answer (owner's key Q — can we avoid MSVC in production): YES.** The
+whole pipeline ran from a **prebuilt binary, zero compilation** — same philosophy as
+the input helper's prebuilt koffi. Recommended Phase 1 shape: a forked **video helper
+that drives a bundled ffmpeg** (`ddagrab → nvenc/mf → -f h264 pipe:1` Annex-B) and
+feeds the NAL stream into node-datachannel's `H264RtpPacketizer` (`LongStartSequence`
+— the exact format 0-A used). No native addon, no Windows SDK. koffi-to-COM (DXGI/MF)
+is impractical (COM vtables); the C++ addon is a last resort. Detail in RESULTS.md.
 
 ---
 
@@ -88,9 +90,13 @@ code, must be built + run on the real machine before any trust.
 | Assumption | Verdict |
 |---|---|
 | node-datachannel carries H.264 RTP media outside Chromium, low latency | ✅ **PASS** (measured) |
-| DXGI capture → MF HW encode → decodable H.264 + latency | ⛔ **BLOCKED on toolchain** (spike written, not runnable here) |
+| DXGI capture → HW encode → decodable H.264/HEVC + latency | ✅ **PASS** (measured, compiler-free via ffmpeg) |
+| Production can avoid MSVC (owner's ask) | ✅ **YES** — bundle prebuilt ffmpeg, drive as forked helper |
 | RTP track interface + IPC contract agreed | ✅ frozen upstream in `shared/` (contract.ts + ipc.ts) |
 
-**The plan's #1 risk (media transport) is retired.** The remaining Phase 0 proof is
-gated purely on getting a C++ toolchain onto this machine — a decision for the owner,
-not a technical dead end. **Do not merge to main** (Mac side reviews + merges).
+**Both Phase 0 risks retired.** Media transport (node-datachannel) works outside
+Chromium at sub-ms latency; DXGI capture + GPU NVENC encode sustains 1440p60 at
+~7 % CPU and is decodable — all with **no compiler**, matching the project's
+prebuilt-binary philosophy. Phase 0 gate: **PASS**. Recommended Phase 1: a forked
+video helper driving bundled ffmpeg (ddagrab→NVENC) → node-datachannel
+`H264RtpPacketizer`. **Do not merge to main** (Mac side reviews + merges).

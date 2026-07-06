@@ -16,9 +16,11 @@ Build against the frozen foundation only: [`../shared/contract.ts`](../shared/co
   Chromium. Two real forked Node processes exchange SRTP/DTLS/ICE over localhost.
   Run: `node src/video-native/sender/phase0/media-loopback.mjs` (from `apps/desktop`).
   **Result: PASS** — see [`phase0/NOTES.md`](phase0/NOTES.md).
-- Phase 0-B (DXGI capture → MF hardware encode) native spike lives in
-  [`../native/`](../native/) (`dxdup_mf_encode.cpp`). **BLOCKED**: this machine has
-  no MSVC/Windows SDK to compile it — see NOTES + `native/README.md`.
+- **Phase 0-B** (DXGI capture → HW encode) proven **compiler-free** via portable
+  ffmpeg (this machine has no MSVC/Windows SDK): 1440p60 GPU capture → NVENC
+  zero-copy at ~7% CPU, decodable. Numbers + repro + the "avoid MSVC in production"
+  architecture answer in [`../native/phase0-ffmpeg/RESULTS.md`](../native/phase0-ffmpeg/RESULTS.md).
+  The C++ spike `../native/dxdup_mf_encode.cpp` is reference-only (not compiled).
 
 ## Status
 

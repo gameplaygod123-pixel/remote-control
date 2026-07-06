@@ -33,31 +33,29 @@ Implication for the plan's open questions (§7): the **MF path is preferred**
 is a possible latency optimisation later. HEVC is viable both ends (this GPU encodes
 it; the Mac decodes it) but H.264 stays the safe default per `shared/contract.ts`.
 
-## ⛔ Phase 0 BLOCKER: no native build toolchain on this machine
+## Phase 0-B outcome: proven **compiler-free** (owner's chosen path)
 
-DXGI + D3D11 + Media Foundation require compiling native C++ against the Windows SDK.
-Probed 2026-07-06 — **none present**:
+This machine has **no native build toolchain** (probed 2026-07-06): no MSVC `cl.exe`,
+no Visual Studio / Build Tools (`vswhere` absent), no Windows SDK (`dxgi.h`/`mfapi.h`
+nowhere), no clang. Consistent with the app never needing a compiler (`koffi` /
+`node-datachannel` ship prebuilt — CLAUDE.md golden rule #3).
 
-- ❌ MSVC `cl.exe` — not on PATH, not in Program Files
-- ❌ Visual Studio / Build Tools — `vswhere` absent, no install dirs
-- ❌ Windows 10/11 SDK — no `Include` dir, no `dxgi.h` / `mfapi.h` anywhere on C:
-- ❌ clang, ❌ ffmpeg/ffprobe
-- ✅ `dotnet` present · ✅ `winget` present · ⚠️ only the Python Store stub
+Rather than install a multi-GB SDK, Phase 0-B was proven with a **portable ffmpeg**
+(no install/admin) exercising the *same* OS APIs — `ddagrab` (DXGI Desktop
+Duplication) + `h264_mf` (Media Foundation) + `h264_nvenc`/`hevc_nvenc` (NVENC).
+**Result: PASS** — 1440p60 GPU capture → NVENC zero-copy at ~7 % CPU, decodable
+output. See [`phase0-ffmpeg/RESULTS.md`](phase0-ffmpeg/RESULTS.md) (repro:
+`phase0-ffmpeg/bench.ps1`).
 
-(Consistent with the app never needing a compiler: `koffi` and `node-datachannel`
-ship prebuilt binaries — see repo CLAUDE.md golden rule #3.)
+**Key architecture finding:** production can avoid MSVC entirely — bundle a prebuilt
+ffmpeg and drive it as the forked video helper (`ddagrab → nvenc → -f h264 pipe:1`
+Annex-B) feeding node-datachannel's `H264RtpPacketizer`. Details + trade-offs vs
+koffi-FFI / native-addon in RESULTS.md.
 
-**To unblock, one of:**
-1. **Install VS Build Tools + Windows SDK** (the real path). Multi-GB, machine-
-   modifying → needs owner OK. `winget install Microsoft.VisualStudio.2022.BuildTools`
-   with the "Desktop development with C++" workload (MSVC + Windows 11 SDK).
-   Then `dxdup_mf_encode.cpp` compiles via `build.bat`.
-2. **Portable ffmpeg** (no install/admin) as a *compiler-free* pipeline proof:
-   `ffmpeg -f lavfi -i ddagrab=... -c:v h264_mf ...` exercises the SAME DXGI
-   Desktop Duplication + Media Foundation HW encode and yields capture+encode
-   latency on this exact GPU. Proves feasibility; does not prove our in-process
-   wiring (that's Phase 1 regardless).
+### `dxdup_mf_encode.cpp` — reference only (NOT compiled/run)
 
-`dxdup_mf_encode.cpp` in this folder is the real spike source, written and ready —
-but **NOT YET COMPILED OR RUN** (no toolchain). Golden rule #1: it is unverified
-native code and must be built + run on this real machine before any trust/release.
+The hand-written DXGI-Duplication + MF-SinkWriter C++ spike is kept as a reference
+for a possible future native-addon path, but it was **never compiled or run** (no
+toolchain) — golden rule #1: unverified native code, do not trust/ship without
+building + running on the real machine. `build.bat` documents how, once a toolchain
+exists (`winget install Microsoft.VisualStudio.2022.BuildTools`, C++ workload).
