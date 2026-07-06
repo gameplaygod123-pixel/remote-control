@@ -56,19 +56,19 @@
 /* 'Glass' -- translucent, see-through controller. Only the macOS window is
    actually created transparent (main/index.ts); on other platforms the dark
    window backgroundColor shows through the alpha, so it degrades to a solid
-   dark tint. Amber-dark palette with alpha: shell is very see-through (~12%),
+   dark tint. Amber-dark palette with alpha: shell is see-through (~40%),
    the rail and cards are progressively more opaque for readability. */
 :root[data-theme='glass'] .ctl-shell {
-  --dl-bg: rgba(23, 18, 15, 0.12);
+  --dl-bg: rgba(23, 18, 15, 0.4);
   --dl-text: #f5efe8;
-  --dl-rail: rgba(18, 13, 11, 0.34);
+  --dl-rail: rgba(18, 13, 11, 0.55);
   --dl-thumb: rgba(12, 14, 20, 0.55);
   --dl-accent: #e0793f;
   --dl-accent-ink: #1a1008;
   --dl-accent-dim: #d3bcac;
   --dl-text-dim: #d3c5b8;
   --dl-border: rgba(255, 255, 255, 0.16);
-  --dl-card-bg: rgba(31, 24, 19, 0.44);
+  --dl-card-bg: rgba(31, 24, 19, 0.66);
   --dl-ok: #6ee79a;
   --dl-idle: #9a8d80;
   --dl-hover: rgba(255, 255, 255, 0.1);
