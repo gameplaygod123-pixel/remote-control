@@ -340,24 +340,6 @@
   color: var(--dl-accent);
 }
 
-/* Name + online status float over the screen preview (bottom-left by
-   default), Parsec-style. Position/size come from the owner's card-tuner
-   export (tx 17%, ty 90%). White text with a strong outline shadow so it
-   stays readable on any screenshot AND on the icon-fallback card bg (in
-   both themes), without a solid scrim box. */
-.dl-overlay {
-  position: absolute;
-  left: 17%;
-  top: 90%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: flex-start;
-  max-width: 88%;
-  pointer-events: none;
-}
-
 .dl-thumb.is-offline {
   color: var(--dl-idle);
 }
@@ -379,12 +361,22 @@
   filter: grayscale(1) brightness(0.5);
 }
 
+/* Name + status are two independently placed labels floating over the screen
+   preview, positioned per the owner's card-tuner export: name bottom-left,
+   status bottom-right (anchored to the right edge so "online" never clips on
+   a narrower card). White text + strong outline shadow, no scrim box. */
 .dl-name {
-  font-size: 12px;
+  position: absolute;
+  left: 2%;
+  top: 92%;
+  transform: translateY(-50%);
+  padding: 3px 8px;
+  font-size: 14px;
   font-weight: 700;
   color: #ffffff;
   white-space: nowrap;
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.9), 0 1px 4px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
 }
 
 .dl-id {
@@ -394,12 +386,18 @@
 }
 
 .dl-status-row {
+  position: absolute;
+  right: 4px;
+  top: 92%;
+  transform: translateY(-50%);
+  padding: 3px 8px;
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  font-size: 11px;
   color: #e8e0d8;
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.9), 0 1px 4px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
 }
 
 .dl-status-dot {

@@ -235,14 +235,13 @@ export default function DeviceListView({
                   }`}
                 >
                   {device.thumbnail ? <img src={device.thumbnail} alt="" /> : <MonitorIcon />}
-                  {/* Name + status float over the screen preview (bottom-left),
-                      Parsec-style, per the owner's card-tuner layout. */}
-                  <div className="dl-overlay">
-                    <div className="dl-name">{device.name || device.deviceId}</div>
-                    <div className={`dl-status-row ${device.online ? 'is-ok' : ''}`}>
-                      <span className={`dl-status-dot ${device.online ? 'is-ok' : 'is-idle'}`} />
-                      {device.online ? 'online' : 'offline'}
-                    </div>
+                  {/* Name + online status float over the screen preview as two
+                      independently placed labels (owner's card-tuner export:
+                      name bottom-left, status bottom-right). */}
+                  <div className="dl-name">{device.name || device.deviceId}</div>
+                  <div className={`dl-status-row ${device.online ? 'is-ok' : ''}`}>
+                    <span className={`dl-status-dot ${device.online ? 'is-ok' : 'is-idle'}`} />
+                    {device.online ? 'online' : 'offline'}
                   </div>
                 </div>
                 {pinPromptFor === device.deviceId ? (
