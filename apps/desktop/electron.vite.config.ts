@@ -19,7 +19,12 @@ export default defineConfig({
           // spawned by main/videoSenderHost.ts. Same pure-Node build target as the
           // input helper; uses node-datachannel's raw media API + a bundled ffmpeg.
           // See src/video-native/sender/index.ts and docs/native-video-plan.md.
-          'video-sender': resolve('src/video-native/sender/index.ts')
+          'video-sender': resolve('src/video-native/sender/index.ts'),
+          // Native video RECEIVER helper (Mac controller) -> out/main/video-receiver.js,
+          // spawned by main/videoReceiverHost.ts. Answers on channel:'video-native',
+          // reassembles RTP -> Annex-B, and drives the Swift render binary.
+          // See src/video-native/receiver/index.ts.
+          'video-receiver': resolve('src/video-native/receiver/index.ts')
         }
       }
     }
