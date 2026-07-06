@@ -73,17 +73,35 @@ The real forked helper is now implemented, wired strictly to the frozen
   modules the e2e doesn't touch (NAL split/AU assembly across chunk boundaries,
   ffmpeg arg set, RTCP PLI parse). **PASS.**
 
-### Still to do (real hardware + integration)
+### Agent wiring (DONE — this is the small agent-only PR)
+
+The `VIDEO_PIPELINE=native` opt-in is now wired end-to-end on the agent side:
+- **main/index.ts** spawns `videoSenderHost` ONLY when `VIDEO_PIPELINE=native`
+  (default build never spawns it) + exposes `video-sender:*` IPC.
+- **preload** adds the `window.api.videoSender` bridge (mirror of `inputHelper`).
+- **AgentView.tsx** advertises the `native-video` cap only when the controller
+  advertised it AND `videoSender.isReady()`; on the native path it starts the
+  sender instead of `getDisplayMedia`, and relays offer/ice/stats on the separate
+  **`channel: 'video-native'`**. The renderer `'video'` pc is untouched and stays
+  for file transfer / input / clipboard.
+- **Wire protocol frozen with Mac:** cap `native-video`, signaling channel
+  `video-native` (distinct on purpose — the renderer pc still owns `'video'`).
+  Added to `packages/protocol` `SignalChannel` enum. **The deployed signaling
+  server must be rebuilt/restarted** to relay `video-native` (it `safeParse`s and
+  drops unknown channels — same redeploy `input` once needed).
+- **SAFETY BAR proven:** with no `VIDEO_PIPELINE`, nothing spawns, no cap is
+  advertised, and `git diff -w` shows zero WebRTC-video-block code changes (pure
+  reindent under the new `if (!useNativeVideoRef.current)` guard).
+
+### Still to do (real hardware + joint test)
 
 1. **Real-ffmpeg run (golden rule #1):** drop `ffmpeg.exe` in and run the helper
    without `VIDEO_FAKE_SOURCE` to exercise the actual `ddagrab → NVENC` + NAL
-   split + PLI→**respawn** path on the RTX 3060 Ti. (The transport/packetize/PLI
-   wiring is proven above; this proves the capture stage integration.)
+   split + PLI→**respawn** path on the RTX 3060 Ti.
 2. **Bundle ffmpeg** via `build-win.sh` into `resources/ffmpeg/ffmpeg.exe` (LGPL
    build, licensing settled) so `resolveFfmpegPath()` finds it in a packaged app.
-3. **The one wiring point** in `agent/AgentView.tsx`: pick `native` vs `webrtc`
-   (behind `VIDEO_PIPELINE`/`NATIVE_VIDEO_CAP`), start `videoSenderHost`, relay its
-   offer/ice/stats through the existing signaling. Left untouched here so the WebRTC
-   default can't regress — proposed as a small, separate reviewed change.
+3. **Joint agent↔Mac-receiver e2e** on `channel: 'video-native'` (after the server
+   redeploy), then ship as **prerelease** and verify connect/PLI/respawn on real
+   hardware before any full release.
 
 **Do not merge to main** — Mac side reviews + merges.

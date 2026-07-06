@@ -48,6 +48,10 @@ import { initAutoUpdater } from './updater'
 import { saveToDownloads } from './fileTransfer'
 import { getCachedPin, setCachedPin, clearCachedPin, setLastDeviceId } from './controllerMemory'
 import { startInputHelperHost, type InputHelperHost } from './inputHelperHost'
+import { startVideoSenderHost } from './videoSenderHost'
+import type { VideoSenderHost } from '../video-native/shared/ipc'
+import type { VideoConfig } from '../video-native/shared/contract'
+import { VIDEO_PIPELINE_ENV } from '../video-native/shared/contract'
 
 export type { AppMode }
 
@@ -352,6 +356,25 @@ app.whenReady().then(async () => {
     app.on('before-quit', () => inputHelperHost?.destroy())
   }
 
+  // Native video SENDER helper (agent only), and ONLY when explicitly opted in
+  // via VIDEO_PIPELINE=native. This is the SAFETY BAR: a default build (no env)
+  // never spawns this process, so the entire WebRTC video path is byte-identical
+  // to today. When engaged, the agent still only ADVERTISES the native-video cap
+  // if both this host isReady() AND the controller advertised it (AgentView), so
+  // a spawned-but-unpaired host changes nothing on its own. See
+  // docs/native-video-plan.md + video-native/shared/{contract,ipc}.ts.
+  let videoSenderHost: VideoSenderHost | undefined
+  if (appMode === 'agent' && process.env[VIDEO_PIPELINE_ENV] === 'native') {
+    videoSenderHost = startVideoSenderHost({
+      onOffer: (sdp) => agentWindow?.webContents.send('video-sender:offer', sdp),
+      onIce: (candidate, sdpMid, sdpMLineIndex) =>
+        agentWindow?.webContents.send('video-sender:ice', candidate, sdpMid, sdpMLineIndex),
+      onStats: (stats) => agentWindow?.webContents.send('video-sender:stats', stats),
+      onDown: () => agentWindow?.webContents.send('video-sender:down')
+    })
+    app.on('before-quit', () => videoSenderHost?.destroy())
+  }
+
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
@@ -388,6 +411,28 @@ app.whenReady().then(async () => {
       sdpMid: string | null,
       sdpMLineIndex: number | null
     ): void => inputHelperHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
+  )
+
+  // Bridges the agent renderer to the native video-sender process (see
+  // videoSenderHost.ts). All no-op / not-ready unless VIDEO_PIPELINE=native
+  // spawned the host above, so a default build reports not-ready and AgentView
+  // never engages the native path -- the WebRTC default stands.
+  ipcMain.handle('video-sender:is-ready', (): boolean => videoSenderHost?.isReady() ?? false)
+  ipcMain.handle('video-sender:start-session', (_event, config: VideoConfig): void =>
+    videoSenderHost?.startSession(config)
+  )
+  ipcMain.handle('video-sender:stop-session', (): void => videoSenderHost?.stopSession())
+  ipcMain.handle('video-sender:remote-answer', (_event, sdp: string): void =>
+    videoSenderHost?.remoteAnswer(sdp)
+  )
+  ipcMain.handle(
+    'video-sender:remote-ice',
+    (
+      _event,
+      candidate: string,
+      sdpMid: string | null,
+      sdpMLineIndex: number | null
+    ): void => videoSenderHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
   )
 
   // Explicit escape hatch for the "deleted and reinstalled, mode picker

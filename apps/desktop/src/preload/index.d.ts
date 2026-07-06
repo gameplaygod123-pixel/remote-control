@@ -93,6 +93,25 @@ declare global {
         ) => void
         onDown: (handler: () => void) => void
       }
+      videoSender: {
+        isReady: () => Promise<boolean>
+        startSession: (config: import('../video-native/shared/contract').VideoConfig) => Promise<void>
+        stopSession: () => Promise<void>
+        remoteAnswer: (sdp: string) => Promise<void>
+        remoteIce: (
+          candidate: string,
+          sdpMid: string | null,
+          sdpMLineIndex: number | null
+        ) => Promise<void>
+        onOffer: (handler: (sdp: string) => void) => void
+        onIce: (
+          handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+        ) => void
+        onStats: (
+          handler: (stats: import('../video-native/shared/contract').NativeVideoStats) => void
+        ) => void
+        onDown: (handler: () => void) => void
+      }
     }
   }
 }

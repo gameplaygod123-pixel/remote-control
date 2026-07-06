@@ -56,7 +56,18 @@ export const PairResultMessage = z.object({
 // process -- see docs/native-input-plan.md). Absent/omitted means "video",
 // so every message an old client ever sent -- none of which know this field
 // exists -- still parses and routes exactly as before.
-export const SignalChannel = z.enum(["video", "input"]);
+//
+// "video-native" is the NATIVE video pipeline's own PC (agent's forked
+// video-sender process -> Mac native receiver; see docs/native-video-plan.md).
+// It's a SEPARATE channel from "video" on purpose: in native mode the renderer
+// "video" PC still exists to carry file transfer (and input/clipboard when the
+// input-helper isn't engaged), so the native video PC needs its own tag or the
+// two collide. Same three message types (sdp-offer/answer/ice-candidate), just a
+// new channel value -- additive, exactly like "input" was. NOTE: the server
+// validates messages against this enum (server/signaling/src/index.ts drops
+// invalid ones), so a deployed server must be rebuilt/restarted to relay
+// "video-native" (same redeploy that "input" needed).
+export const SignalChannel = z.enum(["video", "input", "video-native"]);
 
 export const SdpOfferMessage = z.object({
   type: z.literal("sdp-offer"),

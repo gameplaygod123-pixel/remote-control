@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { UpdaterStatus } from '../main/updater'
+import type { NativeVideoStats, VideoConfig } from '../video-native/shared/contract'
 
 type AppMode = 'agent' | 'controller'
 
@@ -124,6 +125,39 @@ const api = {
     },
     onDown: (handler: () => void): void => {
       ipcRenderer.on('input-helper:down', () => handler())
+    }
+  },
+  // Bridges the agent renderer to the native video-sender process (see
+  // main/videoSenderHost.ts). Always-not-ready unless VIDEO_PIPELINE=native
+  // spawned the host; controller mode never calls these.
+  videoSender: {
+    isReady: (): Promise<boolean> => ipcRenderer.invoke('video-sender:is-ready'),
+    startSession: (config: VideoConfig): Promise<void> =>
+      ipcRenderer.invoke('video-sender:start-session', config),
+    stopSession: (): Promise<void> => ipcRenderer.invoke('video-sender:stop-session'),
+    remoteAnswer: (sdp: string): Promise<void> =>
+      ipcRenderer.invoke('video-sender:remote-answer', sdp),
+    remoteIce: (
+      candidate: string,
+      sdpMid: string | null,
+      sdpMLineIndex: number | null
+    ): Promise<void> =>
+      ipcRenderer.invoke('video-sender:remote-ice', candidate, sdpMid, sdpMLineIndex),
+    onOffer: (handler: (sdp: string) => void): void => {
+      ipcRenderer.on('video-sender:offer', (_event, sdp) => handler(sdp))
+    },
+    onIce: (
+      handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+    ): void => {
+      ipcRenderer.on('video-sender:ice', (_event, candidate, sdpMid, sdpMLineIndex) =>
+        handler(candidate, sdpMid, sdpMLineIndex)
+      )
+    },
+    onStats: (handler: (stats: NativeVideoStats) => void): void => {
+      ipcRenderer.on('video-sender:stats', (_event, stats) => handler(stats))
+    },
+    onDown: (handler: () => void): void => {
+      ipcRenderer.on('video-sender:down', () => handler())
     }
   }
 }
