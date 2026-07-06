@@ -63,7 +63,52 @@ either machine can resume without re-explaining anything.**
   (raw.githubusercontent.com, ~5-min CDN cache), re-resolved on every
   reconnect; the supervisor auto-publishes tunnel URL changes.
 
-## Current status (updated 2026-07-06)
+## Current status (updated 2026-07-07)
+
+IN PROGRESS (branch `feat/native-video`, NOT released — needs packaging +
+PRERELEASE per golden rule #1): **the native video pipeline works END TO END on
+real hardware, and the §3a compositing crux is SOLVED.** The Windows desktop now
+decodes + renders natively inside the Mac controller and feels like a normal app.
+- **Path**: Windows agent `ffmpeg` (ddagrab DXGI → h264_nvenc, `mf` fallback) →
+  Annex-B → `H264RtpPacketizer` → RTP over node-datachannel on
+  `channel:'video-native'` → Mac receiver child (`video-native/receiver/`, ndc +
+  JS `rtpDepacketizer` since ndc has no H.264 depacketizer) → **forwards each AU
+  to Electron main** as `{evt:'au',data:Buffer}` over an `'advanced'`-serialized
+  fork channel → main `pushNativeAccessUnit` → **koffi → `librvr.dylib`** →
+  VideoToolbox decode → `AVSampleBufferDisplayLayer`.
+- **§3a FIX (the whole point)**: the decoded video is an `AVSampleBufferDisplayLayer`
+  -backed NSView added as the BOTTOM subview of the controller window's OWN content
+  view (`embed.swift`, pointer from `getNativeWindowHandle()`), NOT a separate
+  floating NSWindow. One window ⇒ the OS handles drag / resize / fullscreen /
+  Spaces / z-order / corner-rounding for free. This killed every prior symptom
+  (drag stutter, covers-everything, clipped corners, fullscreen-mouse-dead) at the
+  root. The web UI sits above it, transparent over the video area (CSS
+  `.native-video`), controls paint on top.
+- **Window UX** (all verified windowed on the real Mac): session window locked to
+  the remote's 16:9 (`setAspectRatio` + one-time `setContentSize` snap) so the
+  video fills edge-to-edge with no letterbox AND input maps 1:1; a `.session-titlebar`
+  app-name bar ("Personal Remote · <machine>") that is the window-drag handle
+  (rendered whenever windowed, z-index BELOW the floating controls); the floating
+  control panel moved below the bar (top:42px) and made responsive (`flex-wrap` +
+  `max-width:calc(100vw-24px)`) so it stays usable in a small window.
+- **New code**: `receiver/render/{decoder.swift(shared),embed.swift(dylib),main.swift(selftest)}`,
+  `main/nativeRenderSurface.ts` (lazy koffi, golden rule #5), build via
+  `scripts/build-render-mac.sh` (→ `out/video-render/librvr.dylib`, a sibling of
+  out/main so main rebuilds don't wipe it), launch via
+  `start-controller-native.command`. SAFETY BAR intact: everything gated on
+  `VIDEO_PIPELINE=native` + both caps; default build is byte-identical WebRTC.
+- **Verified**: dylib exports the 3 C symbols; koffi loads it + calls safely under
+  Electron's Node ABI; selftest decodes 120/120; typecheck + full build clean;
+  and the owner confirmed on real hardware — video in-window, smooth drag, working
+  fullscreen mouse, no covering, title bar, responsive controls.
+- **STILL TODO to ship**: bundle `librvr.dylib` (+ `swiftc` build) into the Mac
+  app Resources (`video-render/`) + codesign/notarize; then PRERELEASE (golden
+  rule #1) before any full release — default stays WebRTC. `stats` currently
+  reports fps/kbps only (decodeMs/renderMs dropped with the Swift subprocess);
+  Windows-side NVENC preset/bitrate sweep still open.
+- Commits on `feat/native-video`: `ae3c502` (§3a in-window composite), `652b5bb`
+  + `3cd6d2f` (title bar), `29eb5ab` (controls below bar), `4397cea` (responsive
+  control bar in small windows).
 
 Latest release: **v1.22.0** — **video quality now matches Parsec** (1920×1080 @
 ~37 Mbps, verified side-by-side on the same machines). Root cause the owner hit:
@@ -286,14 +331,13 @@ Lessons:
 4. No TURN relay (only matters for CGNAT↔CGNAT pairs).
 5. Mac installer (.dmg) — deferred by owner decision.
 6. Owner plans a UI redesign + playful feature additions next.
-7. **Native video pipeline** for Parsec-level "glued to the mouse" latency —
-   NOW A PLANNED PROJECT: full handoff plan at
+7. **Native video pipeline** — BUILT + working end-to-end on real hardware on
+   branch `feat/native-video` (see Current status); plan at
    [`docs/native-video-plan.md`](docs/native-video-plan.md). Owner chose the
-   native route (over a same-tech rebuild) 2026-07-06. Moves the video hot path
-   OUT of Chromium on both ends (Windows DXGI capture + MF/NVENC encode → RTP
-   over node-datachannel → Mac VideoToolbox decode + AVSampleBufferDisplayLayer
-   render), mirroring the input-helper pattern; keeps the whole UI + every
-   existing feature; WebRTC path stays the default fallback until native is
-   proven. Windows-side Claude owns the agent/sender half, Mac side owns the
-   controller/render half. Phase 0 is a de-risk spike. Encoder/bitrate tuning is
-   already maxed as of v1.22.0 — this is the only remaining lever.
+   native route 2026-07-06; the §3a compositing crux was solved 2026-07-07 by
+   rendering INSIDE the Electron window (no separate NSWindow). REMAINING TO SHIP:
+   (a) bundle `librvr.dylib` + `swiftc` build into the Mac app Resources +
+   codesign/notarize; (b) merge `feat/native-video`; (c) PRERELEASE per golden
+   rule #1 (default stays WebRTC) and verify on the real agent before a full
+   release; (d) optional polish — real decodeMs/renderMs in `stats`,
+   keyframe-needed signal from the decode path, Windows NVENC preset/bitrate sweep.
