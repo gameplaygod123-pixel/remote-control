@@ -117,6 +117,19 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   exports `VIDEO_RENDER_LIB` (guarded on swiftc) so the toggle engages native from
   the ONE normal launcher; it deliberately does NOT set `VIDEO_PIPELINE` so the
   toggle is the source of truth. Typecheck + full build + lint clean.
+- **AUTO-NATIVE DEFAULT (owner, 2026-07-07, `c2a686d`): native is now the AUTO
+  default** ("บังคับออโต้ native เป็นหลัก") — `pipelineConfig` `AUTO_DEFAULT_PIPELINE
+  = 'native'`, so a machine with no saved file tries native automatically (no
+  toggle press); the sidebar bolt becomes the OFF switch. This FLIPS the old
+  "default byte-identical WebRTC" safety bar, but stays safe because native only
+  ACTUALLY engages when both peers advertise the cap + hosts ready, else TOTAL
+  silent WebRTC fallback. To keep that fallback total, `video-receiver:is-ready`
+  now ALSO requires `nativeSurfaceAvailable()` (dylib loadable) — a machine that
+  spawned the receiver but can't load `librvr.dylib` must NOT advertise native or
+  it'd black-screen with no fallback. Still MUST ship via PRERELEASE + real-agent
+  verify (ffmpeg) before a full release (golden rule #1). Live HUD badge
+  `⚡ NATIVE`/`WebRTC` (`.pipeline-badge`, app.css) in `ControllerSession` shows
+  which path is ACTUALLY rendering (bolt = saved intent; badge = live reality).
 - **STILL TODO to ship (revised for the owner's dev setup)**: the "bundle
   `librvr.dylib` into Mac app Resources + codesign/notarize" TODO is **moot while
   the owner runs the Mac controller from `electron-vite dev`** (no packaged .dmg —
