@@ -178,7 +178,31 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.23.0** — **elevated input: Task Manager + secure desktop
+Latest release: **v1.24.0** — **native video pipeline (lower latency than
+WebRTC), SHIPPED + signed off on real hardware.** The whole feat/native-video
+effort (see the IN PROGRESS block above for the architecture) is now a full
+release. Windows agent ffmpeg (ddagrab DXGI → h264_nvenc) → RTP → Mac controller
+VideoToolbox decode + in-window compositing. Highlights:
+- **Auto-default** (owner: "บังคับออโต้ native เป็นหลัก"): native engages
+  automatically when both ends support it; **WebRTC is the automatic fallback**
+  (no NVIDIA / no ffmpeg / native failure / dylib-not-loadable → silently WebRTC,
+  never a black screen). `pipelineConfig.ts` `AUTO_DEFAULT_PIPELINE='native'`;
+  `video-receiver:is-ready` also requires `nativeSurfaceAvailable()`.
+- **Bundled ffmpeg** (LGPL, ddagrab+h264_nvenc) at `resources/ffmpeg/ffmpeg.exe`
+  via `electron-builder.yml` `win.extraResources` + `build-win.sh` (downloads/
+  caches/strings-verifies the encoders). Installer 100→167MB.
+- Sidebar **bolt toggle** (off-switch to force WebRTC) + live **⚡NATIVE/WebRTC**
+  HUD badge (bolt=intent, badge=reality). Letterbox-aware native mouse mapping
+  (cursor 1:1 to edges — the beta.1→beta.2 fix).
+- Golden rules #1/#7 honored: prereleases beta.1 (ffmpeg e2e) + beta.2 (mouse
+  fix) verified on the real Windows agent before this clean full v1.24.0. The Mac
+  controller still runs from `electron-vite dev` (`start-controller.command` now
+  builds `librvr.dylib`); a packaged Mac .dmg + codesign stays deferred
+  (backlog #5). Commits: `3e68964` (toggle) `c2a686d` (auto-default+badge)
+  `7d72300` (ffmpeg bundle) `bb858ce` (mouse fix) `00e6abb`-ish (v1.24.0). Owner
+  confirmed on real hardware: ⚡NATIVE live, cursor 1:1, Thai/English typing OK.
+
+Prior release: **v1.23.0** — **elevated input: Task Manager + secure desktop
 (UAC / Ctrl+Alt+Del / lock screen)**. Fixes the owner's "open Task Manager →
 mouse dies" and adds control on the secure desktop. Full details in backlog #8
 (Track 1 + Track 2, both DONE + proven on real hardware, permanent across reboot).
