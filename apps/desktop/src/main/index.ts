@@ -83,6 +83,47 @@ if (envMode) {
   app.setPath('userData', join(app.getPath('userData'), envMode))
 }
 
+// Windows input-elevation (Track 1): the forked input-helper only reaches Task
+// Manager / UAC-elevated windows when it inherits HIGH integrity, and it can
+// only do that if THIS agent process is itself elevated. The PersonalRemoteAgent
+// scheduled task launches us elevated at logon, but Windows can start us at
+// MEDIUM integrity by other paths too -- a click on the Start-menu/desktop
+// shortcut, or the "restart apps after sign-in" feature relaunching the
+// previously-running agent via Explorer. A medium launch silently loses
+// Task-Manager input (the exact "mouse dies in Task Manager" bug). So if we're
+// a packaged install, on Windows, NOT elevated, and the elevated task exists,
+// hand off to that task and exit -- its elevated instance takes over.
+//
+// Gated on the task's existence (not the saved app mode): the task is only ever
+// registered on an agent machine that ran the Track 1 installer, so its presence
+// already implies "this is the agent." We deliberately DON'T call getSavedMode()
+// here -- this runs at module scope, before `app` is ready, where
+// app.getPath('userData') still resolves to the default ...\Electron dir instead
+// of ...\desktop, so the saved-mode file (and any userData-relative path) reads
+// empty. The handoff marker therefore lives under getPath('temp'), which is the
+// OS temp dir and is stable before ready. Runs BEFORE requestSingleInstanceLock
+// so we never hold the lock the elevated instance needs (no race: we exit
+// without ever taking it). A 30s mtime guard breaks any loop if the task somehow
+// can't elevate (e.g. UAC policy) -- worst case we fall through and run medium.
+if (
+  app.isPackaged &&
+  process.platform === 'win32' &&
+  !isElevatedWindows() &&
+  elevatedAgentTaskExists()
+) {
+  try {
+    const handoff = join(app.getPath('temp'), 'personalremote-elevation-handoff')
+    const recentlyTried = existsSync(handoff) && Date.now() - statSync(handoff).mtimeMs < 30_000
+    if (!recentlyTried) {
+      writeFileSync(handoff, String(Date.now()))
+      execSync('schtasks /run /tn PersonalRemoteAgent', { stdio: 'ignore' })
+      app.exit(0)
+    }
+  } catch {
+    /* couldn't trigger the task -- fall through and run medium (no worse than before) */
+  }
+}
+
 // Launching the app while it's already running must not open a second copy
 // -- two agents fight over registration (same deviceId) and two windows
 // just confuse. Instead the duplicate exits immediately and the FIRST
@@ -132,7 +173,29 @@ const startHidden = process.env.START_HIDDEN === '1' || process.argv.includes('-
 function isElevatedWindows(): boolean {
   if (process.platform !== 'win32') return false
   try {
-    execSync('net session', { stdio: 'ignore' })
+    // Read the process token's mandatory integrity level directly. We used to
+    // shell out to `net session` (succeeds only when elevated) but that is NOT
+    // reliable -- on at least one real machine `net session` returns success
+    // from a MEDIUM-integrity process too, so it reported "elevated" always,
+    // which silently defeated both the openAtLogin flag logic and the
+    // medium->elevated handoff above. whoami /groups lists the mandatory label
+    // SID: High = S-1-16-12288, System = S-1-16-16384 (either can inject into
+    // elevated windows); Medium = S-1-16-8192.
+    const out = execSync('whoami /groups', { encoding: 'utf8' })
+    return out.includes('S-1-16-12288') || out.includes('S-1-16-16384')
+  } catch {
+    return false
+  }
+}
+
+// Does the elevated-autostart scheduled task exist? Used by the startup handoff
+// above to decide whether a medium launch can bounce itself up to elevated.
+// `schtasks /query` exits non-zero when the task is absent (machines without
+// Track 1 installed) -- there we just run medium as usual.
+function elevatedAgentTaskExists(): boolean {
+  if (process.platform !== 'win32') return false
+  try {
+    execSync('schtasks /query /tn PersonalRemoteAgent', { stdio: 'ignore' })
     return true
   } catch {
     return false
