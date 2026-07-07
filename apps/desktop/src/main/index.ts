@@ -54,7 +54,8 @@ import { startVideoReceiverHost } from './videoReceiverHost'
 import {
   attachNativeSurface,
   detachNativeSurface,
-  pushNativeAccessUnit
+  pushNativeAccessUnit,
+  nativeSurfaceAvailable
 } from './nativeRenderSurface'
 import type { VideoSenderHost, VideoReceiverHost } from '../video-native/shared/ipc'
 import type { VideoConfig } from '../video-native/shared/contract'
@@ -627,10 +628,17 @@ app.whenReady().then(async () => {
   )
 
   // Bridges the controller renderer to the native video-receiver process (see
-  // videoReceiverHost.ts). All no-op / not-ready unless VIDEO_PIPELINE=native
-  // spawned the host above, so a default build reports not-ready and
-  // ControllerSession never engages the native path -- the WebRTC default stands.
-  ipcMain.handle('video-receiver:is-ready', (): boolean => videoReceiverHost?.isReady() ?? false)
+  // videoReceiverHost.ts). Reports ready only when the host spawned AND the
+  // in-process render surface (librvr.dylib) can actually load -- otherwise the
+  // controller must NOT advertise native-video, or a machine that spawned the
+  // receiver but can't paint (dylib missing / not built) would negotiate native
+  // and black-screen with no fallback. Requiring the surface here keeps the
+  // automatic WebRTC fallback total. Not-ready in a default WebRTC-preference
+  // build (host never spawned) -- the controller-side SAFETY BAR.
+  ipcMain.handle(
+    'video-receiver:is-ready',
+    (): boolean => (videoReceiverHost?.isReady() ?? false) && nativeSurfaceAvailable()
+  )
   ipcMain.handle('video-receiver:start-session', (): void => videoReceiverHost?.startSession())
   ipcMain.handle('video-receiver:stop-session', (): void => {
     detachSurface()

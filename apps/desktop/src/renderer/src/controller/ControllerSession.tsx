@@ -458,8 +458,7 @@ export default function ControllerSession({
           // receiver helper answers it; the renderer 'video' pc below still gets
           // created for file transfer, it just carries no video track. Default
           // build: nativeReady=false -> this stays false -> pure WebRTC video.
-          const useNativeVideo =
-            nativeReady && (message.caps?.includes(NATIVE_VIDEO_CAP) ?? false)
+          const useNativeVideo = nativeReady && (message.caps?.includes(NATIVE_VIDEO_CAP) ?? false)
           useNativeVideoRef.current = useNativeVideo
           setNativeActive(useNativeVideo)
           if (useNativeVideo) {
@@ -669,9 +668,7 @@ export default function ControllerSession({
   return (
     <div className={`session-shell${nativeActive ? ' native-video' : ''}`}>
       <div
-        className={`session-float${panelOpen ? ' is-open' : ''}${
-          inputAlert ? ' input-alert' : ''
-        }`}
+        className={`session-float${panelOpen ? ' is-open' : ''}${inputAlert ? ' input-alert' : ''}`}
       >
         {panelOpen ? (
           <div className="session-float__panel">
@@ -690,6 +687,20 @@ export default function ControllerSession({
               onBlur={commitName}
               onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
             />
+            {/* Which video path is ACTUALLY live this session (not just the saved
+                preference the sidebar bolt shows). nativeActive is true only when
+                both ends negotiated native-video AND the receiver engaged; if
+                native was selected but fell back to WebRTC, this reads WebRTC. */}
+            <span
+              className={`pipeline-badge is-${nativeActive ? 'native' : 'webrtc'}`}
+              title={
+                nativeActive
+                  ? 'วิดีโอกำลังวิ่งผ่าน Native (ลื่นสุด)'
+                  : 'วิดีโอกำลังวิ่งผ่าน WebRTC (มาตรฐาน / fallback)'
+              }
+            >
+              {nativeActive ? '⚡ NATIVE' : 'WebRTC'}
+            </span>
             {displayStats && displayStats.fps > 0 && (
               <span
                 className="connection-type-badge"

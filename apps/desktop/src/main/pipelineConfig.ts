@@ -12,14 +12,24 @@ import {
 // lets "run native as the primary" be a saved per-machine choice instead of an
 // env var + a special launcher every time.
 //
-// SAFETY BAR (golden rule #1): the code default stays 'webrtc'. Native is native
-// FFI (koffi + node-datachannel + ffmpeg) and must be a deliberate opt-in that
-// was verified on real hardware. With no saved file and no env, resolveVideoPipeline()
-// returns 'webrtc' -> the host processes never spawn -> the build is byte-identical
-// to today. Even when 'native' is selected, the session only actually uses it if
-// BOTH peers advertise NATIVE_VIDEO_CAP and the helper hosts report ready
-// (see main/index.ts + contract.ts) -- otherwise it silently falls back to WebRTC.
-// So WebRTC is never removed; it is the automatic safety net under native.
+// AUTO-NATIVE (owner decision 2026-07-07: "บังคับออโต้ native เป็นหลัก"): with no
+// saved file the default is now 'native', so a fresh machine tries the low-latency
+// path automatically -- no toggle press, no env var. The sidebar bolt becomes the
+// OFF switch (write 'webrtc') if native ever misbehaves.
+//
+// This is SAFE despite native being FFI (koffi + node-datachannel + ffmpeg) because
+// the fallback is automatic + total: 'native' only ACTUALLY engages when BOTH peers
+// advertise NATIVE_VIDEO_CAP and the helper hosts report ready (see main/index.ts +
+// contract.ts). On any machine where native can't run -- ffmpeg missing, no NVENC,
+// a Mac agent, a spawn failure -- the cap is never advertised and the session
+// silently uses WebRTC. So WebRTC is never removed; it is the invisible safety net.
+// Golden rule #1 still applies to SHIPPING this flip: it must go out as a PRERELEASE
+// and be verified on the real Windows agent (ffmpeg present) before any full release.
+//
+// The env var VIDEO_PIPELINE still wins when set (dev launcher / test harness), and
+// 'webrtc' saved in the file forces the old path for that machine.
+
+const AUTO_DEFAULT_PIPELINE: VideoPipeline = 'native'
 
 const PIPELINES: readonly VideoPipeline[] = ['webrtc', 'native']
 
@@ -27,7 +37,7 @@ function filePath(): string {
   return join(app.getPath('userData'), 'video-pipeline.txt')
 }
 
-/** The saved preference alone (env NOT consulted). Defaults to 'webrtc'. */
+/** The saved preference alone (env NOT consulted). Defaults to 'native' (auto). */
 export function getVideoPipeline(): VideoPipeline {
   try {
     if (existsSync(filePath())) {
@@ -37,7 +47,7 @@ export function getVideoPipeline(): VideoPipeline {
   } catch {
     /* unreadable -> default */
   }
-  return DEFAULT_VIDEO_PIPELINE
+  return AUTO_DEFAULT_PIPELINE
 }
 
 export function saveVideoPipeline(pipeline: VideoPipeline): void {
