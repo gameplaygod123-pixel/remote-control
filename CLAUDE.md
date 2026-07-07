@@ -110,7 +110,21 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   + `3cd6d2f` (title bar), `29eb5ab` (controls below bar), `4397cea` (responsive
   control bar in small windows).
 
-Latest release: **v1.22.0** — **video quality now matches Parsec** (1920×1080 @
+Latest release: **v1.23.0** — **elevated input: Task Manager + secure desktop
+(UAC / Ctrl+Alt+Del / lock screen)**. Fixes the owner's "open Task Manager →
+mouse dies" and adds control on the secure desktop. Full details in backlog #8
+(Track 1 + Track 2, both DONE + proven on real hardware, permanent across reboot).
+Both features ship OFF by default (gated behind `PR_INPUT_SERVICE=1` + their setup
+scripts: `install-agent-autostart.ps1` for Track 1, `setup-track2-permanent.ps1`
+for Track 2), so a plain auto-update is byte-identical WebRTC. Built from
+`feat/native-video @ 3c17df4` via `build-win.sh`; verified via prerelease
+v1.23.0-beta.1 on the real Windows agent first (golden rule #1). REMAINING polish
+(deferred, owner is sole user): Phase 4 hardening (Fix B pipe SDDL + squat guard,
+injector crash-respawn, uninstall cleanup) + an in-app Track-2 toggle — do these
+when family joins; SYSTEM video capture (see the secure desktop) is a separate
+big project.
+
+Prior release: **v1.22.0** — **video quality now matches Parsec** (1920×1080 @
 ~37 Mbps, verified side-by-side on the same machines). Root cause the owner hit:
 on a flawless path (Network 11ms, 0% loss, 0ms jitter, direct P2P) the stream
 was still a blurry 480×270 @ 0.1 Mbps — WebRTC's bandwidth estimator (BWE)
