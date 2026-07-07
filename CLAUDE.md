@@ -161,8 +161,8 @@ to push FPS.
   dup_frames=0 can't idle. Parsec is at 6% because it draws the cursor as a SEPARATE
   overlay (not in the video). Same reason the cursor stutters — its smoothness was
   tied to the video framerate.
-- **CURSOR-OUT-OF-VIDEO → the real Parsec-GPU fix (owner picked "แบบ Parsec เป๊ะ",
-  code DONE, awaiting koffi verify + build):** ship `draw_mouse=0` (cursor NOT baked
+- **CURSOR-OUT-OF-VIDEO → the real Parsec-GPU fix → PRERELEASE v1.25.0-beta.4
+  (owner picked "แบบ Parsec เป๊ะ", SHIPPED):** ship `draw_mouse=0` (cursor NOT baked
   into the frame → a mouse-only move is no longer a change → the encoder finally
   idles on a static screen) AND draw the cursor natively on the Mac. Chose the SAFE
   realization over transmitting a cursor bitmap (koffi GetDIBits = the kind of pixel
@@ -180,16 +180,20 @@ to push FPS.
   `RemoteCursorMessage` in `inputProtocol.ts`; `contract.ts` `DEFAULT_VIDEO_CONFIG.
   cursor` `'composited'`→`'separate'`; `ffmpegArgs.ts` grab now `...:dup_frames=0:
   draw_mouse=${separate?0:1}`. Mac-side verified: typecheck (node+web) + sender unit
-  tests (draw_mouse 0/1 asserted) + lint(prod, 0 err) all clean. **NEXT (golden rule
-  #1 — koffi FFI): Windows-Claude runs the ISOLATION harness FIRST**
-  `node src/input-helper/dev/cursor-capture-test.mjs` on the real agent (hover varied
-  UI, confirm the printed shape tracks + NO segfault) — a bad koffi signature
-  segfaults uncatchably (v1.15.0 crash-loop). If the harness passes → Mac builds+ships
-  **PRERELEASE v1.25.0-beta.4** for the real e2e: GPU should drop toward Parsec's ~6%
-  during active control (cursor no longer re-encodes the screen), cursor shows the
-  correct NATIVE shape + no stutter, coexists with Parsec. If clean → promote full
-  v1.25.0 (rolls up 60fps+VBR≤40, ddagrab crash-recovery, dup_frames=0, cursor-out-
-  of-video, quiet ndc log, HUD telemetry, stuck-key panic-release).
+  tests (draw_mouse 0/1 asserted) + lint(prod, 0 err) all clean. **koffi FFI VERIFIED
+  (golden rule #1): Windows-Claude ran the isolation harness `node src/input-helper/
+  dev/cursor-capture-test.mjs` on the real RTX agent — 3 runs, NO segfault, 7 shapes
+  correct — so `cursorCapture.ts` needs no changes.** Built via `build-win.sh` @
+  `feat/native-video` (all 3 packed checks pass: node-datachannel/koffi/ffmpeg win32,
+  signed, 175MB, VITE_SIGNALING_URL=cooperative-incorporate-innovations-jumping),
+  published **PRERELEASE v1.25.0-beta.4**. **NEXT e2e (owner+Windows-Claude, Parsec
+  left OPEN/untouched — primary monitor): install over beta.3, control 10+ min →
+  (1) GPU Video-Encode during ACTIVE control should drop toward Parsec's ~6% now the
+  cursor no longer re-encodes the screen (THE DECIDER); (2) cursor shows correct NATIVE
+  shape (I-beam/hand/resize) + no stutter; (3) coexists with Parsec (ACCESS_LOST
+  recovers in place); (4) no mouse-death/stuck-keys.** If clean → promote full v1.25.0
+  (rolls up 60fps+VBR≤40, ddagrab crash-recovery, dup_frames=0, cursor-out-of-video,
+  quiet ndc log, HUD telemetry, stuck-key panic-release).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller
