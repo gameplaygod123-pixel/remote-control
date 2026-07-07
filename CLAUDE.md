@@ -268,13 +268,17 @@ to push FPS.
     frequency. `-forced-idr 1` retained (harmless; forces a real IDR on PLI). Unit test
     now asserts `!-intra-refresh` + `-g 120`; tests + typecheck clean. Rebuilt →
     **PRERELEASE v1.25.1-beta.4**.
-  - **NEXT: WC installs beta.4, dumps argv to confirm `-g 120` + NO `-intra-refresh`,
-    controls 10+ min → the freeze must be GONE (no forced reconnects), HUD kbps spike
-    every ~2s (not 1s), no banding, PLI recovery works. If clean → promote v1.25.1,
-    then Step 2 (multi-slice `-slices 4` + present-latency tune — both safe for the VT
-    decoder, they don't touch GOP/refresh structure). The true flat-bitrate endgame
+  - **beta.4 VERIFIED stable → PROMOTED to full v1.25.1 (Step 1 DONE):** WC on real
+    hardware — argv confirmed `-g 120` + NO `-intra-refresh` + `-forced-idr 1`; owner
+    controlled with heavy drag, NO freeze, a single stable ffmpeg pid ~3+ min, 0
+    reconnects, 0 errors. **Step 1 landed as the plain `-g 120` partial win** (IDR every
+    2s vs v1.25.0's 1s = half the keyframe-spike frequency; intra-refresh permanently
+    dropped — VideoToolbox-incompatible at every GOP length,
+    [[pure-intra-refresh-freezes-videotoolbox]]). The true flat-bitrate endgame
     (receiver detects decode-stall → PLI → cheap forced IDR, no respawn) is deferred to
-    Step 2/3 receiver work.**
+    Step 2/3 receiver work. **NEXT: Step 2 — multi-slice `-slices 4` + preset/present-
+    latency tune (both safe for the VT decoder: they don't touch GOP/refresh
+    structure).**
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller
@@ -398,7 +402,21 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.24.0** — **native video pipeline (lower latency than
+Latest release: **v1.25.1** — Parsec-parity roadmap Step 1 (off `feat/native-video`,
+same as v1.25.0). Native-video keyframe tuning: **plain periodic IDR every 2s
+(`-g 120`)** instead of v1.25.0's 1s (`-g 60`), halving the keyframe-spike
+frequency. Step 1 originally tried NVENC `-intra-refresh` for a fully flat bitrate
+but it is **permanently dropped** — the Mac VideoToolbox decoder can't handle the
+rolling-intra P-frame structure (froze mid-session at every GOP length; verified via
+prereleases beta.1–beta.4 before this clean full release, golden rules #1/#7). See
+the Current status block + [[pure-intra-refresh-freezes-videotoolbox]]. Prior full
+release rolled up below.
+
+Prior release: **v1.25.0** — native video 60fps + VBR≤40, ddagrab crash-recovery,
+dup_frames on-change capture, HUD latency telemetry, stuck-key panic-release. (Step 0
+of the roadmap: reverted the beta.4 cursor-out-of-video regression.)
+
+Prior release: **v1.24.0** — **native video pipeline (lower latency than
 WebRTC), SHIPPED + signed off on real hardware.** The whole feat/native-video
 effort (see the IN PROGRESS block above for the architecture) is now a full
 release. Windows agent ffmpeg (ddagrab DXGI → h264_nvenc) → RTP → Mac controller
