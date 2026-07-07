@@ -310,12 +310,30 @@ to push FPS.
     `apps/desktop/native/dxgi-capturer/{main.cpp,build.ps1,CMakeLists.txt,README.md}`
     + `--selftest`. Coexists with Parsec. (WC committing to feat/native-video after
     pulling Mac's spec.)
-  - 3b DXGI→NVENC zero-copy (standalone → .h264 file; GPU near Parsec ~6% on static+
-    mouse-moving; MUST keep plain periodic IDR `-g 120`, NO intra-refresh —
-    [[pure-intra-refresh-freezes-videotoolbox]]). 3c wire into the sender (gated,
-    ffmpeg stays the fallback) + full e2e prerelease. 3d cursor from DXGI over the
-    dormant `'cursor'` channel (un-gate `PR_CURSOR_OVERLAY`) → Mac CSS overlay
-    (reuse beta.4's plumbing).
+  - **3b ✅ DONE + VERIFIED on real hardware (WC, `nvenc.{h,cpp}` linking nvEncodeAPI
+    directly in the C++ .exe):** DXGI `ID3D11Texture2D` → `CopyResource` → registered
+    NVENC D3D11 input → zero-copy encode (no CPU download), encoding ONLY the frames
+    3a flags as real changes. **Clean decider metric (frames NVENC actually encoded in
+    7s, Parsec running): static screen + mouse moving = 13 (~2/s: residual + forced
+    IDR) vs ddagrab's ~420; active screen = 70 (~10/s, tracks real change).** = the GPU
+    win ddagrab/beta.4 can't get (they'd encode ~420 in both). `.h264` decodes clean in
+    ffmpeg 8.1 (H.264 High, 2560×1440, yuv420p, I/P only NO B, IDR ~every 2s wall-clock,
+    SPS/PPS in-band). Config P1/ULL, VBR 25/40 Mbps, VBV 250ms, **`-g 120` NO
+    intra-refresh** ✓. ACCESS_LOST → teardown+rebuild encoder+device (fresh IDR). NB:
+    absolute enc% vs Parsec ~6% can't be measured cleanly yet (Parsec's own NVENC
+    session pollutes nvidia-smi's GPU-wide enc%); frames-encoded is the clean metric,
+    real % shows at 3c. Output = `.h264` file (stdout/RTP is 3c). third_party/ + the
+    built binary are gitignored.
+  - **3c (NEXT): wire capturer.exe into the sender, replacing ffmpeg (gated, ffmpeg
+    stays the fallback), + full e2e PRERELEASE (golden rule #1).** Split: WC adds a
+    `--output stdout` mode + accepts the config CLI contract (Mac defines it in
+    [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md)) + delivers the built
+    `capturer.exe` to Mac's packaging; Mac writes the TS `CapturerFrameSource` (reuses
+    NalSplitter/AU/RTP untouched) + `resolveCapturerPath` + the gate + electron-builder
+    pack + build-win.sh verify. Receiver UNCHANGED (Annex-B contract matches ffmpeg).
+    DECIDER: GPU during active control near Parsec, coexists with Parsec, no freeze.
+  - 3d cursor from DXGI over the dormant `'cursor'` channel (un-gate
+    `PR_CURSOR_OVERLAY`) → Mac CSS overlay (reuse beta.4's plumbing).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller
