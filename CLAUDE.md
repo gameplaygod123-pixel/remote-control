@@ -65,6 +65,48 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-07)
 
+IN PROGRESS (branch `feat/native-video`): **native-video polish — HUD latency
+telemetry (SHIPPED to the branch) + a 120fps/60Mbps PRERELEASE awaiting real-
+hardware verify.** Post-v1.24.0 the owner asked to see real latency numbers, then
+to push FPS.
+- **HUD telemetry (`7d491e4`, Mac-side only, committed — no prerelease needed, not
+  FFI):** the native HUD showed only fps/kbps (`Network ?ms`, `0×0`). Added: (1)
+  **true resolution** — a from-scratch H.264 **SPS parser**
+  (`video-native/receiver/spsDimensions.ts`, handles frame-cropping 1088→1080 /
+  high profile / emulation-prevention bytes; unit-verified 10/10 incl. a real
+  ffmpeg 1080p vector; parsed once off the first IDR in `receiver/index.ts`) since
+  ndc/VideoToolbox never surface the size to Node; (2) **real Network RTT** — the
+  native pc is media-only so `pc.rtt()` (SCTP) is always null; derive RTT from the
+  **input pc's** candidate-pair `currentRoundTripTime` in `ControllerSession`
+  onStats (same two machines / same path, always has a data channel; mirrors
+  useVideoStats); (3) **frame-pacing Jitter** — RFC3550-style smoothed AU inter-
+  arrival, receiver-side (new `jitterMs` on `NativeVideoStats`); (4) dropped the
+  fake `Decode 0ms` (AVSampleBufferDisplayLayer has no decode callback — hide vs
+  lie). Owner confirmed live: `Network 11ms · Jitter 10ms · 2560×1440`.
+- **RESOLUTION IS NOT DOWNSCALABLE ON THIS GPU (documented finding):** the owner
+  asked for an in-app resolution setting. Can't be done without killing latency —
+  `ffmpegArgs.ts:83-90` already records that `scale_d3d11` fails on the agent's
+  driver (VideoProcessor can't do BGRA→NV12, reproduced ffmpeg 8.1 + master 2026)
+  and CUDA hwmap is "not implemented", so NVENC encodes at the **native capture
+  res** (2560×1440). The only downscale path is hwdownload→CPU-scale = kills zero-
+  copy + adds latency, which defeats native. On a direct ~11ms link bandwidth
+  isn't a constraint anyway. DECISION: leave it at native res (the owner's own
+  fallback). The zero-cost lever if ever needed = change the source monitor's
+  Windows display res (still zero-copy).
+- **120fps + 60Mbps → PRERELEASE v1.25.0-beta.1 (`2e8e4aa`):** the Mac controller
+  is ProMotion 120Hz and the owner's source is 144Hz, so 120fps is the perceptible
+  ceiling (min of both displays; NVENC 3060Ti does 1440p120 easily). Bumped
+  `DEFAULT_VIDEO_CONFIG` (native-only; the agent passes it straight to the sender;
+  WebRTC untouched): `fps 60→120`, CBR `startBitrateKbps 20→60 Mbps` (2× frames
+  need ~2× bits; Parsec runs ~60-70 here), min 6→20, max 30→70. Built via
+  `build-win.sh` @ `2e8e4aa` (all 3 packed checks pass, signed, 175MB), published
+  **PRERELEASE v1.25.0-beta.1** off `feat/native-video` (golden rule #1 — native
+  pipeline). **NEXT: Windows-Claude installs over v1.24.0, confirms HUD shows
+  `120fps · 2560×1440`, feels smoother, NVENC keeps up (agent log, no dropped
+  frames); sweep bitrate live via `VIDEO_NVENC_BITRATE_KBPS` env (50000/70000) w/o
+  rebuild if 60 isn't the sweet spot → then promote full v1.25.0.** fps has no env
+  override (locked in config) so 120 requires this build.
+
 IN PROGRESS (branch `feat/native-video`, NOT released — needs packaging +
 PRERELEASE per golden rule #1): **the native video pipeline works END TO END on
 real hardware, and the §3a compositing crux is SOLVED.** The Windows desktop now
