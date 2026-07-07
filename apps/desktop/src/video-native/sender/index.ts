@@ -33,6 +33,7 @@ import {
 import type { MainToVideoSender, VideoSenderToMain } from '../shared/ipc'
 import type { NativeVideoStats, VideoConfig } from '../shared/contract'
 import { FfmpegFrameSource, SyntheticFrameSource, type FrameSource } from './frameSource'
+import { NVENC_INTRA_REFRESH_GOP } from './ffmpegArgs'
 import { isKeyframeRequest, parseRtcpFeedback } from './rtcpFeedback'
 import { logVideoSender } from '../../main/videoSenderLog'
 
@@ -240,7 +241,12 @@ function startSession(config: VideoConfig): void {
 }
 
 function startFrameSource(session: Session): void {
-  const gop = session.config.fps // 1s GOP (item A.2: cheap self-heal under CBR)
+  // Step 1: intra-refresh, NOT a periodic full IDR. A huge -g suppresses the 1s
+  // keyframe spike (the old `config.fps` = 1s GOP predates intra-refresh and, by
+  // overriding buildFfmpegArgs' default, was silently re-enabling periodic IDRs --
+  // proven on hardware). Recovery is via forced-idr on PLI, not a periodic IDR.
+  // Harmless to the MF fallback (its argv has no -g).
+  const gop = NVENC_INTRA_REFRESH_GOP
   const cb = {
     onAccessUnit: (au: { data: Buffer; keyframe: boolean }) => {
       if (current !== session) return

@@ -227,10 +227,18 @@ to push FPS.
   `-intra-refresh 1 -forced-idr 1` and sets `-g` to `NVENC_INTRA_REFRESH_GOP`
   (999999 — no periodic full IDR; recovery via PLI→forced-idr; dump_extra still
   repeats SPS/PPS in-band for mid-join). Unit tests updated + pass; built via
-  build-win.sh. **NEXT: WC installs beta.1 over v1.25.0, controls a session on
-  ddagrab → confirm HUD bitrate is FLAT (no ~1s spikes), no banding/glitch, PLI
-  recovery (Back/reconnect) still restores the stream. If clean → promote v1.25.1,
-  then Step 2 (multi-slice + present tuning).**
+  build-win.sh.
+  - **beta.1 BUG (WC, real hardware) → FIXED in beta.2:** intra-refresh + forced-idr
+    were in the argv correctly, but `sender/index.ts:243` passed `gop = config.fps`
+    (60), overriding buildFfmpegArgs' `NVENC_INTRA_REFRESH_GOP` default → running argv
+    was `-intra-refresh 1 -g 60`, so NVENC still emitted a full IDR every 1s (proven:
+    intra-refresh+g60 = 3 I/3s vs +g999999 = 1 I/3s → bitrate still spiked). Fix:
+    `sender/index.ts` now sets `gop = NVENC_INTRA_REFRESH_GOP` (the `config.fps` "1s
+    GOP" comment predated intra-refresh; MF fallback is unaffected — its argv has no
+    `-g`). Rebuilt → **PRERELEASE v1.25.1-beta.2**.
+  - **NEXT: WC installs beta.2, dumps argv to confirm `-g 999999`, controls a session
+    → HUD kbps FLAT (no ~1s spikes), no banding, PLI recovery works. If clean →
+    promote v1.25.1, then Step 2 (multi-slice + present tuning).**
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller
