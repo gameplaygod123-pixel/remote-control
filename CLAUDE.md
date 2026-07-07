@@ -300,14 +300,16 @@ to push FPS.
   Claude-LED** (needs MSVC + the real RTX GPU; Mac-Claude can't compile/run DXGI+NVENC
   — Mac owns the spec, the Annex-B contract, the sender TS wiring in 3c, the Mac cursor
   overlay in 3d, review/merge). Phased, prerelease-per-substep:
-  - **3a (NEXT, handed to WC): standalone DXGI capturer + change-detection isolation
-    harness, NO NVENC yet** — `AcquireNextFrame` loop that SKIPS `WAIT_TIMEOUT`
-    (unchanged) AND `LastPresentTime==0` (pointer-only, the case ddagrab/beta.4 can't
-    skip), reads cursor `PointerPosition`/`GetFramePointerShape`, `ReleaseFrame` every
-    iter, re-inits on `ACCESS_LOST` (same event beta.2 handles). Logs
-    `emitted/skipped_timeout/skipped_pointeronly/cursor` per sec. DECIDER: static
-    screen + MOUSE MOVING → emitted≈0 (ddagrab would emit ~60/s). Code in new
-    `apps/desktop/native/dxgi-capturer/`; coexist with Parsec (do NOT close it).
+  - **3a ✅ DONE + VERIFIED on real hardware (WC):** standalone `capturer.exe` (MSVC +
+    Win SDK, NOT koffi/addon) with the `AcquireNextFrame` change-detection loop —
+    SKIPS `WAIT_TIMEOUT` (unchanged) AND `LastPresentTime==0` (pointer-only). **The
+    decider passed: mouse moving on a static screen → ~0 screen frames emitted** (the
+    exact case ddagrab/beta.4 could NOT skip = the GPU root cause). ACCESS_LOST recovery
+    hardened (was capped 15s → survived a ~22s lock via unlimited retry + throttle).
+    Reads cursor `PointerPosition`/`GetFramePointerShape` (for 3d). Files:
+    `apps/desktop/native/dxgi-capturer/{main.cpp,build.ps1,CMakeLists.txt,README.md}`
+    + `--selftest`. Coexists with Parsec. (WC committing to feat/native-video after
+    pulling Mac's spec.)
   - 3b DXGI→NVENC zero-copy (standalone → .h264 file; GPU near Parsec ~6% on static+
     mouse-moving; MUST keep plain periodic IDR `-g 120`, NO intra-refresh —
     [[pure-intra-refresh-freezes-videotoolbox]]). 3c wire into the sender (gated,
