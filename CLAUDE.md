@@ -101,14 +101,38 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   Electron's Node ABI; selftest decodes 120/120; typecheck + full build clean;
   and the owner confirmed on real hardware — video in-window, smooth drag, working
   fullscreen mouse, no covering, title bar, responsive controls.
-- **STILL TODO to ship**: bundle `librvr.dylib` (+ `swiftc` build) into the Mac
-  app Resources (`video-render/`) + codesign/notarize; then PRERELEASE (golden
-  rule #1) before any full release — default stays WebRTC. `stats` currently
-  reports fps/kbps only (decodeMs/renderMs dropped with the Swift subprocess);
-  Windows-side NVENC preset/bitrate sweep still open.
+- **IN-APP TOGGLE (2026-07-07, `3e68964`)**: the owner asked to run Native as the
+  PRIMARY path ("ลื่นสมูส"). Answered by making native a **saved per-machine
+  preference** (`main/pipelineConfig.ts` → userData `video-pipeline.txt`, mirrors
+  themeConfig) + a **sidebar bolt toggle** (`controller/PipelineToggle.tsx`),
+  instead of an env var + a special launcher — WITHOUT removing WebRTC, which
+  stays the automatic safety net UNDER native (native only runs Windows-NVIDIA
+  +ffmpeg → Mac; anything else / ffmpeg missing / native failure silently falls
+  back to WebRTC). `resolveVideoPipeline()` lets the `VIDEO_PIPELINE` env still
+  win (dev/harness override), else the saved pref; the 3 startup gates in
+  `main/index.ts` now read `nativePipelineEnabled()`. SAFETY BAR intact: code
+  default stays `'webrtc'` → no file + no env = byte-identical. `pipeline:get/set`
+  IPC + `window.api.pipeline`. Toggle applies on the NEXT session (receiver host
+  is wired at startup). `start-controller.command` now builds `librvr.dylib` +
+  exports `VIDEO_RENDER_LIB` (guarded on swiftc) so the toggle engages native from
+  the ONE normal launcher; it deliberately does NOT set `VIDEO_PIPELINE` so the
+  toggle is the source of truth. Typecheck + full build + lint clean.
+- **STILL TODO to ship (revised for the owner's dev setup)**: the "bundle
+  `librvr.dylib` into Mac app Resources + codesign/notarize" TODO is **moot while
+  the owner runs the Mac controller from `electron-vite dev`** (no packaged .dmg —
+  backlog #5, deferred); in dev the resolver finds the dylib via
+  `VIDEO_RENDER_LIB`/out-sibling. The REAL remaining gaps are Windows-side:
+  **(1) ffmpeg must be present** on the agent (ddagrab→h264_nvenc) — ship it or
+  find on PATH; **(2)** flip the agent's saved pref to native (an agent-side
+  toggle mirroring PipelineToggle, or a script/file) so its sender host spawns;
+  then **(3)** real-hardware e2e + PRERELEASE (golden rule #1) before any full
+  release — default stays WebRTC. `stats` still reports fps/kbps only
+  (decodeMs/renderMs dropped with the Swift subprocess); Windows-side NVENC
+  preset/bitrate sweep still open.
 - Commits on `feat/native-video`: `ae3c502` (§3a in-window composite), `652b5bb`
   + `3cd6d2f` (title bar), `29eb5ab` (controls below bar), `4397cea` (responsive
-  control bar in small windows).
+  control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
+  pref).
 
 Latest release: **v1.23.0** — **elevated input: Task Manager + secure desktop
 (UAC / Ctrl+Alt+Del / lock screen)**. Fixes the owner's "open Task Manager →
