@@ -16,16 +16,33 @@
 
 param(
   # Path to the app's electron/exe host (supports ELECTRON_RUN_AS_NODE).
-  # In a packaged build this is the app exe, e.g. "Personal Remote.exe".
-  [Parameter(Mandatory = $true)][string]$ExePath,
-  # Path to the built session-0 launcher (input-service/service.js).
-  [Parameter(Mandatory = $true)][string]$ScriptPath,
+  # In a packaged build this is the app exe, e.g. "PersonalRemote.exe".
+  # OPTIONAL: if omitted, auto-resolved to the NSIS install (see below).
+  [string]$ExePath,
+  # Path to the built session-0 launcher (input-service/input-service.js).
+  # OPTIONAL: if omitted, auto-resolved to the NSIS install (see below).
+  [string]$ScriptPath,
   # Task name. Kept as -ServiceName so existing callers/installer args don't break.
   [string]$ServiceName = 'PersonalRemoteInput'
 )
 
 $ErrorActionPreference = 'Stop'
 $TaskName = $ServiceName
+
+# --- auto-resolve the INSTALLED app paths when not passed explicitly ------------
+# The permanent (post-NSIS) install points the SYSTEM task at the app under
+# %LOCALAPPDATA%\Programs\desktop, NOT the dev repo out/main. The electron app exe
+# (PersonalRemote.exe) doubles as the ELECTRON_RUN_AS_NODE host, and the launcher
+# is out/main/input-service.js next to the injector. Callers that pass -ExePath /
+# -ScriptPath (e.g. the dev harness track2-e2e.ps1) still win.
+if (-not $ExePath -or -not $ScriptPath) {
+  $installDir = Join-Path $env:LOCALAPPDATA 'Programs\desktop'
+  if (-not $ExePath)    { $ExePath    = Join-Path $installDir 'PersonalRemote.exe' }
+  if (-not $ScriptPath) { $ScriptPath = Join-Path $installDir 'resources\app\out\main\input-service.js' }
+  Write-Host "auto-resolved install paths:"
+  Write-Host "  ExePath    = $ExePath"
+  Write-Host "  ScriptPath = $ScriptPath"
+}
 
 if (-not (Test-Path $ExePath))    { throw "ExePath not found: $ExePath" }
 if (-not (Test-Path $ScriptPath)) { throw "ScriptPath not found: $ScriptPath" }
