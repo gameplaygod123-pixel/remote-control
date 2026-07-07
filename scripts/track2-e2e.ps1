@@ -3,7 +3,11 @@
 # SYSTEM launcher task, then runs the live helper<->injector chain and reports
 # PASS/FAIL by reading GetCursorPos back.
 #
-#   scripts\track2-e2e.ps1            # install task + run the harness proof
+#   scripts\track2-e2e.ps1            # install task + run the Default-desktop proof
+#   scripts\track2-e2e.ps1 -Secure    # install task + Phase-3 secure-desktop test:
+#                                      #   forwards a heartbeat forever so you can
+#                                      #   LOCK the screen and watch the injector
+#                                      #   follow to Winlogon in the log
 #   scripts\track2-e2e.ps1 -Uninstall # remove the task when you're done
 #
 # WHY interactive + elevated: SendInput only moves the VISIBLE cursor from a thread
@@ -17,7 +21,7 @@
 # controlling Task Manager from the Mac. This harness is the fast local pre-check
 # that the Fix A pipe + schtasks SYSTEM injector land input on the visible desktop.
 
-param([switch]$Uninstall)
+param([switch]$Uninstall, [switch]$Secure)
 
 $ErrorActionPreference = 'Stop'
 
@@ -34,6 +38,7 @@ if (-not (Test-Admin)) {
   Write-Host "Needs admin to install the SYSTEM task. Relaunching elevated - approve the UAC prompt..." -ForegroundColor Yellow
   $argList = @('-NoExit', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
   if ($Uninstall) { $argList += '-Uninstall' }
+  if ($Secure)    { $argList += '-Secure' }
   Start-Process powershell -Verb RunAs -ArgumentList $argList
   return
 }
@@ -69,11 +74,20 @@ Write-Host "launcher : $serviceScript"
 Write-Host "waiting for the launcher to spawn the SYSTEM injector..."
 Start-Sleep -Seconds 6
 
-# 3) run the live harness as the pipe HOST; it forwards moves + checks GetCursorPos.
+# 3) run the harness as the pipe HOST.
+#    default  -> phase2e2e-live: 3 moves + GetCursorPos check, exits PASS/FAIL.
+#    -Secure  -> phase3-secure: forwards a heartbeat forever so YOU can LOCK the
+#               screen mid-loop; the injector follows to Winlogon and logs it.
+$harness = if ($Secure) { 'src/input-service/dev/phase3-secure.ts' } else { 'src/input-service/dev/phase2e2e-live.ts' }
+if ($Secure) {
+  Write-Host "`n=== SECURE-DESKTOP (Phase 3) mode ===" -ForegroundColor Cyan
+  Write-Host "When it says 'connected', LOCK the screen (Start -> your user -> Lock)," -ForegroundColor Cyan
+  Write-Host "wait ~3s, unlock with your REAL PIN, then Ctrl+C and re-check the log." -ForegroundColor Cyan
+}
 Push-Location $desktop
 try {
   $env:PR_INPUT_SERVICE = '1'
-  & $node $tsx 'src/input-service/dev/phase2e2e-live.ts'
+  & $node $tsx $harness
   $code = $LASTEXITCODE
 } finally {
   Pop-Location
