@@ -421,19 +421,41 @@ export default function ControllerSession({
         window.api.videoReceiver.onFirstFrame(() => {
           setStatus('connection: connected (native video)')
         })
-        window.api.videoReceiver.onStats((s: NativeVideoStats) =>
+        window.api.videoReceiver.onStats(async (s: NativeVideoStats) => {
+          // The native video pc is media-only (no SCTP), so its pc.rtt() is
+          // always null. Read the network RTT off the input pc instead -- same
+          // two machines / same path, and it always has a data channel so its
+          // candidate-pair currentRoundTripTime is populated (mirrors useVideoStats).
+          let rttMs = s.rttMs
+          const ipc = inputPcRef.current
+          if (rttMs == null && ipc) {
+            try {
+              const report = await ipc.getStats()
+              report.forEach((entry) => {
+                if (
+                  entry.type === 'candidate-pair' &&
+                  entry.nominated &&
+                  typeof entry.currentRoundTripTime === 'number'
+                ) {
+                  rttMs = Math.round(entry.currentRoundTripTime * 1000)
+                }
+              })
+            } catch {
+              // getStats can throw if the pc closed mid-tick -- leave rtt as-is
+            }
+          }
           setNativeStats({
             fps: s.fps,
             width: s.width,
             height: s.height,
             kbps: s.kbps,
             processingMs: s.decodeMs ?? 0,
-            rttMs: s.rttMs,
+            rttMs,
             codec: s.codec,
             lossPct: null,
-            jitterMs: null
+            jitterMs: s.jitterMs
           })
-        )
+        })
         window.api.videoReceiver.onDown(() => setStatus('native video down -- repairing'))
         window.api.window.onFullScreen((v) => setFullscreen(v))
       }
@@ -733,7 +755,8 @@ export default function ControllerSession({
                 className="connection-type-badge"
                 title="What's actually being received -- not just what was requested"
               >
-                Decode {displayStats.processingMs}ms · Network {displayStats.rttMs ?? '?'}ms ·{' '}
+                {displayStats.processingMs > 0 ? `Decode ${displayStats.processingMs}ms · ` : ''}
+                Network {displayStats.rttMs ?? '?'}ms ·{' '}
                 {displayStats.jitterMs != null ? `Jitter ${displayStats.jitterMs}ms · ` : ''}
                 {displayStats.lossPct != null ? `Loss ${displayStats.lossPct.toFixed(1)}% · ` : ''}
                 {displayStats.fps}fps · {displayStats.width}×{displayStats.height} ·{' '}

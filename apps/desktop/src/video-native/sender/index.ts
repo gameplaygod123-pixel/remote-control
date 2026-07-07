@@ -299,6 +299,7 @@ function reportStats(session: Session): void {
     decodeMs: null, // receiver-side fields
     renderMs: null,
     rttMs: null,
+    jitterMs: null, // receiver-side (frame-pacing jitter measured on arrival)
     codec: session.config.codec
   }
   session.framesInWindow = 0

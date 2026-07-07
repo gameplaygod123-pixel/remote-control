@@ -89,6 +89,7 @@ export interface NativeVideoStats {
   encodeMs: number | null // sender: HW encode time / frame
   decodeMs: number | null // receiver: VideoToolbox decode / frame
   renderMs: number | null // receiver: decode -> on-screen present (the <video> wall we're removing)
-  rttMs: number | null
+  rttMs: number | null // receiver: ICE round-trip (pc.rtt(), network latency)
+  jitterMs: number | null // receiver: frame-pacing jitter (variation in AU inter-arrival)
   codec: VideoCodec | null
 }

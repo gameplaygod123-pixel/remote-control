@@ -25,6 +25,7 @@ import {
 import type { MainToVideoReceiver, VideoReceiverToMain } from '../shared/ipc'
 import type { NativeVideoStats } from '../shared/contract'
 import { H264Depacketizer, isRtcp } from './rtpDepacketizer'
+import { spsDimensions } from './spsDimensions'
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 
 // Must match the sender (sender/index.ts): same STUN pair (golden rule #4), same
@@ -55,6 +56,12 @@ interface Session {
   lastKeyframeRequestAt: number
   framesInWindow: number
   bytesInWindow: number
+  // Frame-pacing jitter: how evenly reassembled AUs land (perceived smoothness).
+  // RFC3550-style smoothed deviation of the inter-arrival interval from its
+  // running mean, in ms -- purely receiver-side (no clock sync needed).
+  lastAuArrivalMs: number
+  meanIntervalMs: number
+  jitterMs: number
   statsTimer: ReturnType<typeof setInterval> | undefined
   lastStats: Partial<NativeVideoStats>
 }
@@ -119,6 +126,9 @@ function startSession(): void {
     lastKeyframeRequestAt: 0,
     framesInWindow: 0,
     bytesInWindow: 0,
+    lastAuArrivalMs: 0,
+    meanIntervalMs: 0,
+    jitterMs: 0,
     statsTimer: undefined,
     lastStats: {}
   }
@@ -159,6 +169,17 @@ function startSession(): void {
       for (const au of session.depacketizer.push(msg)) {
         session.framesInWindow += 1
         session.bytesInWindow += au.data.length
+        // Read the real resolution off the in-band SPS once (the first AU is an
+        // IDR with parameter sets); ndc/VideoToolbox never surface it to Node.
+        if (!session.lastStats.width) {
+          const dims = spsDimensions(au.data)
+          if (dims) {
+            session.lastStats.width = dims.width
+            session.lastStats.height = dims.height
+            log(`resolution ${dims.width}x${dims.height} (from SPS)`)
+          }
+        }
+        trackJitter(session)
         feedRender(session, au.data)
       }
     })
@@ -168,9 +189,25 @@ function startSession(): void {
   })
 }
 
+// Smoothed frame-pacing jitter (RFC3550 §A.8 style, /16), on AU arrival wall clock.
+function trackJitter(session: Session): void {
+  const now = performance.now()
+  if (session.lastAuArrivalMs !== 0) {
+    const interval = now - session.lastAuArrivalMs
+    if (session.meanIntervalMs === 0) session.meanIntervalMs = interval
+    const deviation = Math.abs(interval - session.meanIntervalMs)
+    session.jitterMs += (deviation - session.jitterMs) / 16
+    session.meanIntervalMs += (interval - session.meanIntervalMs) / 16
+  }
+  session.lastAuArrivalMs = now
+}
+
 function reportStats(session: Session): void {
   if (current !== session) return
   const windowSec = STATS_INTERVAL_MS / 1000
+  // NOTE: pc.rtt() reads the SCTP transport, but this connection is media-only
+  // (no data channel) so it's always null here. The controller derives network
+  // RTT from the input pc's candidate-pair instead (ControllerSession onStats).
   const stats: NativeVideoStats = {
     fps: Math.round(session.framesInWindow / windowSec),
     width: session.lastStats.width ?? 0,
@@ -180,7 +217,8 @@ function reportStats(session: Session): void {
     encodeMs: null,
     decodeMs: session.lastStats.decodeMs ?? null,
     renderMs: session.lastStats.renderMs ?? null,
-    rttMs: null,
+    rttMs: null, // derived on the controller from the input pc (see above)
+    jitterMs: session.framesInWindow > 0 ? Math.round(session.jitterMs) : null,
     codec: 'h264'
   }
   session.framesInWindow = 0
