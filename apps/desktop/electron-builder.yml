@@ -20,6 +20,15 @@ asar: false
 asarUnpack:
   - resources/**
 win:
+  # Bundle the native-video encoder (ffmpeg with ddagrab + h264_nvenc) into
+  # resources/ffmpeg/ffmpeg.exe so resolveFfmpegPath() (video-native/sender)
+  # finds it on a clean install -- native video works out of the box, no
+  # FFMPEG_PATH / separate install. Windows-only (the Mac controller decodes via
+  # VideoToolbox, never runs ffmpeg). build-win.sh stages apps/desktop/ffmpeg/
+  # from the cached LGPL binary (~109MB, NOT committed); +~110MB to the installer.
+  extraResources:
+    - from: ffmpeg
+      to: ffmpeg
   executableName: PersonalRemote
   # Most real Windows PCs are x64 -- default to that explicitly rather than
   # whatever architecture happens to match the machine doing the building

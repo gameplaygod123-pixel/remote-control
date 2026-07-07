@@ -6,3 +6,5 @@ out
 *.log*
 *.tsbuildinfo
 .verify-tmp
+# Staged by build-win.sh from the cached LGPL ffmpeg (~109MB, never committed).
+ffmpeg/
