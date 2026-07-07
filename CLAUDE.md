@@ -139,19 +139,23 @@ to push FPS.
   below), and the owner's REAL use = **Parsec always open as the primary monitor
   (do NOT close/modify Parsec)** — so coexistence must be proven with Parsec
   running (the stable test had it closed).
-- **GPU efficiency vs Parsec — dup_frames=0 (PENDING Windows standalone verify,
-  staged in `ffmpegArgs.ts` @ `cc4e381`, NOT built):** Task Manager showed our
-  ffmpeg at **45.7% Video-Encode engine** vs Parsec 6.1% (same tool). Cause: we run
-  `ddagrab=...:framerate=60` with default dup_frames=1, so NVENC re-encodes the
-  STATIC screen 60×/s. Fix = **`dup_frames=0`** (emit only on actual desktop change;
-  framerate becomes a cap) — Parsec's trick; our RTP path already uses wall-clock TS
-  for this variable interval (phase1/NOTES #64). RISK: our cursor is COMPOSITED into
-  the video (not sent separately like Parsec), so a cursor-only move must still
-  count as a "change" or the cursor freezes on a static screen. **GATE before
-  building beta.3: Windows-Claude runs standalone ffmpeg dup_frames=0 → confirm (a)
-  option accepted, (b) Video-Encode engine drops toward ~6%, (c) CURSOR stays smooth
-  when only the mouse moves over a still screen.** If cursor freezes, need a
-  different approach (separate cursor = big, or a min-fps floor).
+- **GPU efficiency vs Parsec — dup_frames=0 → PRERELEASE v1.25.0-beta.3
+  (`8348ca8`, VERIFIED + shipped):** Task Manager showed our ffmpeg at **45.7%
+  Video-Encode engine** vs Parsec 6.1% (same tool). Cause: `ddagrab=...:framerate=60`
+  with default dup_frames=1 re-encodes the STATIC screen 60×/s. Fix = **`dup_frames=0`**
+  (emit only on actual desktop change; framerate = a cap) — Parsec's trick; our RTP
+  path already uses wall-clock TS for this variable interval (phase1/NOTES #64).
+  **Windows-Claude verified standalone on the RTX 3060 Ti: static-screen encoder util
+  ~32%→~2% (BELOW Parsec's ~6%), stream −91%, AND the cursor stays smooth** — the
+  feared cursor-in-video freeze did NOT happen because a cursor-only move is itself a
+  desktop change (draw_mouse composites it) → ~54fps while moving, ~5fps idle. Also
+  added a **receiver jitter guard** (exclude AU gaps >100ms) so the HUD jitter doesn't
+  spike under the now-variable frame rate. Built via `build-win.sh`, published beta.3.
+  **NEXT (in-app, Parsec OPEN): GPU during real use near Parsec + coexists; cursor
+  smooth; a fully-static screen at ~5fps holds the last frame (no black/stall, ICE
+  up); no mouse-death/stuck-keys. If clean → promote full v1.25.0** (rolls up
+  60fps+VBR≤40, ddagrab crash-recovery, dup_frames=0, quiet ndc log, HUD telemetry,
+  stuck-key panic-release).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller
