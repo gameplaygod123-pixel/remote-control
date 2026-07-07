@@ -88,7 +88,13 @@ sign-off. Logs: `%TEMP%\input-service.log` (the SYSTEM service's TEMP is
   Manager (Ctrl+Shift+Esc) + a run-as-admin app now take input.
 - **Phase 3** — verify `syncInputDesktop()` flips to `Winlogon`: UAC consent +
   lock screen take input (video stays frozen there — expected, that's a separate
-  SYSTEM-capture project).
+  SYSTEM-capture project). The injector now LOGS each flip to
+  `%TEMP%\input-service.log`: `input desktop -> 'Winlogon' (was 'Default')` on the
+  way in and back to `'Default'` on the way out; a throttled
+  `SetThreadDesktop('Winlogon') failed, GetLastError=...` is the one line to look
+  for if secure-desktop input doesn't land (should not happen as SYSTEM). Connect
+  backoff is 200ms→1s so the first input after a spawn isn't lost to the startup
+  race (helper hosts slightly after the task spawns the injector).
 - **Phase 4** — hardening: active-session change re-target, injector
   crash-respawn, pipe-squatting check, uninstall cleanup.
 

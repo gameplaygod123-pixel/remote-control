@@ -25,7 +25,12 @@ import { injectRaw } from './rawInject'
 import { syncInputDesktop } from './win32Session'
 
 const LOG = join(tmpdir(), 'input-service.log')
-const RECONNECT_MS = 1000
+// Reconnect backoff: start fast so the first input after a spawn isn't lost to
+// the startup race (injector up before the helper hosts the pipe -> a short
+// burst of ENOENT), then ease off. Reset to fast on every successful connect.
+const RECONNECT_MIN_MS = 200
+const RECONNECT_MAX_MS = 1000
+let reconnectMs = RECONNECT_MIN_MS
 
 function log(msg: string): void {
   try {
@@ -46,14 +51,17 @@ function connect(): void {
   s.on('connect', () => {
     connecting = false
     sock = s
+    reconnectMs = RECONNECT_MIN_MS // reset backoff; a future drop reconnects fast
     log('connected to helper pipe')
   })
   s.on('data', (chunk: Buffer) => {
     for (const message of decoder.push(chunk)) {
       try {
         // Follow the input desktop first — cheap, and only re-binds when it
-        // actually flipped (Default <-> Winlogon around UAC/lock).
-        syncInputDesktop()
+        // actually flipped (Default <-> Winlogon around UAC/lock). Pass log so
+        // the Default->Winlogon flip (and any SetThreadDesktop failure on the
+        // secure desktop) is visible in the injector log for Phase 3.
+        syncInputDesktop(log)
         injectRaw(message)
       } catch (e) {
         // A single bad inject must not kill the loop. (A koffi/native segfault
@@ -75,8 +83,10 @@ function connect(): void {
     if (sock === s) sock = null
     connecting = false
     // The helper is the persistent host; reconnect to it (it survives our
-    // respawns and we survive its restarts).
-    setTimeout(connect, RECONNECT_MS)
+    // respawns and we survive its restarts). Back off so a helper that's down
+    // for a while doesn't get hammered.
+    setTimeout(connect, reconnectMs)
+    reconnectMs = Math.min(reconnectMs * 2, RECONNECT_MAX_MS)
   })
 }
 
