@@ -36,8 +36,13 @@ public:
     // Encode one real-change frame. `srcTex` is the acquired desktop texture — MUST
     // be called while the frame is still held (before ReleaseFrame); we CopyResource
     // it into an owned encode texture immediately. `forceIdr` is decided by the caller
-    // (first frame / wall-clock 2s elapsed). Returns false on a fatal encode error.
+    // (first frame / wall-clock 2s elapsed / PLI). Returns false on a fatal encode error.
     bool EncodeFrame(ID3D11Texture2D* srcTex, bool forceIdr);
+
+    // Re-encode the LAST frame (already in the registered texture) as a forced IDR —
+    // for a PLI on a static screen, where no new desktop change is coming but the
+    // receiver needs a fresh keyframe. No CopyResource.
+    bool EncodeRepeatIdr();
 
     void Shutdown();  // flush EOS + free everything
 
@@ -45,7 +50,8 @@ public:
     uint64_t bytesOut()      const { return bytesOut_; }
 
 private:
-    bool writeBitstream();  // lock/emit/unlock the encoded output
+    bool encodeMapped(bool forceIdr);  // map registered tex -> encode -> emit (shared)
+    bool writeBitstream();             // lock/emit/unlock the encoded output
 
     void* enc_ = nullptr;              // NVENC session handle
     void* fnListMem_ = nullptr;        // heap NV_ENCODE_API_FUNCTION_LIST

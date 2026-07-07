@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <nvEncodeAPI.h>
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 
@@ -13,10 +14,16 @@
 
 using CreateInstanceFn = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
 
-static void LogNv(const char* what, NVENCSTATUS s) {
-    printf("[nvenc:err] %s failed: status=%d\n", what, (int)s);
-    fflush(stdout);
+// All logs go to stderr (stdout is the H.264 stream in the sender path).
+static void NvLog(const char* fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    fprintf(stderr, "[capturer] ");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    va_end(ap);
+    fflush(stderr);
 }
+static void LogNv(const char* what, NVENCSTATUS s) { NvLog("nvenc %s failed: status=%d", what, (int)s); }
 
 #define NVCK(call, what) do { NVENCSTATUS _s = (call); if (_s != NV_ENC_SUCCESS) { LogNv((what), _s); return false; } } while (0)
 
@@ -31,11 +38,11 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
 
     // --- load the DLL (ships with the NVIDIA driver) + the API function list ---
     dll_ = LoadLibraryA("nvEncodeAPI64.dll");
-    if (!dll_) { printf("[nvenc:err] LoadLibrary nvEncodeAPI64.dll failed (no NVIDIA driver?)\n"); fflush(stdout); return false; }
+    if (!dll_) { NvLog("LoadLibrary nvEncodeAPI64.dll failed (no NVIDIA driver?)"); return false; }
 
     auto createInstance = reinterpret_cast<CreateInstanceFn>(
         GetProcAddress(reinterpret_cast<HMODULE>(dll_), "NvEncodeAPICreateInstance"));
-    if (!createInstance) { printf("[nvenc:err] GetProcAddress NvEncodeAPICreateInstance failed\n"); fflush(stdout); return false; }
+    if (!createInstance) { NvLog("GetProcAddress NvEncodeAPICreateInstance failed"); return false; }
 
     auto* fl = new NV_ENCODE_API_FUNCTION_LIST{};
     fl->version = NV_ENCODE_API_FUNCTION_LIST_VER;
@@ -101,7 +108,7 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     td.Usage = D3D11_USAGE_DEFAULT;
     td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     HRESULT hr = device_->CreateTexture2D(&td, nullptr, &encodeTex_);
-    if (FAILED(hr)) { printf("[nvenc:err] CreateTexture2D failed: 0x%08lX\n", (unsigned long)hr); fflush(stdout); return false; }
+    if (FAILED(hr)) { NvLog("CreateTexture2D failed: 0x%08lX", (unsigned long)hr); return false; }
 
     NV_ENC_REGISTER_RESOURCE reg = {};
     reg.version = NV_ENC_REGISTER_RESOURCE_VER;
@@ -118,19 +125,25 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     NVCK(FL->nvEncCreateBitstreamBuffer(enc_, &bb), "nvEncCreateBitstreamBuffer");
     bitstream_ = bb.bitstreamBuffer;
 
-    printf("[nvenc] H264 P1/ULL VBR %d/%d kbps, VBV %dms, IDR ~%.1fs, %dx%d@%d, no-B no-intra-refresh\n",
-           cfg_.targetKbps, cfg_.maxKbps, cfg_.vbvMs, cfg_.idrIntervalSec, cfg_.width, cfg_.height, cfg_.fps);
-    fflush(stdout);
+    NvLog("nvenc H264 P1/ULL VBR %d/%d kbps, VBV %dms, IDR ~%.1fs, %dx%d@%d, no-B no-intra-refresh",
+          cfg_.targetKbps, cfg_.maxKbps, cfg_.vbvMs, cfg_.idrIntervalSec, cfg_.width, cfg_.height, cfg_.fps);
     return true;
 }
 
 bool NvEncoder::EncodeFrame(ID3D11Texture2D* srcTex, bool forceIdr) {
     if (!enc_) return false;
-
     // GPU->GPU copy of the still-held desktop frame into our registered texture
     // (no CPU download = zero-copy in the host sense). Caller ReleaseFrames after.
     context_->CopyResource(encodeTex_, srcTex);
+    return encodeMapped(forceIdr);
+}
 
+bool NvEncoder::EncodeRepeatIdr() {
+    if (!enc_) return false;
+    return encodeMapped(/*forceIdr=*/true);  // re-encode the last frame already in encodeTex_
+}
+
+bool NvEncoder::encodeMapped(bool forceIdr) {
     NV_ENC_MAP_INPUT_RESOURCE map = {};
     map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
     map.registeredResource = registered_;
@@ -173,6 +186,7 @@ bool NvEncoder::writeBitstream() {
     if (lb.bitstreamSizeInBytes && out_) {
         fwrite(lb.bitstreamBufferPtr, 1, lb.bitstreamSizeInBytes, out_);
         bytesOut_ += lb.bitstreamSizeInBytes;
+        fflush(out_);  // flush per frame — no muxer buffering (low latency, contract)
     }
     NVCK(FL->nvEncUnlockBitstream(enc_, bitstream_), "nvEncUnlockBitstream");
     return true;

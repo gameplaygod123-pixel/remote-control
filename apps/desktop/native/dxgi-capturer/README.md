@@ -18,8 +18,10 @@ this process, which the sender host respawns, instead of taking down Electron.
   metadata + per-second logging. Verified on the real RTX 3060 Ti agent.
 - **3b — DXGI→NVENC zero-copy → .h264 file (DONE).** `nvenc.{h,cpp}`. Encodes ONLY
   real-change frames, zero-copy from the D3D11 texture. Verified (see 3b results).
-- **3c — wire into the sender** replacing ffmpeg (Annex-B → stdout, RTP path
-  unchanged). Next.
+- **3c — full CLI contract + stdout stream + stdin control (DONE, capturer side).**
+  Annex-B → stdout (binary, flushed per frame), stdin `'I'`→IDR, EOF→exit 0, all logs
+  to stderr. Matches `capturerArgs.ts`. Mac owns the sender wiring (`CapturerFrameSource`)
+  + prerelease build. Built binary published to `bin/capturer.exe` for packaging.
 - **3d — cursor from DXGI** `PointerShape` over the existing 'cursor' channel.
 
 ## Build
@@ -42,23 +44,29 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release   # -> build/Release/capturer.exe
 ```
 
-## Run (3a harness)
+## Run
+
+Production (what the sender spawns — see `capturerArgs.ts`):
 
 ```
-capturer.exe --selftest [--duration <sec>] [--output <index>]
+capturer.exe --output stdout --monitor 0 --fps 60 --bitrate 25000 --maxrate 40000 --gop 120
 ```
 
-Logs once per second (per-second interval counts):
+- **stdout** = raw H.264 Annex-B (4-byte start codes, in-band SPS/PPS before every
+  IDR, flushed per frame) — byte-identical to `ffmpeg -f h264 pipe:1`. First frame = IDR.
+- **stdin** = one byte `'I'` (0x49) → force an IDR next frame (cheap PLI recovery, no
+  respawn). Closed stdin / EOF → clean shutdown (exit 0).
+- **stderr** = `[capturer] ...` log lines incl. the per-second `emitted / skipped_timeout
+  / skipped_pointeronly / cursor=(x,y,visible,shape)` counters, `cursor-shape` on change,
+  `access-lost`/`reinit` on recovery.
+- **exit** = 0 clean; non-zero fatal (sender respawns). ACCESS_LOST recovers in-process.
 
-```
-emitted=<n> skipped_timeout=<n> skipped_pointeronly=<n> cursor=(x,y,visible,shapeType)
-[cursor-shape] type=<name>(<n>) WxH hotspot=(x,y) bytes=<n>   # on each shape change
-[access-lost] duplication lost -> re-init                     # on desktop switch/lock/Parsec grab
-```
+Offline testing: `--output <file.h264>` (write to a file), `--selftest` (3a log loop,
+no encode), `--duration <sec>` (stop after N seconds).
 
-- `emitted` — frames where `LastPresentTime != 0` (real desktop change → would encode).
+- `emitted` — frames where `LastPresentTime != 0` (real desktop change → encoded).
 - `skipped_timeout` — `AcquireNextFrame` returned `WAIT_TIMEOUT` (idle, nothing changed).
-- `skipped_pointeronly` — `LastPresentTime == 0` (pointer/metadata-only → **skip the encode**).
+- `skipped_pointeronly` — `LastPresentTime == 0` (pointer/metadata-only → **not encoded**).
 
 ## Decider results (RTX 3060 Ti, 2560×1440, 2026-07-08)
 

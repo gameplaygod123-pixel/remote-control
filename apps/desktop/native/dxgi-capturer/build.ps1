@@ -36,4 +36,11 @@ $full = "call `"$vcvars`" >nul 2>nul && $cl"
 cmd /c $full
 if ($LASTEXITCODE -ne 0) { throw "cl.exe failed with exit $LASTEXITCODE" }
 
-Write-Host "[build] OK -> $out"
+# Publish the built binary to bin/ — the committed path Mac's build-win.sh packs
+# into resources/capturer/capturer.exe (Mac can't compile it). Re-commit after source
+# changes. This file is un-ignored in .gitignore via `!bin/capturer.exe`.
+$bin = Join-Path $here 'bin'
+New-Item -ItemType Directory -Force $bin | Out-Null
+Copy-Item $out (Join-Path $bin 'capturer.exe') -Force
+
+Write-Host "[build] OK -> $out (+ bin/capturer.exe)"

@@ -263,6 +263,27 @@ active control near Parsec, video smooth, coexists with Parsec (ACCESS_LOST reco
 in place), no freeze/stuck-keys. HUD fps tracks real change rate (idle low, active
 high). → prerelease, then promote.
 
+#### 3c — capturer-side implementation status (Windows-Claude, 2026-07-08: DONE, verified locally)
+
+`capturer.exe` implements the full CLI + behavioural contract above (new CLI: `--output
+stdout|<path> --monitor --fps --bitrate --maxrate --gop`, matching `capturerArgs.ts`;
+`--selftest`/`--duration` kept for offline testing). Verified locally by simulating the
+Node spawn (redirected stdin/stdout/stderr):
+- stdout binary (`_setmode _O_BINARY`), Annex-B flushed per frame; **decodes clean in
+  ffmpeg 8.1** (High, 2560×1440, I/P only).
+- First frame = IDR; periodic IDR by **wall clock** = `--gop / --fps` seconds (variable
+  frame rate means a raw frame count ≠ 2s); `--gop 999999` test → no periodic IDR.
+- stdin `'I'` → exactly one extra IDR next frame (proven: gop disabled → I-frame count
+  = 2 = first + forced), no respawn. PLI on a *static* screen re-encodes the last frame
+  as IDR (`EncodeRepeatIdr`) so a recovering receiver still re-syncs.
+- Closed stdin / EOF → **exit 0**. ACCESS_LOST recovers in-process (no exit).
+- All logs on stderr (`[capturer] ...`); fps is a real cap (over-cap changes coalesced).
+
+Built binary published to `apps/desktop/native/dxgi-capturer/bin/capturer.exe`
+(un-ignored via `!bin/capturer.exe`; `build.ps1` copies it there each build). Remaining
+= Mac builds the PRERELEASE (`VIDEO_CAPTURER=1`) → the real 10-min e2e decider on
+hardware (GPU vs Parsec now measurable as a single session, smoothness, PLI recovery).
+
 ### 3d — Cursor from DXGI (the proper out-of-video cursor)
 
 The screen no longer contains the cursor (we skip pointer-only frames + can encode

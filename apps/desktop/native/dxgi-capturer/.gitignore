@@ -1,5 +1,7 @@
 # build artifacts
 capturer.exe
+# EXCEPTION: the committed built binary Mac's build-win.sh packs into resources/
+!bin/capturer.exe
 *.obj
 *.pdb
 *.ilk

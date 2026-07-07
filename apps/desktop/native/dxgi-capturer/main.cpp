@@ -1,34 +1,36 @@
-// dxgi-capturer — Step 3a change-detection harness + Step 3b NVENC encode
+// dxgi-capturer — custom DXGI Desktop Duplication capturer (Step 3).
 //
-// Standalone C++ .exe that does the DXGI Desktop Duplication change-detection
-// ddagrab structurally cannot do (see docs/step3-dxgi-capturer.md). It acquires
-// frames, classifies each acquire, reads cursor metadata, logs per-second counters
-// (3a), and — with --encode <file> — feeds ONLY the real-change frames to NVENC
-// zero-copy and writes Annex-B H.264 to a file (3b). Architecture is locked: a
-// standalone subprocess (drop-in for ffmpeg later), NOT koffi-COM and NOT a node
-// addon (crash isolation, golden rule #1).
+// Standalone C++ .exe that replaces ffmpeg/ddagrab in the native video sender. It
+// does DXGI Desktop Duplication with change-detection (skips unchanged AND
+// pointer-only frames — the case ddagrab can't skip), NVENC-encodes ONLY the real
+// changes zero-copy, and writes raw H.264 Annex-B to stdout exactly like
+// `ffmpeg -f h264 pipe:1`. Drop-in for ffmpeg; the Mac receiver is untouched.
+// NOT koffi-COM, NOT a node addon — crash isolation (golden rule #1).
 //
-// Loop semantics (owner spec):
-//   AcquireNextFrame ->
-//     DXGI_ERROR_WAIT_TIMEOUT           -> nothing changed              -> skipped_timeout
-//     LastPresentTime.QuadPart == 0     -> pointer/metadata-only update -> skipped_pointeronly
-//     LastPresentTime.QuadPart != 0     -> real desktop change          -> emitted
-//   cursor: PointerPosition (x,y,Visible) valid when LastMouseUpdateTime != 0;
-//           PointerShape read via GetFramePointerShape when PointerShapeBufferLength > 0.
-//   ReleaseFrame() after every successful acquire (else the next acquire fails).
-//   DXGI_ERROR_ACCESS_LOST -> re-init the whole duplication (desktop switch / lock /
-//                             Parsec grabbing the desktop) — same event beta.2 recovers.
+// CLI + behavioural contract: docs/step3-dxgi-capturer.md "3c CLI contract".
+//   stdout = Annex-B (4-byte start codes, in-band SPS/PPS before every IDR, flushed
+//            per frame). First frame = IDR. Periodic IDR every --gop frames. I/P only.
+//   stdin  = a single byte 'I' (0x49) => force an IDR next frame (cheap PLI recovery,
+//            no respawn). Closed stdin / EOF => clean shutdown (exit 0).
+//   stderr = "[capturer] ..." log lines incl. the per-second emitted/skipped counters.
+//   exit   = 0 clean; non-zero fatal (sender respawns). ACCESS_LOST recovers IN-PROCESS.
 
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 
+#include <fcntl.h>
+#include <io.h>
+
+#include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "nvenc.h"
@@ -39,6 +41,17 @@
 using Microsoft::WRL::ComPtr;
 using Clock = std::chrono::steady_clock;
 
+// All human output goes to stderr; stdout is reserved for the H.264 stream.
+static void Log(const char* fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    fprintf(stderr, "[capturer] ");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    va_end(ap);
+    fflush(stderr);
+}
+static void LogHr(const char* what, HRESULT hr) { Log("%s failed: 0x%08lX", what, (unsigned long)hr); }
+
 static const char* PtrTypeName(UINT t) {
     switch (t) {
         case DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME:   return "monochrome";
@@ -48,135 +61,135 @@ static const char* PtrTypeName(UINT t) {
     }
 }
 
-// FNV-1a 64 over the cursor bitmap + its dimensions/type — a cheap signature so
-// we can tell arrow from I-beam from hand even when DXGI reports the same Type.
+// FNV-1a 64 over the cursor bitmap + dims/type — tells arrow from I-beam from hand
+// even when DXGI reports the same Type (kept for 3d).
 static uint64_t HashShape(const uint8_t* data, UINT len, const DXGI_OUTDUPL_POINTER_SHAPE_INFO& si) {
-    uint64_t h = 1469598103934665603ULL;  // FNV offset basis
+    uint64_t h = 1469598103934665603ULL;
     auto mix = [&h](uint64_t v) { h = (h ^ (v & 0xFF)) * 1099511628211ULL; };
     mix(si.Type); mix(si.Width); mix(si.Height); mix(si.HotSpot.x); mix(si.HotSpot.y);
     for (UINT i = 0; i < len; ++i) { h = (h ^ data[i]) * 1099511628211ULL; }
     return h;
 }
 
-static void LogHr(const char* what, HRESULT hr) {
-    printf("[err] %s failed: 0x%08lX\n", what, (unsigned long)hr);
-    fflush(stdout);
-}
+struct CapturerOptions {
+    UINT monitor = 0;
+    std::string output = "stdout";  // "stdout" or a file path
+    int fps = 60;                   // CAP (change-detection makes the real rate variable)
+    int bitrateKbps = 25000;        // NVENC VBR target
+    int maxrateKbps = 40000;        // NVENC VBR cap
+    int gopFrames = 120;            // IDR interval in frames (~2s@60), NO intra-refresh
+    bool selftest = false;          // 3a change-detection log loop only (no encode)
+    int durationSec = 0;            // 0 = run until stdin EOF / killed (offline testing aid)
+};
 
 class DuplCapturer {
 public:
-    DuplCapturer(UINT outputIndex, std::string encodePath)
-        : outputIndex_(outputIndex), encodePath_(std::move(encodePath)),
-          encoding_(!encodePath_.empty()) {}
+    explicit DuplCapturer(const CapturerOptions& o)
+        : opt_(o), outputIndex_(o.monitor),
+          encoding_(!o.selftest), streamStdout_(o.output == "stdout") {
+        gopIntervalSec_ = (o.fps > 0) ? (double)o.gopFrames / o.fps : 2.0;
+        minEncodeIntervalSec_ = (o.fps > 0) ? 1.0 / o.fps : 0.0;
+    }
     ~DuplCapturer() { Release(); }
 
-    int Run(int durationSec) {
-        if (!InitWithRetry()) {
-            printf("[fatal] could not initialize Desktop Duplication\n");
-            fflush(stdout);
-            return 1;
-        }
+    int Run() {
+        if (!InitWithRetry()) { Log("fatal: could not initialize Desktop Duplication"); return 1; }
 
         if (encoding_) {
-            encFile_ = fopen(encodePath_.c_str(), "wb");
-            if (!encFile_) { printf("[fatal] cannot open %s for writing\n", encodePath_.c_str()); fflush(stdout); return 3; }
+            if (streamStdout_) {
+                _setmode(_fileno(stdout), _O_BINARY);  // raw bytes, no CRLF translation
+                encFile_ = stdout;
+            } else {
+                encFile_ = fopen(opt_.output.c_str(), "wb");
+                if (!encFile_) { Log("fatal: cannot open %s for writing", opt_.output.c_str()); return 3; }
+            }
             if (!setupEncoder()) return 4;
-            printf("[encode] writing Annex-B H.264 to %s (real-change frames only)\n", encodePath_.c_str());
-            fflush(stdout);
+            lastEncode_ = Clock::now();
+            if (streamStdout_) { std::thread(&DuplCapturer::stdinLoop, this).detach(); }
+            Log("encoding -> %s  %dx%d  fps<=%d  VBR %d/%d kbps  gop %d frames (~%.1fs)  no-intra-refresh",
+                streamStdout_ ? "stdout" : opt_.output.c_str(), width_, height_, opt_.fps,
+                opt_.bitrateKbps, opt_.maxrateKbps, opt_.gopFrames, gopIntervalSec_);
         }
 
         const auto startT = Clock::now();
         auto intervalStart = startT;
-
-        // per-interval counters (reset every log)
         uint64_t emitted = 0, skippedTimeout = 0, skippedPointerOnly = 0;
-        // persistent cursor state
         long cursorX = 0, cursorY = 0;
         bool cursorVisible = false;
-        UINT shapeType = 0;          // 0 = none seen yet (for the per-second summary)
-        uint64_t lastShapeHash = 0;  // content hash to detect arrow->I-beam->hand
+        UINT shapeType = 0;
+        uint64_t lastShapeHash = 0;
         std::vector<uint8_t> shapeBuf;
 
         for (;;) {
-            if (durationSec > 0 &&
-                std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - startT).count() >= durationSec) {
-                break;
-            }
+            if (shutdownRequested_.load()) { Log("stdin closed -> shutdown"); break; }
+            const auto now = Clock::now();
+            if (opt_.durationSec > 0 &&
+                std::chrono::duration_cast<std::chrono::seconds>(now - startT).count() >= opt_.durationSec) break;
 
             DXGI_OUTDUPL_FRAME_INFO fi = {};
             ComPtr<IDXGIResource> desktopResource;
             HRESULT hr = dupl_->AcquireNextFrame(kAcquireTimeoutMs, &fi, &desktopResource);
 
             if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-                // no update within the timeout window = the idle path
                 ++skippedTimeout;
-                MaybeLog(intervalStart, emitted, skippedTimeout, skippedPointerOnly,
-                         cursorX, cursorY, cursorVisible, shapeType);
+                // PLI on a static screen: no new change is coming, but a recovering
+                // receiver needs a fresh keyframe -> re-encode the last frame as IDR.
+                if (encoding_ && haveEncodedFrame_ && idrRequested_.exchange(false)) {
+                    if (encoder_.EncodeRepeatIdr()) { lastIdr_ = now; lastEncode_ = now; Log("forced IDR (PLI, static screen)"); }
+                }
+                maybeLog(intervalStart, emitted, skippedTimeout, skippedPointerOnly, cursorX, cursorY, cursorVisible, shapeType);
                 continue;
             }
-            if (hr == DXGI_ERROR_ACCESS_LOST) {
-                printf("[access-lost] duplication lost -> re-init\n");
-                fflush(stdout);
-                recover();
-                continue;
-            }
-            if (FAILED(hr)) {
-                LogHr("AcquireNextFrame", hr);
-                recover();  // treat as recoverable capture loss (mirror beta.2 policy)
-                continue;
-            }
+            if (hr == DXGI_ERROR_ACCESS_LOST) { Log("access-lost: duplication lost -> re-init"); recover(); continue; }
+            if (FAILED(hr)) { LogHr("AcquireNextFrame", hr); recover(); continue; }
 
-            // ---- acquire succeeded: we now HOLD a frame and MUST ReleaseFrame ----
+            // ---- acquire succeeded: we HOLD a frame and MUST ReleaseFrame ----
             const bool screenChanged = (fi.LastPresentTime.QuadPart != 0);
             if (screenChanged) {
-                ++emitted;  // real desktop change -> encode
-                // 3b: feed ONLY real-change frames to NVENC, while the frame is still
-                // held (CopyResource happens before ReleaseFrame below).
+                ++emitted;
                 if (encoding_) {
-                    ComPtr<ID3D11Texture2D> frameTex;
-                    if (SUCCEEDED(desktopResource.As(&frameTex))) {
-                        auto now = Clock::now();
-                        bool forceIdr = !haveEncodedFrame_ ||
-                            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastIdr_).count()
-                                >= (long long)(kIdrIntervalSec * 1000);
-                        if (!encoder_.EncodeFrame(frameTex.Get(), forceIdr)) {
-                            printf("[encode] frame failed -> recover\n"); fflush(stdout);
-                            dupl_->ReleaseFrame();
-                            recover();
-                            continue;
+                    const bool wallIdr = !haveEncodedFrame_ ||
+                        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastIdr_).count()
+                            >= (long long)(gopIntervalSec_ * 1000);
+                    const bool pli = idrRequested_.exchange(false);
+                    const bool forceIdr = wallIdr || pli;
+                    const bool underCap = haveEncodedFrame_ &&
+                        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEncode_).count()
+                            < (long long)(minEncodeIntervalSec_ * 1000);
+                    if (forceIdr || !underCap) {  // else: over the fps cap -> coalesce (skip)
+                        ComPtr<ID3D11Texture2D> frameTex;
+                        if (SUCCEEDED(desktopResource.As(&frameTex))) {
+                            if (!encoder_.EncodeFrame(frameTex.Get(), forceIdr)) {
+                                Log("encode failed -> recover"); dupl_->ReleaseFrame(); recover(); continue;
+                            }
+                            lastEncode_ = now;
+                            haveEncodedFrame_ = true;
+                            if (forceIdr) lastIdr_ = now;
                         }
-                        if (forceIdr) { lastIdr_ = now; haveEncodedFrame_ = true; }
                     }
                 }
             } else {
-                ++skippedPointerOnly; // pointer/metadata-only -> SKIP the screen encode
+                ++skippedPointerOnly;  // pointer/metadata-only -> screen NOT encoded
             }
 
-            // cursor position is only valid when the mouse-update timestamp is set
+            // cursor metadata (every acquire; position valid when the mouse ts is set)
             if (fi.LastMouseUpdateTime.QuadPart != 0) {
                 cursorX = fi.PointerPosition.Position.x;
                 cursorY = fi.PointerPosition.Position.y;
                 cursorVisible = (fi.PointerPosition.Visible != FALSE);
             }
-            // a new cursor shape is available this frame -> fetch it (kept for 3d).
-            // NB: the struct field is PointerShapeBufferSize (the spec's
-            // "PointerShapeBufferLength" was approximate).
-            if (fi.PointerShapeBufferSize > 0) {
+            if (fi.PointerShapeBufferSize > 0) {  // a new cursor shape is available
                 if (shapeBuf.size() < fi.PointerShapeBufferSize) shapeBuf.resize(fi.PointerShapeBufferSize);
                 UINT required = 0;
                 DXGI_OUTDUPL_POINTER_SHAPE_INFO si = {};
                 HRESULT shr = dupl_->GetFramePointerShape(
                     static_cast<UINT>(shapeBuf.size()), shapeBuf.data(), &required, &si);
                 if (SUCCEEDED(shr)) {
-                    // DXGI delivers a shape only when it actually changes, but two
-                    // distinct shapes (arrow vs I-beam) can share si.Type, so detect
-                    // on a content hash of the bitmap + dims, not on Type alone.
                     uint64_t h = HashShape(shapeBuf.data(), required ? required : fi.PointerShapeBufferSize, si);
                     if (h != lastShapeHash) {
-                        printf("[cursor-shape] type=%s(%u) %ux%u hotspot=(%d,%d) bytes=%u\n",
-                               PtrTypeName(si.Type), si.Type, si.Width, si.Height,
-                               si.HotSpot.x, si.HotSpot.y, fi.PointerShapeBufferSize);
-                        fflush(stdout);
+                        Log("cursor-shape type=%s(%u) %ux%u hotspot=(%d,%d) bytes=%u",
+                            PtrTypeName(si.Type), si.Type, si.Width, si.Height,
+                            si.HotSpot.x, si.HotSpot.y, fi.PointerShapeBufferSize);
                         lastShapeHash = h;
                     }
                     shapeType = si.Type;
@@ -186,43 +199,60 @@ public:
             }
 
             HRESULT rr = dupl_->ReleaseFrame();
-            if (FAILED(rr)) {
-                LogHr("ReleaseFrame", rr);
-                recover();
-                continue;
-            }
+            if (FAILED(rr)) { LogHr("ReleaseFrame", rr); recover(); continue; }
 
-            MaybeLog(intervalStart, emitted, skippedTimeout, skippedPointerOnly,
-                     cursorX, cursorY, cursorVisible, shapeType);
+            maybeLog(intervalStart, emitted, skippedTimeout, skippedPointerOnly, cursorX, cursorY, cursorVisible, shapeType);
         }
 
         if (encoding_) {
             encoder_.Shutdown();
-            if (encFile_) { fclose(encFile_); encFile_ = nullptr; }
-            printf("[encode] done: %llu frames, %llu bytes -> %s\n",
-                   (unsigned long long)encoder_.framesEncoded(),
-                   (unsigned long long)encoder_.bytesOut(), encodePath_.c_str());
+            if (encFile_ && encFile_ != stdout) fclose(encFile_);
+            encFile_ = nullptr;
+            Log("done: %llu frames encoded, %llu bytes",
+                (unsigned long long)encoder_.framesEncoded(), (unsigned long long)encoder_.bytesOut());
         }
-        printf("[done] duration %ds elapsed\n", durationSec);
-        fflush(stdout);
         return 0;
     }
 
 private:
     static constexpr UINT kAcquireTimeoutMs = 250;  // idle wakes ~4x/s to still log
 
-    void MaybeLog(std::chrono::steady_clock::time_point& intervalStart,
-                  uint64_t& emitted, uint64_t& skippedTimeout, uint64_t& skippedPointerOnly,
-                  long cursorX, long cursorY, bool cursorVisible, UINT shapeType) {
+    void stdinLoop() {
+        HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+        char buf[64]; DWORD n = 0;
+        for (;;) {
+            BOOL ok = ReadFile(h, buf, sizeof(buf), &n, nullptr);
+            if (!ok || n == 0) { shutdownRequested_.store(true); return; }  // EOF / closed pipe
+            for (DWORD i = 0; i < n; ++i) if (buf[i] == 'I' || buf[i] == 'i') idrRequested_.store(true);
+        }
+    }
+
+    void maybeLog(Clock::time_point& intervalStart, uint64_t& emitted, uint64_t& skippedTimeout,
+                  uint64_t& skippedPointerOnly, long cursorX, long cursorY, bool cursorVisible, UINT shapeType) {
         auto now = Clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - intervalStart).count() < 1000) return;
-        printf("emitted=%llu skipped_timeout=%llu skipped_pointeronly=%llu cursor=(%ld,%ld,%s,%s)\n",
-               (unsigned long long)emitted, (unsigned long long)skippedTimeout,
-               (unsigned long long)skippedPointerOnly,
-               cursorX, cursorY, cursorVisible ? "visible" : "hidden", PtrTypeName(shapeType));
-        fflush(stdout);
-        emitted = skippedTimeout = skippedPointerOnly = 0;  // per-second interval counters
+        Log("emitted=%llu skipped_timeout=%llu skipped_pointeronly=%llu cursor=(%ld,%ld,%s,%s)",
+            (unsigned long long)emitted, (unsigned long long)skippedTimeout, (unsigned long long)skippedPointerOnly,
+            cursorX, cursorY, cursorVisible ? "visible" : "hidden", PtrTypeName(shapeType));
+        emitted = skippedTimeout = skippedPointerOnly = 0;
         intervalStart = now;
+    }
+
+    bool setupEncoder() {
+        encoder_.Shutdown();
+        NvEncConfig cfg;
+        cfg.width = width_; cfg.height = height_;
+        cfg.fps = opt_.fps; cfg.targetKbps = opt_.bitrateKbps; cfg.maxKbps = opt_.maxrateKbps;
+        cfg.vbvMs = 250; cfg.idrIntervalSec = gopIntervalSec_;
+        haveEncodedFrame_ = false;  // first frame after (re)init = IDR
+        if (!encoder_.Init(device_.Get(), context_.Get(), cfg, encFile_)) { Log("fatal: NVENC init failed"); return false; }
+        return true;
+    }
+
+    void recover() {
+        if (encoding_) encoder_.Shutdown();
+        ReinitWithRetry();
+        if (encoding_) setupEncoder();
     }
 
     bool Init(bool quiet) {
@@ -230,15 +260,14 @@ private:
         auto fail = [&](const char* w, HRESULT h) { if (!quiet) LogHr(w, h); return false; };
 
         D3D_FEATURE_LEVEL fl = {};
-        HRESULT hr = D3D11CreateDevice(
-            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
-            nullptr, 0, D3D11_SDK_VERSION, &device_, &fl, &context_);
+        HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                                       D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0,
+                                       D3D11_SDK_VERSION, &device_, &fl, &context_);
         if (FAILED(hr)) return fail("D3D11CreateDevice", hr);
 
         ComPtr<IDXGIDevice> dxgiDevice;
         hr = device_.As(&dxgiDevice);
         if (FAILED(hr)) return fail("QI IDXGIDevice", hr);
-
         ComPtr<IDXGIAdapter> adapter;
         hr = dxgiDevice->GetAdapter(&adapter);
         if (FAILED(hr)) return fail("GetAdapter", hr);
@@ -246,7 +275,6 @@ private:
         ComPtr<IDXGIOutput> output;
         hr = adapter->EnumOutputs(outputIndex_, &output);
         if (FAILED(hr)) return fail("EnumOutputs", hr);
-
         DXGI_OUTPUT_DESC desc = {};
         output->GetDesc(&desc);
         width_ = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
@@ -255,120 +283,91 @@ private:
         ComPtr<IDXGIOutput1> output1;
         hr = output.As(&output1);
         if (FAILED(hr)) return fail("QI IDXGIOutput1", hr);
-
         hr = output1->DuplicateOutput(device_.Get(), &dupl_);
         if (FAILED(hr)) return fail("DuplicateOutput", hr);
 
-        printf("[init] output=%u  %dx%d  (duplication ready)\n", outputIndex_, width_, height_);
-        fflush(stdout);
+        Log("init: output=%u  %dx%d  (duplication ready)", outputIndex_, width_, height_);
         return true;
     }
 
     bool InitWithRetry() { return ReinitWithRetry(); }
 
-    // On ACCESS_LOST (desktop switch, screen lock / secure desktop, Parsec grabbing
-    // the desktop) DuplicateOutput keeps failing until the normal desktop returns.
-    // Retry indefinitely with throttled logging so a long lock never crashes us and
-    // never spams — it recovers by itself on unlock (mirrors the sender's beta.2
-    // crash-recovery policy). Always returns true (waits for the desktop).
+    // On ACCESS_LOST DuplicateOutput keeps failing until the normal desktop returns
+    // (screen lock / desktop switch / Parsec). Retry indefinitely, throttled logging,
+    // so a long lock never crashes us — recovers on its own (mirrors beta.2 policy).
     bool ReinitWithRetry() {
         for (int attempt = 0; ; ++attempt) {
             if (Init(/*quiet=*/attempt > 0)) {
-                if (attempt > 0) { printf("[reinit] recovered after %d attempt(s)\n", attempt); fflush(stdout); }
+                if (attempt > 0) Log("reinit: recovered after %d attempt(s)", attempt);
                 return true;
             }
-            if (attempt == 0 || (attempt % 20) == 0) {  // first, then ~every 5s
-                printf("[reinit] duplication unavailable (attempt %d) — retrying (screen locked / desktop switch?)\n",
-                       attempt + 1);
-                fflush(stdout);
-            }
+            if (attempt == 0 || (attempt % 20) == 0)
+                Log("reinit: duplication unavailable (attempt %d) — retrying (locked / desktop switch?)", attempt + 1);
             Sleep(250);
         }
     }
 
     void Release() {
-        // In the loop we always ReleaseFrame before reinit, so we don't hold a
-        // frame here; just drop the COM references.
         dupl_.Reset();
         context_.Reset();
         device_.Reset();
     }
 
+    CapturerOptions opt_;
     UINT outputIndex_;
     int width_ = 0, height_ = 0;
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
     ComPtr<IDXGIOutputDuplication> dupl_;
 
-    // --- 3b encode state (only when --encode was given) ---
-    std::string encodePath_;
+    // encode state
     bool encoding_ = false;
+    bool streamStdout_ = false;
     FILE* encFile_ = nullptr;
     NvEncoder encoder_;
-    Clock::time_point lastIdr_{};
-    bool haveEncodedFrame_ = false;  // false => force IDR on the next real-change frame
-    static constexpr double kIdrIntervalSec = 2.0;
+    Clock::time_point lastIdr_{}, lastEncode_{};
+    bool haveEncodedFrame_ = false;
+    double gopIntervalSec_ = 2.0;
+    double minEncodeIntervalSec_ = 0.0;
 
-    // (Re)create the encoder bound to the CURRENT device_ (called after each
-    // duplication re-init, since ACCESS_LOST recovery recreates the device).
-    bool setupEncoder() {
-        encoder_.Shutdown();
-        NvEncConfig cfg;
-        cfg.width = width_; cfg.height = height_;
-        cfg.fps = 60; cfg.targetKbps = 25000; cfg.maxKbps = 40000;
-        cfg.vbvMs = 250; cfg.idrIntervalSec = kIdrIntervalSec;
-        haveEncodedFrame_ = false;  // first frame after (re)init = IDR
-        if (!encoder_.Init(device_.Get(), context_.Get(), cfg, encFile_)) {
-            printf("[fatal] NVENC init failed\n"); fflush(stdout);
-            return false;
-        }
-        return true;
-    }
-
-    // Duplication recovery that also rebuilds the encoder (the encoder is bound to
-    // the device, which Init() recreates). Encoder is torn down BEFORE the old
-    // device is released, then rebuilt against the new one (fresh SPS/PPS + IDR).
-    void recover() {
-        if (encoding_) encoder_.Shutdown();
-        ReinitWithRetry();
-        if (encoding_) setupEncoder();
-    }
+    // control channel (set from the stdin thread)
+    std::atomic<bool> idrRequested_{false};
+    std::atomic<bool> shutdownRequested_{false};
 };
 
 int main(int argc, char** argv) {
-    int durationSec = 0;   // 0 = run until killed
-    UINT outputIndex = 0;
-    std::string encodePath;  // empty => 3a harness only (no NVENC)
+    CapturerOptions o;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--selftest") {
-            // default mode; explicit flag kept for the harness/spec
-        } else if (a == "--duration" && i + 1 < argc) {
-            durationSec = std::atoi(argv[++i]);
-        } else if (a == "--output" && i + 1 < argc) {
-            outputIndex = static_cast<UINT>(std::atoi(argv[++i]));
-        } else if (a == "--encode" && i + 1 < argc) {
-            encodePath = argv[++i];
-        } else if (a == "--help" || a == "-h") {
-            printf("dxgi-capturer (Step 3a change-detection + 3b NVENC)\n"
-                   "  --selftest         run the acquire/classify loop (default)\n"
-                   "  --duration <sec>   stop after N seconds (default: run forever)\n"
-                   "  --output <index>   DXGI output to duplicate (default 0)\n"
-                   "  --encode <file>    NVENC-encode real-change frames to a .h264 file (3b)\n");
+        auto next = [&](int& out) { if (i + 1 < argc) out = std::atoi(argv[++i]); };
+        if (a == "--selftest") o.selftest = true;
+        else if (a == "--output" && i + 1 < argc) o.output = argv[++i];
+        else if (a == "--monitor" && i + 1 < argc) o.monitor = (UINT)std::atoi(argv[++i]);
+        else if (a == "--fps") next(o.fps);
+        else if (a == "--bitrate") next(o.bitrateKbps);
+        else if (a == "--maxrate") next(o.maxrateKbps);
+        else if (a == "--gop") next(o.gopFrames);
+        else if (a == "--duration") next(o.durationSec);
+        else if (a == "--help" || a == "-h") {
+            printf("dxgi-capturer (Step 3 custom DXGI capturer)\n"
+                   "  --output stdout|<path>   H.264 Annex-B to stdout (default) or a file\n"
+                   "  --monitor <idx>          DXGI output index (default 0)\n"
+                   "  --fps <n>                framerate cap (default 60)\n"
+                   "  --bitrate <kbps>         NVENC VBR target (default 25000)\n"
+                   "  --maxrate <kbps>         NVENC VBR cap (default 40000)\n"
+                   "  --gop <frames>           IDR interval (~2s@60, default 120; NO intra-refresh)\n"
+                   "  --selftest               3a change-detection log loop only (no encode)\n"
+                   "  --duration <sec>         stop after N seconds (offline testing)\n"
+                   "  stdin: byte 'I' -> force IDR; EOF -> clean shutdown\n");
             return 0;
-        } else {
-            printf("[warn] ignoring unknown arg: %s\n", a.c_str());
-        }
+        } else Log("ignoring unknown arg: %s", a.c_str());
     }
 
-    // Per-monitor DPI aware so width/height and cursor coords are physical pixels.
-    SetProcessDPIAware();
+    SetProcessDPIAware();  // physical pixels for width/height + cursor coords
+    Log("start: monitor=%u output=%s fps=%d %s", o.monitor, o.output.c_str(), o.fps,
+        o.selftest ? "(selftest, no encode)" : "");
 
-    printf("[start] dxgi-capturer (output=%u, duration=%ds%s)\n",
-           outputIndex, durationSec, encodePath.empty() ? "" : ", NVENC encode");
-    fflush(stdout);
-
-    DuplCapturer cap(outputIndex, encodePath);
-    return cap.Run(durationSec);
+    DuplCapturer cap(o);
+    return cap.Run();
 }
