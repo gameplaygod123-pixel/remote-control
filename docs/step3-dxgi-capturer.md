@@ -120,6 +120,41 @@ Where the code lives: `apps/desktop/native/dxgi-capturer/` (new). A WC-owned bui
 script (MSVC/cmake) produces `capturer.exe`; a `dev/` harness or a `--selftest` flag
 runs the 3a log loop.
 
+#### 3a — implementation status & notes (Windows-Claude, 2026-07-08: DONE, verified)
+
+Built + verified on the real RTX 3060 Ti agent. Code lives in
+[`apps/desktop/native/dxgi-capturer/`](../apps/desktop/native/dxgi-capturer/)
+(`main.cpp` + `build.ps1` [single-file `cl.exe`] + `CMakeLists.txt`); full build
+steps, the exact decider numbers, and the run recipe are in that dir's
+[`README.md`](../apps/desktop/native/dxgi-capturer/README.md). All 3a success
+criteria above passed:
+
+- static + still → `emitted≈1/s`, `skipped_timeout` dominant.
+- static + **mouse moving** → `emitted≈1/s`, `skipped_pointeronly ~60/s`, cursor
+  tracking. (the decider vs beta.4.)
+- real change (video/scroll) → `emitted` tracks the change rate.
+- shape change → logged (desktop arrow `color 32x32` ↔ Notepad I-beam
+  `monochrome 32x64`); detected via a content hash, not `Type` alone (arrow and
+  I-beam can share `Type`).
+- `ACCESS_LOST` → owner's live Win+L (~22s): logged, retried quietly, recovered
+  after 87 attempts, resumed — no crash, no spam. Multiple ACCESS_LOST events
+  recovered in one run = Parsec coexistence holds.
+
+Notes / spec corrections found while implementing (for 3b onward):
+- The frame-info field is **`PointerShapeBufferSize`**, not `PointerShapeBufferLength`
+  (the name in the 3a spec above is approximate).
+- **ACCESS_LOST retry must be effectively indefinite** with throttled logging — a
+  fixed short cap (an early 15s cap) kills the process during a normal-length screen
+  lock. It waits for the desktop and recovers on its own (the sender's beta.2 policy).
+- Measuring "static screen": any animating on-screen UI (VSCode/this very tool's
+  spinner/streaming) drives *real* DXGI presents, so a naive static test reads
+  `emitted=10-22/s`. For a true static reading, `Shell.Application.MinimizeAll()`
+  first (residual ≈1/s). Mouse-move / shape-change deciders are scriptable via
+  P/Invoke `SetCursorPos` + a Notepad hover (no physical mouse needed).
+- Toolchain now installed on the agent: VS 2022 Build Tools (VCTools) + Windows SDK
+  10.0.26100 (`cl.exe` 14.44). DXGI headers are in the SDK's `shared/`, not `um/`;
+  `SetProcessDPIAware` needs `user32.lib`.
+
 ### 3b — DXGI → NVENC direct, zero-copy (still standalone, → .h264 file)
 
 Add NVENC (NVIDIA Video Codec SDK). Feed the acquired `ID3D11Texture2D` straight to
