@@ -87,7 +87,9 @@ bundle().then((m) => {
     const cfg = { width: 1920, height: 1080, fps: 60, codec: 'h264', minBitrateKbps: 6000, startBitrateKbps: 20000, maxBitrateKbps: 30000, cursor: 'composited' }
     const nv = buildFfmpegArgs(cfg, { gop: 60 }).join(' ')
     check('nvenc: ddagrab DXGI capture at target fps', nv.includes('ddagrab=output_idx=0:framerate=60'))
-    check('nvenc: GPU scale to config res with nv12', nv.includes('scale_d3d11=1920:1080:format=nv12'))
+    // zero-copy: NVENC ingests the d3d11 RGB surface directly (no scale_d3d11 --
+    // its VideoProcessor won't configure BGRA->NV12 on this GPU; real-ffmpeg run).
+    check('nvenc: zero-copy, NO scale_d3d11 filter', !nv.includes('scale_d3d11'))
     check('nvenc: low-latency flags (ull, bf 0, zerolatency)', nv.includes('-tune ull') && nv.includes('-bf 0') && nv.includes('-zerolatency 1'))
     check('nvenc: CBR at startBitrate (20000k), gop 60', nv.includes('-rc cbr') && nv.includes('-b:v 20000k') && nv.includes('-g 60'))
     check('nvenc: Annex-B pipe out with in-band params', nv.includes('-bsf:v dump_extra') && nv.includes('-f h264') && nv.includes('-flush_packets 1') && nv.endsWith('pipe:1'))

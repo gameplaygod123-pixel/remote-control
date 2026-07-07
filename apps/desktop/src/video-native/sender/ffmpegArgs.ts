@@ -77,8 +77,21 @@ function encoderArgs(
 function filterChain(encoder: SenderEncoder, config: VideoConfig, outputIdx: number): string {
   const grab = `ddagrab=output_idx=${outputIdx}:framerate=${config.fps}`
   if (encoder === 'h264_nvenc') {
-    return `${grab},scale_d3d11=${config.width}:${config.height}:format=nv12`
+    // TRUE zero-copy: hand ddagrab's D3D11 RGB surface straight to NVENC, which
+    // ingests the d3d11 frame and does RGB->NV12 on-GPU internally (verified:
+    // "Using input frames context (format d3d11) with h264_nvenc encoder").
+    // We deliberately do NOT insert scale_d3d11 -- the golden-rule-#1 real-ffmpeg
+    // run found its D3D11 VideoProcessor cannot configure a BGRA->NV12 output pad
+    // on this GPU/driver (reproduced on ffmpeg 8.1 release AND master 2026, fails
+    // even for a plain resize), and CUDA hwmap is "not implemented" here too. So
+    // there is no working GPU downscale path -- NVENC encodes at the native
+    // capture resolution (config.width/height is advisory for this path; the
+    // helper reports the real size from ffmpeg). This is also lower-latency than
+    // the old design: capture -> encode with zero intermediate filter passes.
+    return grab
   }
+  // MF fallback (non-NVIDIA): must hand CPU frames to h264_mf, so hwdownload then
+  // CPU-scale to the target resolution.
   return `${grab},hwdownload,format=bgra,scale=${config.width}:${config.height}`
 }
 

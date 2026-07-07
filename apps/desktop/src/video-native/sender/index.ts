@@ -189,7 +189,21 @@ function startSession(config: VideoConfig): void {
     send({ evt: 'ice', candidate, sdpMid: mid, sdpMLineIndex: null })
   })
   pc.onStateChange((state) => {
-    if (current === session) log(`pc state=${state}`)
+    if (current !== session) return
+    log(`pc state=${state}`)
+    // Controller went away for good. Tear the session down so ffmpeg stops
+    // capturing -- otherwise ddagrab keeps a DXGI duplication open and NVENC
+    // keeps an encode session busy with nobody watching (costly, and the box
+    // shares NVENC's limited session count with Parsec). The host re-issues
+    // start-session on the next pairing, so nothing is lost by stopping now.
+    // Only terminal states: 'disconnected' can be a transient ICE blip that
+    // recovers to 'connected', and killing capture then would drop the whole
+    // stream instead of a brief freeze; libjuice progresses a real drop to
+    // 'failed' on consent timeout, which we DO act on.
+    if (state === 'failed' || state === 'closed') {
+      log(`pc ${state} -> closing session (stop ffmpeg, free NVENC/DXGI)`)
+      closeSession()
+    }
   })
 
   // ── item A: incoming RTCP on the send track -> detect PLI -> force IDR ──

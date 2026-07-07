@@ -410,8 +410,20 @@ function AgentView(): React.JSX.Element {
     // (pc.connectionState === 'connected') since the controller already has
     // full live video at that point and there's no point spending capture
     // time/bandwidth on a thumbnail nobody's looking at.
+    //
+    // ALSO paused whenever the native video pipeline is engaged
+    // (useNativeVideoRef): captureThumbnail() drives Chromium's DXGI Desktop
+    // Duplication (desktopCapturer.getSources), and the forked video-sender's
+    // ffmpeg ddagrab holds its own DXGI duplication of the same output. Two
+    // duplicators race the frame's keyed mutex -> "keyed mutex was abandoned"
+    // (HRESULT 0x887A0026) -> ddagrab dies -> ffmpeg exits -> respawn loop
+    // (seen on the first real-hardware run). ffmpeg only ever runs inside the
+    // `if (useNativeVideoRef.current)` branch below, so gating on the same flag
+    // guarantees the two never capture at once. (Trade-off: this machine shows
+    // no live idle thumbnail once native is negotiated -- MonitorIcon fallback
+    // instead; a ddagrab-sourced thumbnail is a follow-up.)
     const thumbnailInterval = setInterval(async () => {
-      if (cancelled || pc?.connectionState === 'connected') return
+      if (cancelled || pc?.connectionState === 'connected' || useNativeVideoRef.current) return
       const image = await window.api.agent.captureThumbnail()
       if (image) client?.send({ type: 'device-thumbnail', deviceId: agentDeviceId, image })
     }, THUMBNAIL_INTERVAL_MS)
@@ -712,6 +724,9 @@ function AgentView(): React.JSX.Element {
       pc?.close()
       client?.close()
       void window.api.inputHelper.stopSession()
+      // Stop the native video capture too (mirror of inputHelper): on a reconnect
+      // or unmount, leave no ffmpeg/ddagrab holding DXGI + an NVENC session.
+      if (useNativeVideoRef.current) void window.api.videoSender.stopSession()
     }
   }, [deviceId, pin, attachChannel])
 
