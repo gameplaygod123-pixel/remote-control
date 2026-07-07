@@ -17,9 +17,16 @@ import type { VideoConfig } from '../shared/contract'
  *  (needs a per-frame GPU->CPU hwdownload, ~130% CPU) -- see RESULTS.md §C. */
 export type SenderEncoder = 'h264_nvenc' | 'h264_mf'
 
+/** `-g` value used with intra-refresh: huge, so NVENC never emits a periodic full
+ *  IDR (the refresh rolls through P-frames instead). WC-verified on the RTX agent
+ *  (`-intra-refresh 1 -g 999999` -> 1 I-frame at start, no periodic keyframe). */
+export const NVENC_INTRA_REFRESH_GOP = 999999
+
 export interface FfmpegArgOptions {
-  /** GOP length in frames. Short GOP self-heals corruption within ~1 GOP at
-   *  ~no bitrate cost under CBR (phase1/NOTES #1.2). Default 60 = 1s @ 60fps. */
+  /** `-g` value in frames. With intra-refresh (Step 1) there is no periodic IDR,
+   *  so this is deliberately HUGE by default (NVENC_INTRA_REFRESH_GOP) to suppress
+   *  any periodic keyframe; recovery is via forced-idr on PLI. Override only for
+   *  tests / experiments. */
   gop?: number
   encoder?: SenderEncoder
   /** DXGI output index to duplicate (0 = primary). Multi-monitor is Phase 3. */
@@ -72,6 +79,20 @@ function encoderArgs(
       `${Math.max(1, Math.round(maxBitrateKbps / 4))}k`, // ~250ms burst bound
       '-bf',
       '0', // NO B-frames (no reorder delay)
+      // Intra-refresh instead of a periodic full IDR (Step 1, guide §4.1 --
+      // streaming-improvements-plan.md). A full IDR every GOP is a bitrate SPIKE
+      // -> a ~1s micro-stutter and a non-flat bitrate. Intra-refresh rolls the
+      // refresh across a band of P-frames every cycle so the bitrate stays flat
+      // and loss self-heals without a spike. `-g` is set very large so there is
+      // NO periodic IDR (WC-verified on the RTX agent: 1 I-frame at start, rolling
+      // I-macroblocks in the P-frames after, decode clean). `-forced-idr` keeps a
+      // PLI / session-start able to force a REAL IDR -- now our only full-frame
+      // recovery path -- and `-bsf:v dump_extra` still repeats SPS/PPS in-band so a
+      // mid-stream join / post-respawn decoder still gets parameter sets.
+      '-intra-refresh',
+      '1',
+      '-forced-idr',
+      '1',
       '-g',
       String(gop),
       '-delay',
@@ -145,7 +166,7 @@ function filterChain(encoder: SenderEncoder, config: VideoConfig, outputIdx: num
  *    ('LongStartSequence') consumes.
  */
 export function buildFfmpegArgs(config: VideoConfig, opts: FfmpegArgOptions = {}): string[] {
-  const gop = opts.gop ?? 60
+  const gop = opts.gop ?? NVENC_INTRA_REFRESH_GOP
   const encoder = opts.encoder ?? 'h264_nvenc'
   const outputIdx = opts.outputIdx ?? 0
   const preset = opts.preset ?? 'p1'

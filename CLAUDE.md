@@ -216,7 +216,21 @@ to push FPS.
   change-detection = the real Parsec-GPU fix + proper cursor (reuses beta.4's cursor
   channel + Mac CSS overlay, sourcing shape from DXGI metadata)**; Step 4 FEC
   (deferred). Doing 0→1→2 first (cheap, existing ffmpeg pipeline), then Step 3
-  (big native, phased, prerelease-per-substep). **NOW EXECUTING Step 0.**
+  (big native, phased, prerelease-per-substep).
+- **Step 0 DONE — full release v1.25.0** (reverted beta.4; cursor overlay plumbing
+  kept DORMANT behind `PR_CURSOR_OVERLAY`, reused in Step 3d; rolls up
+  60fps+VBR≤40, ddagrab crash-recovery, dup_frames, HUD telemetry, stuck-key).
+- **Step 1 — intra-refresh → PRERELEASE v1.25.1-beta.1 (SHIPPED, awaiting verify):**
+  WC confirmed `h264_nvenc` supports `-intra-refresh`/`-forced-idr` on the RTX agent
+  and test-encoded it (1 I-frame at start, rolling I-MBs after, no periodic IDR,
+  decode clean, forced-idr on PLI still accepted). `ffmpegArgs.ts` nvenc now adds
+  `-intra-refresh 1 -forced-idr 1` and sets `-g` to `NVENC_INTRA_REFRESH_GOP`
+  (999999 — no periodic full IDR; recovery via PLI→forced-idr; dump_extra still
+  repeats SPS/PPS in-band for mid-join). Unit tests updated + pass; built via
+  build-win.sh. **NEXT: WC installs beta.1 over v1.25.0, controls a session on
+  ddagrab → confirm HUD bitrate is FLAT (no ~1s spikes), no banding/glitch, PLI
+  recovery (Back/reconnect) still restores the stream. If clean → promote v1.25.1,
+  then Step 2 (multi-slice + present tuning).**
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller

@@ -121,7 +121,7 @@ bundle()
         maxBitrateKbps: 30000,
         cursor: 'composited'
       }
-      const nv = buildFfmpegArgs(cfg, { gop: 60 }).join(' ')
+      const nv = buildFfmpegArgs(cfg, {}).join(' ')
       check(
         'nvenc: ddagrab DXGI capture at target fps',
         nv.includes('ddagrab=output_idx=0:framerate=60')
@@ -144,11 +144,16 @@ bundle()
         nv.includes('-tune ull') && nv.includes('-bf 0') && nv.includes('-zerolatency 1')
       )
       check(
-        'nvenc: VBR target 20000k + maxrate cap 30000k, gop 60',
-        nv.includes('-rc vbr') &&
-          nv.includes('-b:v 20000k') &&
-          nv.includes('-maxrate 30000k') &&
-          nv.includes('-g 60')
+        'nvenc: VBR target 20000k + maxrate cap 30000k',
+        nv.includes('-rc vbr') && nv.includes('-b:v 20000k') && nv.includes('-maxrate 30000k')
+      )
+      // Step 1: intra-refresh replaces the periodic full IDR (no ~1s bitrate spike).
+      check(
+        'nvenc: intra-refresh + forced-idr, NO periodic IDR (-g huge, not 60)',
+        nv.includes('-intra-refresh 1') &&
+          nv.includes('-forced-idr 1') &&
+          nv.includes('-g 999999') &&
+          !nv.includes('-g 60')
       )
       check(
         'nvenc: Annex-B pipe out with in-band params',
