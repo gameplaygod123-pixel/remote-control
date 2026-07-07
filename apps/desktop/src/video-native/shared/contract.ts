@@ -65,11 +65,19 @@ export interface VideoConfig {
 export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   width: 1920,
   height: 1080,
-  fps: 60,
+  // 120 fps: the Mac controller is ProMotion 120Hz and a 144Hz+ source can feed
+  // it, so 120 is the perceptible smoothness ceiling (min of both displays). The
+  // NVENC path ignores width/height (encodes at native capture res) but honors fps
+  // via ddagrab's framerate + the 1s GOP. Real-hardware verified via prerelease.
+  fps: 120,
   codec: 'h264',
-  minBitrateKbps: 6_000,
-  startBitrateKbps: 20_000,
-  maxBitrateKbps: 30_000,
+  // CBR target = startBitrateKbps (item D). 60 Mbps to keep 1440p120 crisp per
+  // frame (2x the frames of 60fps need ~2x bits); Parsec runs ~60-70 Mbps here.
+  // The owner's direct ~11ms link has ample headroom. Sweep via
+  // VIDEO_NVENC_BITRATE_KBPS env without a rebuild.
+  minBitrateKbps: 20_000,
+  startBitrateKbps: 60_000,
+  maxBitrateKbps: 70_000,
   cursor: 'composited'
 }
 
