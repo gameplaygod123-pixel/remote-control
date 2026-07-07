@@ -100,12 +100,38 @@ to push FPS.
   WebRTC untouched): `fps 60→120`, CBR `startBitrateKbps 20→60 Mbps` (2× frames
   need ~2× bits; Parsec runs ~60-70 here), min 6→20, max 30→70. Built via
   `build-win.sh` @ `2e8e4aa` (all 3 packed checks pass, signed, 175MB), published
-  **PRERELEASE v1.25.0-beta.1** off `feat/native-video` (golden rule #1 — native
-  pipeline). **NEXT: Windows-Claude installs over v1.24.0, confirms HUD shows
-  `120fps · 2560×1440`, feels smoother, NVENC keeps up (agent log, no dropped
-  frames); sweep bitrate live via `VIDEO_NVENC_BITRATE_KBPS` env (50000/70000) w/o
-  rebuild if 60 isn't the sweet spot → then promote full v1.25.0.** fps has no env
-  override (locked in config) so 120 requires this build.
+  **PRERELEASE v1.25.0-beta.1** off `feat/native-video` (golden rule #1). beta.1
+  e2e: **120fps encoded perfectly** (HUD 113fps, Jitter 3ms, nvidia-smi 122fps @
+  67% util, headroom) BUT after 1-3 min the whole session froze (mouse+kbd dead,
+  frame stuck, HUD blank) — SUPERSEDED by beta.2.
+- **ROOT CAUSE of the beta.1 freeze (Windows-Claude, real hardware):** the "mouse
+  death" was a SYMPTOM. `video-sender.log` showed `ffmpeg [ddagrab] AcquireNextFrame
+  failed: 887a0026` = **DXGI_ERROR_ACCESS_LOST** — ddagrab loses Desktop Duplication
+  on a desktop/mode switch or a 2nd capturer (Parsec was running concurrently!) →
+  ffmpeg exits code=1 → sender helper reported FATAL → **full re-pair tore down
+  BOTH video+input** for seconds (sometimes hung at "connecting"). NOT ping/pong
+  (0ms), NOT CPU (1%), NOT NVENC (67% free), input-helper healthy throughout. Plus
+  `juice: Lost connectivity` (ICE) 2×/15min — the fixed 60 Mbps CBR straining the
+  link. (Aside: running Parsec + our ffmpeg at once fights over DXGI duplication +
+  dual NVENC — don't; close Parsec.)
+- **FIX → PRERELEASE v1.25.0-beta.2 (`edd6a59`):** (1) **ddagrab crash recovery**
+  (`frameSource.ts`) — an ffmpeg exit AFTER it streamed is treated as recoverable
+  capture loss: **restart ffmpeg in place** (~300ms, fresh IDR + in-band SPS/PPS)
+  WITHOUT tearing down the peer connection (brief ~0.5s freeze that auto-recovers
+  vs a full re-pair); crash-loop guard (>5 exits/10s) still escalates to onFatal.
+  (2) **60fps** (was 120) + (3) **VBR ≤40 Mbps** (was 60 CBR) — `ffmpegArgs.ts`
+  `-rc vbr -b:v 25000k -maxrate 40000k -bufsize ~250ms`; a static screen now drops
+  to a few Mbps like Parsec (big cut in average traffic = less ICE strain);
+  `maxBitrateKbps` is finally USED (the cap). (4) **input-helper ndc log
+  Debug→Warning** (killed the 98% `[ndc:Debug]` spam; `NDC_LOG_LEVEL=Debug`
+  restores). Sender unit tests updated to VBR (all pass), typecheck clean, built
+  via `build-win.sh` (3 packed checks pass, signed). **NEXT: Windows-Claude installs
+  over beta.1, CLOSES Parsec, controls 10+ min → confirm no mouse-death/re-pair (a
+  real desktop switch auto-recovers in ~0.5s), HUD `60fps · 2560×1440` with Mbps
+  that drops on a static screen; watch for residual `juice: Lost connectivity`
+  (should fall with VBR). If clean → promote full v1.25.0.** Optional: `VIDEO_NVENC_
+  BITRATE_KBPS` still sweeps the VBR target live. STILL OPEN: fix any re-pair that
+  hangs at "connecting" (controller side) if it recurs post-fix.
 
 IN PROGRESS (branch `feat/native-video`, NOT released — needs packaging +
 PRERELEASE per golden rule #1): **the native video pipeline works END TO END on
