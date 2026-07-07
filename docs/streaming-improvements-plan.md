@@ -76,22 +76,38 @@ self-heals loss without a spike.
   artifact, PLI recovery still restores a corrupted stream.
 - Effort: low (ffmpeg flags) if supported.
 
-### Step 2 — Multi-slice + present/latency tuning (guide §4.1, §6.1)
-- `-slices 4` on nvenc so the Mac decoder can start decoding before the whole
-  frame arrives (shaves a fraction of a frame of latency).
-- Mac present path: audit `AVSampleBufferDisplayLayer` timing — ensure it presents
-  immediately (no added display sync / queue). Guide §6.1 (low-latency present,
-  `displaySyncEnabled=false` analog for AVSBDL).
-- **Verify (prerelease):** HUD latency drops vs Step 1; no new tearing/jank.
-- Effort: low.
+### Step 2 — Multi-slice + present/latency tuning (guide §4.1, §6.1) — SKIPPED
 
-### Step 3 — Custom DXGI capturer with change-detection  ← the big one
+Code audit (2026-07-08) found this delivers no perceptible win as our pipeline is
+built, so the owner chose to jump to Step 3:
+- **Mac present path is ALREADY optimal:** every sample is tagged
+  `kCMSampleAttachmentKey_DisplayImmediately=true` and enqueued straight into
+  `AVSampleBufferDisplayLayer.sampleBufferRenderer` with no controlTimebase/queue —
+  it presents as soon as decoded. Nothing to tune.
+- **`-slices 4` gives no latency benefit here:** the sender assembles the WHOLE
+  access unit (all NALs of a frame) and sends it in one `sendMessageBinary` — slices
+  only cut latency if you *pipeline* them (send each slice as it encodes), which we
+  don't. Worse, `-slices 4` would break `AccessUnitAssembler` (it treats 1 VCL = 1
+  frame → 4 slices = 4 broken sub-frames). Real slice benefit needs a slice-level
+  send + partial-decode rewrite = Step-3-scale, not "low effort".
+- Deferred robustness-only option if ever wanted: `-slices 4` + a multi-slice-aware
+  assembler (group slices by `first_mb_in_slice==0`) → a lost packet corrupts 1/4 of
+  a frame not the whole frame. Invisible on the owner's clean ~0%-loss link; no
+  latency change. Not worth it now.
+
+### Step 3 — Custom DXGI capturer with change-detection  ← the big one (ACTIVE)
 The ONLY path to Parsec-level GPU (~6%→~2%) AND the proper cursor. ddagrab can't
 skip unchanged/pointer-only frames; a custom DXGI Desktop Duplication capturer
 can (guide §3.2/3.3). It also unlocks dirty-rects and gives cursor position+shape
 straight from DXGI metadata (no separate GetCursorInfo). Replaces ddagrab; keeps
 zero-copy by feeding NVENC directly. Phased, each sub-step prerelease-verified
-(golden rule #1 — this is native/FFI, the highest-risk work in the project):
+(golden rule #1 — this is native/FFI, the highest-risk work in the project).
+
+**Full spec + architecture decision: [`step3-dxgi-capturer.md`](step3-dxgi-capturer.md).**
+Decided: a **standalone `capturer.exe` subprocess** (DXGI + NVENC → Annex-B on
+stdout, drop-in for ffmpeg) — NOT koffi-COM / NOT a node addon — for crash isolation
+(golden rule #1) + reuse of the existing spawn/stdout/RTP plumbing. Windows-Claude-
+led (needs MSVC + the RTX GPU; Mac can't compile/test it). Sub-steps:
 
 - **3a. Standalone DXGI capturer** (koffi or a small C++ addon): `AcquireNextFrame`
   with `DXGI_ERROR_WAIT_TIMEOUT` (nothing changed → skip) and `LastPresentTime`

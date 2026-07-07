@@ -276,9 +276,44 @@ to push FPS.
     dropped — VideoToolbox-incompatible at every GOP length,
     [[pure-intra-refresh-freezes-videotoolbox]]). The true flat-bitrate endgame
     (receiver detects decode-stall → PLI → cheap forced IDR, no respawn) is deferred to
-    Step 2/3 receiver work. **NEXT: Step 2 — multi-slice `-slices 4` + preset/present-
-    latency tune (both safe for the VT decoder: they don't touch GOP/refresh
-    structure).**
+    Step 2/3 receiver work.
+- **Step 2 — SKIPPED (code audit 2026-07-08; owner chose to jump to Step 3):** it
+  delivers no perceptible win as our pipeline is built. (1) The Mac present path is
+  ALREADY optimal — every sample is tagged `kCMSampleAttachmentKey_DisplayImmediately
+  =true` and enqueued straight into `AVSampleBufferDisplayLayer.sampleBufferRenderer`
+  with no timebase/queue (`receiver/render/decoder.swift`+`embed.swift`). (2)
+  `-slices 4` gives NO latency benefit here because the sender assembles the WHOLE
+  access unit and sends it in one `sendMessageBinary` (slices only cut latency if you
+  *pipeline* per-slice sends, which we don't) — and it would BREAK `AccessUnitAssembler`
+  (1 VCL = 1 frame → 4 slices = 4 broken sub-frames). Real slice benefit = a slice-
+  level send + partial-decode rewrite = Step-3-scale. Deferred robustness-only variant
+  (multi-slice-aware assembler, corrupts 1/4-frame on loss) is invisible on the clean
+  link — not worth it. Details in [`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md).
+- **Step 3 — custom DXGI capturer = the real Parsec-GPU + cursor fix (ACTIVE, owner
+  picked it over Step 2). Full spec: [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md).**
+  ARCHITECTURE DECIDED: a **standalone `capturer.exe` subprocess** (DXGI Desktop
+  Duplication + change-detection + NVENC → Annex-B on stdout, byte-identical contract
+  to today's ffmpeg → drop-in for `FfmpegFrameSource`, receiver UNCHANGED) — NOT
+  koffi-COM, NOT a node addon, for crash isolation (golden rule #1: a DXGI/NVENC fault
+  = a subprocess exit the existing ffmpeg crash-recovery handles, not an Electron-main
+  segfault) + reuse of the proven spawn/stdout/NalSplitter/RTP plumbing. **Windows-
+  Claude-LED** (needs MSVC + the real RTX GPU; Mac-Claude can't compile/run DXGI+NVENC
+  — Mac owns the spec, the Annex-B contract, the sender TS wiring in 3c, the Mac cursor
+  overlay in 3d, review/merge). Phased, prerelease-per-substep:
+  - **3a (NEXT, handed to WC): standalone DXGI capturer + change-detection isolation
+    harness, NO NVENC yet** — `AcquireNextFrame` loop that SKIPS `WAIT_TIMEOUT`
+    (unchanged) AND `LastPresentTime==0` (pointer-only, the case ddagrab/beta.4 can't
+    skip), reads cursor `PointerPosition`/`GetFramePointerShape`, `ReleaseFrame` every
+    iter, re-inits on `ACCESS_LOST` (same event beta.2 handles). Logs
+    `emitted/skipped_timeout/skipped_pointeronly/cursor` per sec. DECIDER: static
+    screen + MOUSE MOVING → emitted≈0 (ddagrab would emit ~60/s). Code in new
+    `apps/desktop/native/dxgi-capturer/`; coexist with Parsec (do NOT close it).
+  - 3b DXGI→NVENC zero-copy (standalone → .h264 file; GPU near Parsec ~6% on static+
+    mouse-moving; MUST keep plain periodic IDR `-g 120`, NO intra-refresh —
+    [[pure-intra-refresh-freezes-videotoolbox]]). 3c wire into the sender (gated,
+    ffmpeg stays the fallback) + full e2e prerelease. 3d cursor from DXGI over the
+    dormant `'cursor'` channel (un-gate `PR_CURSOR_OVERLAY`) → Mac CSS overlay
+    (reuse beta.4's plumbing).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller
@@ -668,11 +703,14 @@ Lessons:
 
 ## Backlog (rough priority)
 
-0. **Parsec-parity streaming roadmap** — active. Full plan in
-   [`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md):
-   Step 0 v1.25.0 baseline → 1 intra-refresh → 2 multi-slice/present tuning →
-   3 custom DXGI capturer (change-detection = the real GPU + cursor fix) → 4 FEC.
-   Doing 0→1→2 on the ffmpeg pipeline first, Step 3 is the big native endgame.
+0. **Parsec-parity streaming roadmap** — active, now ON STEP 3. Full plan in
+   [`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md);
+   Step 3 detail in [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md).
+   ✅ Step 0 (v1.25.0 baseline) → ✅ Step 1 (v1.25.1: plain `-g 120`, intra-refresh
+   dropped — VT-incompatible) → ⏭️ Step 2 SKIPPED (present already optimal, `-slices 4`
+   a no-op without a send-path rewrite) → 🔨 **Step 3 custom DXGI capturer** (the real
+   GPU 40→6% + cursor fix; standalone `capturer.exe` subprocess, WC-led, phased
+   3a-3d) → Step 4 FEC (deferred).
 1. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
 2. Computers-page search/sort; per-controller device visibility (family use).
