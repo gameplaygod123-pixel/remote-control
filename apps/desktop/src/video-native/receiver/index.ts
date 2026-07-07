@@ -189,15 +189,24 @@ function startSession(): void {
   })
 }
 
+// Frames now flow only on desktop change (ddagrab dup_frames=0), so a static
+// screen yields long, irregular gaps that are NOT network jitter. Exclude any gap
+// above this and re-seed, so jitterMs reflects only active-streaming pacing.
+const JITTER_IDLE_GAP_MS = 100
+
 // Smoothed frame-pacing jitter (RFC3550 §A.8 style, /16), on AU arrival wall clock.
 function trackJitter(session: Session): void {
   const now = performance.now()
   if (session.lastAuArrivalMs !== 0) {
     const interval = now - session.lastAuArrivalMs
-    if (session.meanIntervalMs === 0) session.meanIntervalMs = interval
-    const deviation = Math.abs(interval - session.meanIntervalMs)
-    session.jitterMs += (deviation - session.jitterMs) / 16
-    session.meanIntervalMs += (interval - session.meanIntervalMs) / 16
+    if (interval > JITTER_IDLE_GAP_MS) {
+      session.meanIntervalMs = 0 // idle gap (static screen) -- re-seed, not jitter
+    } else {
+      if (session.meanIntervalMs === 0) session.meanIntervalMs = interval
+      const deviation = Math.abs(interval - session.meanIntervalMs)
+      session.jitterMs += (deviation - session.jitterMs) / 16
+      session.meanIntervalMs += (interval - session.meanIntervalMs) / 16
+    }
   }
   session.lastAuArrivalMs = now
 }
