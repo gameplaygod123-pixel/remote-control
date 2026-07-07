@@ -145,6 +145,22 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   — install over v1.23.0, control from the Mac, confirm the HUD badge shows
   `⚡NATIVE` (not WebRTC) + it feels smoother + the agent's `videoSenderHost`
   spawns ffmpeg (check logs). If good → promote to full v1.24.0.
+- **beta.1 e2e (Windows-Claude, real hardware): PASS except one bug.** ✅ ffmpeg
+  bundle spawned from `resources\ffmpeg\ffmpeg.exe` (not env — after removing the
+  stale `FFMPEG_PATH`), nvenc live, `⚡NATIVE` badge shown, stream live. ❌ native
+  cursor drifted on Y — symmetric about centre, worse toward top/bottom (X fine).
+- **MOUSE FIX → PRERELEASE v1.24.0-beta.2 (`bb858ce`)**: root cause = the native
+  surface draws `.resizeAspect` (letterbox, embed.swift) inside the session window,
+  whose aspect lock (`setAspectRatio`) only APPROXIMATELY holds 16:9, so the drawn
+  video rect is a hair shorter than the element box; the old native mouse mapping
+  normalized over the FULL box → error over the bars. WebRTC was immune because
+  `videoRelativePosition` is already letterbox-aware. Fix: native `relativePosition`
+  now reproduces the same object-fit math using the remote frame size from
+  `nativeStats` (fallback 16:9), mapping over the ACTUAL video rect (pointer on the
+  bars → null/no-move). Agent input map untouched (correct). Rebuilt via
+  `build-win.sh` @ `bb858ce` (ffmpeg cached), published **v1.24.0-beta.2**. NEXT:
+  Windows-Claude installs beta.2 over beta.1, confirms the cursor tracks 1:1 to the
+  edges → then promote full v1.24.0.
 - **STILL TODO to ship (revised for the owner's dev setup)**: the "bundle
   `librvr.dylib` into Mac app Resources + codesign/notarize" TODO is **moot while
   the owner runs the Mac controller from `electron-vite dev`** (no packaged .dmg —
