@@ -33,6 +33,10 @@ declare global {
         get: () => Promise<'dark' | 'light' | 'glass'>
         set: (theme: 'dark' | 'light' | 'glass') => Promise<void>
       }
+      pipeline: {
+        get: () => Promise<'webrtc' | 'native'>
+        set: (pipeline: 'webrtc' | 'native') => Promise<void>
+      }
       agent: {
         captureThumbnail: () => Promise<string | null>
       }
@@ -96,7 +100,9 @@ declare global {
       }
       videoSender: {
         isReady: () => Promise<boolean>
-        startSession: (config: import('../video-native/shared/contract').VideoConfig) => Promise<void>
+        startSession: (
+          config: import('../video-native/shared/contract').VideoConfig
+        ) => Promise<void>
         stopSession: () => Promise<void>
         remoteAnswer: (sdp: string) => Promise<void>
         remoteIce: (

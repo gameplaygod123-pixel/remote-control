@@ -45,6 +45,11 @@ const api = {
     set: (theme: 'dark' | 'light' | 'glass'): Promise<void> =>
       ipcRenderer.invoke('theme:set', theme)
   },
+  pipeline: {
+    get: (): Promise<'webrtc' | 'native'> => ipcRenderer.invoke('pipeline:get'),
+    set: (pipeline: 'webrtc' | 'native'): Promise<void> =>
+      ipcRenderer.invoke('pipeline:set', pipeline)
+  },
   agent: {
     captureThumbnail: (): Promise<string | null> => ipcRenderer.invoke('agent:capture-thumbnail')
   },
@@ -115,7 +120,8 @@ const api = {
       candidate: string,
       sdpMid: string | null,
       sdpMLineIndex: number | null
-    ): Promise<void> => ipcRenderer.invoke('input-helper:remote-ice', candidate, sdpMid, sdpMLineIndex),
+    ): Promise<void> =>
+      ipcRenderer.invoke('input-helper:remote-ice', candidate, sdpMid, sdpMLineIndex),
     onOffer: (handler: (sdp: string) => void): void => {
       ipcRenderer.on('input-helper:offer', (_event, sdp) => handler(sdp))
     },

@@ -15,4 +15,17 @@ unset ELECTRON_RUN_AS_NODE
 # signaling-url.json on GitHub at runtime.
 export VITE_SIGNALING_URL="ws://localhost:8080"
 export APP_MODE=controller
+
+# Prep the native render surface so the in-app video toggle (PipelineToggle) can
+# engage Native without a second launcher. We deliberately DON'T set
+# VIDEO_PIPELINE here -- the saved per-machine preference (video-pipeline.txt,
+# flipped by the sidebar bolt) decides webrtc vs native; the env var stays a
+# test-only override (see start-controller-native.command). Building the dylib is
+# cheap + safe every launch; guarded so a machine without swiftc/CLT just skips it
+# and native quietly falls back to WebRTC.
+if command -v swiftc >/dev/null 2>&1; then
+  bash ../../scripts/build-render-mac.sh || echo "[launcher] render build failed; native will fall back to WebRTC"
+  export VIDEO_RENDER_LIB="$(cd ../.. && pwd)/apps/desktop/out/video-render/librvr.dylib"
+fi
+
 pnpm dev

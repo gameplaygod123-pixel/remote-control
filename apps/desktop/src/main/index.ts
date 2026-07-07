@@ -58,7 +58,8 @@ import {
 } from './nativeRenderSurface'
 import type { VideoSenderHost, VideoReceiverHost } from '../video-native/shared/ipc'
 import type { VideoConfig } from '../video-native/shared/contract'
-import { VIDEO_PIPELINE_ENV } from '../video-native/shared/contract'
+import { getVideoPipeline, saveVideoPipeline, nativePipelineEnabled } from './pipelineConfig'
+import type { VideoPipeline } from '../video-native/shared/contract'
 
 export type { AppMode }
 
@@ -296,11 +297,7 @@ let controllerWindow: BrowserWindow | undefined
 // quitting) -- the `win?.` guard only catches null, not a destroyed webContents,
 // and `.send()` on a destroyed object throws "Object has been destroyed" as an
 // uncaught exception in the main process. Gate on isDestroyed() for both.
-function sendToWindow(
-  win: BrowserWindow | undefined,
-  channel: string,
-  ...args: unknown[]
-): void {
+function sendToWindow(win: BrowserWindow | undefined, channel: string, ...args: unknown[]): void {
   if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
     win.webContents.send(channel, ...args)
   }
@@ -342,8 +339,9 @@ function createWindow(appMode: AppMode): void {
     // there is no second window to track/stutter/cover/clip. We only need to tell
     // the renderer when the OS fullscreen state changes so it can hide the drag
     // titlebar (pointless + would cover the controls in fullscreen). Gated on
-    // VIDEO_PIPELINE=native so the default WebRTC window is byte-identical.
-    if (process.env[VIDEO_PIPELINE_ENV] === 'native') {
+    // the native pipeline being enabled so the default WebRTC window is
+    // byte-identical.
+    if (nativePipelineEnabled()) {
       win.on('enter-full-screen', () => win.webContents.send('window:fullscreen', true))
       win.on('leave-full-screen', () => win.webContents.send('window:fullscreen', false))
     }
@@ -500,7 +498,7 @@ app.whenReady().then(async () => {
   // a spawned-but-unpaired host changes nothing on its own. See
   // docs/native-video-plan.md + video-native/shared/{contract,ipc}.ts.
   let videoSenderHost: VideoSenderHost | undefined
-  if (appMode === 'agent' && process.env[VIDEO_PIPELINE_ENV] === 'native') {
+  if (appMode === 'agent' && nativePipelineEnabled()) {
     videoSenderHost = startVideoSenderHost({
       onOffer: (sdp) => sendToWindow(agentWindow, 'video-sender:offer', sdp),
       onIce: (candidate, sdpMid, sdpMLineIndex) =>
@@ -531,7 +529,7 @@ app.whenReady().then(async () => {
       controllerWindow.setAspectRatio(0)
     }
   }
-  if (appMode === 'controller' && process.env[VIDEO_PIPELINE_ENV] === 'native') {
+  if (appMode === 'controller' && nativePipelineEnabled()) {
     videoReceiverHost = startVideoReceiverHost({
       onAnswer: (sdp) => sendToWindow(controllerWindow, 'video-receiver:answer', sdp),
       onIce: (candidate, sdpMid, sdpMLineIndex) =>
@@ -585,6 +583,15 @@ app.whenReady().then(async () => {
   // The macOS controller window is always transparent (see createWindow), so
   // every theme -- including glass -- just re-skins live via CSS; no relaunch.
   ipcMain.handle('theme:set', (_event, theme: Theme): void => saveTheme(theme))
+  // Video-pipeline preference (webrtc <-> native), persisted per-machine.
+  // Reports the saved value (NOT env-resolved) so the UI reflects what's stored;
+  // takes effect on the NEXT session/relaunch since the host processes are wired
+  // at startup. Native still only actually engages if both peers negotiate the
+  // cap + the helper hosts are ready -- else it falls back to WebRTC.
+  ipcMain.handle('pipeline:get', (): VideoPipeline => getVideoPipeline())
+  ipcMain.handle('pipeline:set', (_event, pipeline: VideoPipeline): void =>
+    saveVideoPipeline(pipeline)
+  )
 
   // Bridges the agent renderer to the input-helper process (see
   // inputHelperHost.ts). No-ops in controller mode, where inputHelperHost is
@@ -597,12 +604,8 @@ app.whenReady().then(async () => {
   )
   ipcMain.handle(
     'input-helper:remote-ice',
-    (
-      _event,
-      candidate: string,
-      sdpMid: string | null,
-      sdpMLineIndex: number | null
-    ): void => inputHelperHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
+    (_event, candidate: string, sdpMid: string | null, sdpMLineIndex: number | null): void =>
+      inputHelperHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
   )
 
   // Bridges the agent renderer to the native video-sender process (see
@@ -619,12 +622,8 @@ app.whenReady().then(async () => {
   )
   ipcMain.handle(
     'video-sender:remote-ice',
-    (
-      _event,
-      candidate: string,
-      sdpMid: string | null,
-      sdpMLineIndex: number | null
-    ): void => videoSenderHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
+    (_event, candidate: string, sdpMid: string | null, sdpMLineIndex: number | null): void =>
+      videoSenderHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
   )
 
   // Bridges the controller renderer to the native video-receiver process (see
@@ -642,12 +641,8 @@ app.whenReady().then(async () => {
   )
   ipcMain.handle(
     'video-receiver:remote-ice',
-    (
-      _event,
-      candidate: string,
-      sdpMid: string | null,
-      sdpMLineIndex: number | null
-    ): void => videoReceiverHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
+    (_event, candidate: string, sdpMid: string | null, sdpMLineIndex: number | null): void =>
+      videoReceiverHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
   )
 
   // Explicit escape hatch for the "deleted and reinstalled, mode picker
