@@ -33,7 +33,7 @@ import {
 import type { MainToVideoSender, VideoSenderToMain } from '../shared/ipc'
 import type { NativeVideoStats, VideoConfig } from '../shared/contract'
 import { FfmpegFrameSource, SyntheticFrameSource, type FrameSource } from './frameSource'
-import { NVENC_INTRA_REFRESH_GOP } from './ffmpegArgs'
+import { NVENC_KEYFRAME_GOP } from './ffmpegArgs'
 import { isKeyframeRequest, parseRtcpFeedback } from './rtcpFeedback'
 import { logVideoSender } from '../../main/videoSenderLog'
 
@@ -241,13 +241,12 @@ function startSession(config: VideoConfig): void {
 }
 
 function startFrameSource(session: Session): void {
-  // Step 1: intra-refresh WITH a moderate periodic IDR (NVENC_INTRA_REFRESH_GOP =
-  // 120 ≈ 2s@60fps). Do NOT pass config.fps here (=1s GOP, the old pre-intra-
-  // refresh value) and do NOT use a huge -g: pure intra-refresh (no periodic IDR)
-  // froze the VideoToolbox receiver, which only recovers off a real IDR (WC, real
-  // hardware, beta.2). The intra-refresh flags still spread the keyframe cost.
+  // Plain periodic IDR every 2s (NVENC_KEYFRAME_GOP = 120 @ 60fps). Step 1's
+  // intra-refresh was reverted -- VideoToolbox can't decode the rolling-intra
+  // P-frame structure (froze at every GOP length; WC, real hardware, beta.2/beta.3).
+  // 2s halves v1.25.0's 1s (config.fps) keyframe-spike frequency and decodes fine.
   // Harmless to the MF fallback (its argv has no -g).
-  const gop = NVENC_INTRA_REFRESH_GOP
+  const gop = NVENC_KEYFRAME_GOP
   const cb = {
     onAccessUnit: (au: { data: Buffer; keyframe: boolean }) => {
       if (current !== session) return

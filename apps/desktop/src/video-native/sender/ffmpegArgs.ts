@@ -17,23 +17,21 @@ import type { VideoConfig } from '../shared/contract'
  *  (needs a per-frame GPU->CPU hwdownload, ~130% CPU) -- see RESULTS.md §C. */
 export type SenderEncoder = 'h264_nvenc' | 'h264_mf'
 
-/** `-g` (IDR interval, frames) used WITH intra-refresh. Step 1 first tried a huge
- *  value (999999 = one IDR ever, refresh rolls through P-frames) but that REGRESSED
- *  on the VideoToolbox receiver: AVSampleBufferDisplayLayer needs a periodic IDR to
- *  recover from any loss/reference gap -- it does NOT resume off intra-refresh's
- *  rolling recovery -- so with no periodic IDR the Mac froze mid-session and had to
- *  reconnect (WC, real hardware, v1.25.1-beta.2). So we keep intra-refresh (flatter
- *  bitrate: the refresh spreads the keyframe cost across P-frames) but restore a
- *  MODERATE periodic IDR safety net: 120 frames = an IDR every ~2s at 60fps. That
- *  halves v1.25.0's 1s-IDR spike frequency while giving VT a self-heal point at
- *  least every 2s; PLI still forces an IDR on demand. */
-export const NVENC_INTRA_REFRESH_GOP = 120
+/** `-g` (IDR interval, frames). Step 1 tried NVENC `-intra-refresh` (rolling I-MBs
+ *  instead of a periodic full IDR) for a flatter bitrate, but it is INCOMPATIBLE
+ *  with the VideoToolbox receiver: AVSampleBufferDisplayLayer can't cleanly decode
+ *  the rolling-intra P-frame structure -> it froze/blurred BETWEEN IDRs regardless
+ *  of GOP length (both `-g 999999` AND `-g 120` with intra-refresh froze mid-session;
+ *  only plain periodic IDR is stable -- WC, real hardware, beta.2+beta.3). So
+ *  intra-refresh is REVERTED. We keep the one salvageable partial win: a periodic
+ *  IDR every 2s (120 frames @ 60fps) instead of v1.25.0's every 1s (`-g 60`) --
+ *  plain periodic IDRs decode fine on VT and this halves the keyframe-spike
+ *  frequency. `-forced-idr` is retained (harmless; makes a PLI force a real IDR). */
+export const NVENC_KEYFRAME_GOP = 120
 
 export interface FfmpegArgOptions {
-  /** `-g` (IDR interval) in frames. With intra-refresh (Step 1) this is a MODERATE
-   *  periodic-IDR safety net (NVENC_INTRA_REFRESH_GOP = 120 ≈ 2s at 60fps) that the
-   *  VideoToolbox receiver needs to auto-recover from loss; the refresh spreads the
-   *  keyframe cost across P-frames so the spike is milder than a per-second IDR.
+  /** `-g` (IDR interval) in frames. Plain periodic IDR (NVENC_KEYFRAME_GOP = 120 ≈
+   *  2s at 60fps) -- intra-refresh was reverted (VideoToolbox can't decode it).
    *  Override only for tests / experiments. */
   gop?: number
   encoder?: SenderEncoder
@@ -87,18 +85,16 @@ function encoderArgs(
       `${Math.max(1, Math.round(maxBitrateKbps / 4))}k`, // ~250ms burst bound
       '-bf',
       '0', // NO B-frames (no reorder delay)
-      // Intra-refresh ON TOP OF a moderate periodic IDR (Step 1, guide §4.1 --
-      // streaming-improvements-plan.md). Intra-refresh rolls the refresh across a
-      // band of P-frames every cycle so the keyframe cost is spread out (milder
-      // bitrate bumps than a hard per-second IDR). We do NOT drop the periodic IDR
-      // entirely: pure intra-refresh (`-g 999999`) FROZE the VideoToolbox receiver
-      // (it only resumes off a real IDR, not off rolling recovery -- WC, real
-      // hardware, beta.2), so `-g` = NVENC_INTRA_REFRESH_GOP (120 ≈ 2s@60fps) keeps
-      // a self-heal point every ~2s. `-forced-idr` also lets a PLI / session-start
-      // force a REAL IDR on demand, and `-bsf:v dump_extra` repeats SPS/PPS in-band
-      // so a mid-stream join / post-respawn decoder still gets parameter sets.
-      '-intra-refresh',
-      '1',
+      // Plain periodic IDR (NVENC_KEYFRAME_GOP = 120 ≈ 2s@60fps). Step 1's
+      // `-intra-refresh` (rolling I-MBs for a flat bitrate, guide §4.1) is REVERTED:
+      // the VideoToolbox receiver can't cleanly decode the rolling-intra P-frame
+      // structure -- it froze/blurred between IDRs at every GOP length tried (WC,
+      // real hardware, beta.2 `-g 999999` + beta.3 `-g 120`, both with intra-refresh;
+      // only plain periodic IDR is stable). The salvaged partial win: IDR every 2s
+      // instead of v1.25.0's 1s (`-g 60`), which halves the keyframe-spike frequency
+      // and decodes fine on VT. `-forced-idr` is kept (harmless -- lets a PLI /
+      // session-start force a REAL IDR on demand), and `-bsf:v dump_extra` repeats
+      // SPS/PPS in-band so a mid-stream join / post-respawn decoder gets param sets.
       '-forced-idr',
       '1',
       '-g',
@@ -174,7 +170,7 @@ function filterChain(encoder: SenderEncoder, config: VideoConfig, outputIdx: num
  *    ('LongStartSequence') consumes.
  */
 export function buildFfmpegArgs(config: VideoConfig, opts: FfmpegArgOptions = {}): string[] {
-  const gop = opts.gop ?? NVENC_INTRA_REFRESH_GOP
+  const gop = opts.gop ?? NVENC_KEYFRAME_GOP
   const encoder = opts.encoder ?? 'h264_nvenc'
   const outputIdx = opts.outputIdx ?? 0
   const preset = opts.preset ?? 'p1'

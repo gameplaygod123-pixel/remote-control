@@ -147,12 +147,12 @@ bundle()
         'nvenc: VBR target 20000k + maxrate cap 30000k',
         nv.includes('-rc vbr') && nv.includes('-b:v 20000k') && nv.includes('-maxrate 30000k')
       )
-      // Step 1: intra-refresh + a MODERATE periodic IDR (120 ≈ 2s@60fps). Pure
-      // intra-refresh (-g 999999, no periodic IDR) froze the VideoToolbox receiver,
-      // so we keep a 2s IDR safety net (halved from v1.25.0's 1s -g 60).
+      // Step 1 REVERTED: -intra-refresh is incompatible with the VideoToolbox
+      // receiver (froze at every GOP length). Plain periodic IDR every 2s (-g 120),
+      // NO -intra-refresh; -forced-idr kept (harmless, forces a real IDR on PLI).
       check(
-        'nvenc: intra-refresh + forced-idr + 2s periodic IDR (-g 120, not 60/999999)',
-        nv.includes('-intra-refresh 1') &&
+        'nvenc: plain periodic IDR -g 120 + forced-idr, NO intra-refresh',
+        !nv.includes('-intra-refresh') &&
           nv.includes('-forced-idr 1') &&
           nv.includes('-g 120') &&
           !nv.includes('-g 60') &&

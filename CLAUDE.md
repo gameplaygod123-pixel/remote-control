@@ -253,13 +253,28 @@ to push FPS.
     spike frequency) so VT self-heals at least every 2s. `ffmpegArgs.ts` +
     `sender/index.ts` comments + unit test updated (`-g 120`, not 60/999999); all pass,
     typecheck clean. Rebuilt → **PRERELEASE v1.25.1-beta.3**.
-  - **NEXT: WC installs beta.3, dumps argv to confirm `-g 120`, controls 10+ min →
-    the mid-session FREEZE must be GONE (no forced reconnects), HUD kbps milder than
-    v1.25.0 (spike every ~2s not 1s), no banding, PLI recovery works. If STILL freezes
-    → fall back to Option A (full revert to periodic `-g 60`, pursue smoothness via
-    Step 2 only). If clean → promote v1.25.1, then Step 2 (multi-slice + present
-    tuning). The spike-free endgame (Option C = receiver detects decode-stall → PLI →
-    cheap forced IDR, no respawn) is deferred to Step 2/3 receiver work.**
+  - **beta.3 STILL FROZE → VERDICT: intra-refresh REVERTED (Option A) → v1.25.1-beta.4:**
+    beta.3 (`-g 120` + intra-refresh) froze mid-session just like beta.2 (`-g 999999` +
+    intra-refresh); only v1.25.0 (`-g 60`, NO intra-refresh) is stable. **The culprit
+    is `-intra-refresh` itself, NOT the GOP length** — VideoToolbox / AVSample­Buffer­Display­Layer
+    can't cleanly decode the rolling-intra P-frame structure (blurs/freezes BETWEEN
+    IDRs, recovers only off a real IDR), so changing IDR frequency can't fix it (WC,
+    real hardware, both prereleases). **NEVER use NVENC `-intra-refresh` on this VT
+    pipeline** (saved to memory: [[pure-intra-refresh-freezes-videotoolbox]]). Fix =
+    remove `-intra-refresh 1`; renamed the const `NVENC_INTRA_REFRESH_GOP` →
+    **`NVENC_KEYFRAME_GOP`**. Kept the ONE salvageable partial Step-1 win: plain
+    periodic **`-g 120`** (IDR every 2s, NO intra-refresh) instead of v1.25.0's `-g 60`
+    (1s) — plain periodic IDRs decode fine on VT and this halves the keyframe-spike
+    frequency. `-forced-idr 1` retained (harmless; forces a real IDR on PLI). Unit test
+    now asserts `!-intra-refresh` + `-g 120`; tests + typecheck clean. Rebuilt →
+    **PRERELEASE v1.25.1-beta.4**.
+  - **NEXT: WC installs beta.4, dumps argv to confirm `-g 120` + NO `-intra-refresh`,
+    controls 10+ min → the freeze must be GONE (no forced reconnects), HUD kbps spike
+    every ~2s (not 1s), no banding, PLI recovery works. If clean → promote v1.25.1,
+    then Step 2 (multi-slice `-slices 4` + present-latency tune — both safe for the VT
+    decoder, they don't touch GOP/refresh structure). The true flat-bitrate endgame
+    (receiver detects decode-stall → PLI → cheap forced IDR, no respawn) is deferred to
+    Step 2/3 receiver work.**
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller
