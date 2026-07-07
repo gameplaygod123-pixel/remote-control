@@ -85,7 +85,15 @@ function encoderArgs(
  *  - MF path must hand CPU frames to h264_mf, so it hwdownloads then CPU-scales.
  */
 function filterChain(encoder: SenderEncoder, config: VideoConfig, outputIdx: number): string {
-  const grab = `ddagrab=output_idx=${outputIdx}:framerate=${config.fps}`
+  // dup_frames=0: emit a frame ONLY when the desktop actually changes (framerate
+  // is the CAP, not a constant). Default (dup_frames=1) pads to a constant fps, so
+  // NVENC re-encodes the same static screen 60×/s -- ~45% of the Video Encode
+  // engine doing nothing useful. On-change capture is how Parsec sits near-idle on
+  // a still screen; our RTP path already uses wall-clock timestamps for exactly
+  // this variable interval (phase1/NOTES #64). draw_mouse stays default-on so a
+  // cursor move is itself a "change" that produces a frame (keeps the composited
+  // cursor live -- verified on real hardware before shipping).
+  const grab = `ddagrab=output_idx=${outputIdx}:framerate=${config.fps}:dup_frames=0`
   if (encoder === 'h264_nvenc') {
     // TRUE zero-copy: hand ddagrab's D3D11 RGB surface straight to NVENC, which
     // ingests the d3d11 frame and does RGB->NV12 on-GPU internally (verified:

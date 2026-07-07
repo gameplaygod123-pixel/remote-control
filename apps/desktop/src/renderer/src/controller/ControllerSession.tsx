@@ -294,6 +294,14 @@ export default function ControllerSession({
   // Ctrl/Alt/Meta shortcut) goes through the physical-key hold path so
   // combos and held state are real on the agent's OS.
   useEffect(() => {
+    // Physical keys currently held down on the agent (the keydown-path codes:
+    // modifiers, arrows, shortcuts -- NOT the printable `text` path, which
+    // presses+releases atomically). Used to panic-release on focus loss.
+    const held = new Set<string>()
+    function releaseAllHeld(): void {
+      for (const code of held) sendInput({ t: 'keyup', code })
+      held.clear()
+    }
     function handleKeyDown(e: KeyboardEvent): void {
       // The device-name field is a real local <input> in this same
       // window -- without this check, typing into it (or into any future
@@ -307,19 +315,35 @@ export default function ControllerSession({
         return
       }
       if (e.repeat) return
+      held.add(e.code)
       sendInput({ t: 'keydown', code: e.code })
     }
     function handleKeyUp(e: KeyboardEvent): void {
       if (isEditableTarget(e.target)) return
       if (e.code === 'Escape' || isPrintableKey(e)) return
       e.preventDefault()
+      held.delete(e.code)
       sendInput({ t: 'keyup', code: e.code })
+    }
+    // When our window loses focus (Alt-Tab, clicking into Parsec, minimizing),
+    // the OS delivers the physical keyup to the NEW foreground window, not us --
+    // so any key held at that instant sticks "down" on the agent forever (the
+    // classic "Shift stuck" -- Thai still typed via Unicode, but shortcuts broke).
+    // Panic-release everything on blur / tab-hide / pagehide.
+    function handleVisibility(): void {
+      if (document.visibilityState === 'hidden') releaseAllHeld()
     }
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', releaseAllHeld)
+    window.addEventListener('pagehide', releaseAllHeld)
+    document.addEventListener('visibilitychange', handleVisibility)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', releaseAllHeld)
+      window.removeEventListener('pagehide', releaseAllHeld)
+      document.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [])
 
