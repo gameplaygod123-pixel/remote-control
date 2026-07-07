@@ -74,4 +74,4 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
 Start-ScheduledTask -TaskName $TaskName
 
 Write-Host "Installed + started scheduled task '$TaskName' (SYSTEM, HIGHEST, session-0 launcher)."
-Write-Host "Log: C:\Users\Public\personal-remote-input-service.log (world-readable — no elevation to tail)."
+Write-Host "Log: C:\Users\Public\personal-remote-input-service.log (world-readable - no elevation to tail)."
