@@ -414,26 +414,30 @@ function attemptNegotiation(): void {
     write: writeClipboardText
   })
 
-  // Cursor SHAPE side-channel (agent -> controller). The native video pipeline
-  // ships draw_mouse=0 (cursor NOT baked into the frame, so a mouse-only move
-  // isn't a "desktop change" and the encoder idles on a static screen -- the
-  // Parsec-style GPU win), so the controller needs to know which cursor to draw
-  // natively. We report only the semantic shape, on change. Windows-only + fully
-  // guarded (see cursorCapture.ts): on any other platform / FFI failure it's a
-  // no-op and the controller keeps the local OS cursor.
-  const cursor = conn.createDataChannel('cursor')
-  cursor.onopen = () => {
-    if (pc !== conn) return
-    log(mySession, 'data channel "cursor" open')
-    const capture = startCursorCapture((shape) => {
-      if (pc !== conn || cursor.readyState !== 'open') return
-      try {
-        cursor.send(JSON.stringify({ shape }))
-      } catch {
-        /* channel closing between the guard and send -- ignore */
-      }
-    })
-    cursorStop = () => capture.stop()
+  // Cursor SHAPE side-channel (agent -> controller). DORMANT by default: it only
+  // pays off paired with a capture layer that skips pointer-only frames (Step 3
+  // of docs/streaming-improvements-plan.md) -- on the current ddagrab pipeline
+  // (cursor:'composited', draw_mouse=1) the cursor is in the video, so a second
+  // CSS cursor on the Mac would just double it (the beta.4 regression). Gated
+  // behind PR_CURSOR_OVERLAY so the plumbing stays present + verified (koffi
+  // harness passed) and gets un-gated wholesale in Step 3d, sourcing the shape
+  // from DXGI metadata instead of GetCursorInfo. Reports only the semantic shape,
+  // on change; Windows-only + fully guarded (see cursorCapture.ts).
+  if (process.env.PR_CURSOR_OVERLAY === '1') {
+    const cursor = conn.createDataChannel('cursor')
+    cursor.onopen = () => {
+      if (pc !== conn) return
+      log(mySession, 'data channel "cursor" open')
+      const capture = startCursorCapture((shape) => {
+        if (pc !== conn || cursor.readyState !== 'open') return
+        try {
+          cursor.send(JSON.stringify({ shape }))
+        } catch {
+          /* channel closing between the guard and send -- ignore */
+        }
+      })
+      cursorStop = () => capture.stop()
+    }
   }
 
   void (async () => {

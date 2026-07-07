@@ -194,6 +194,29 @@ to push FPS.
   recovers in place); (4) no mouse-death/stuck-keys.** If clean → promote full v1.25.0
   (rolls up 60fps+VBR≤40, ddagrab crash-recovery, dup_frames=0, cursor-out-of-video,
   quiet ndc log, HUD telemetry, stuck-key panic-release).
+- **beta.4 e2e RESULT = REGRESSION (owner+Windows-Claude, real hardware ~12min):**
+  `draw_mouse=0` DOES remove the cursor from the video (pixel-diff verified, not a
+  software cursor, not Parsec's fault) BUT gave **ZERO GPU benefit** — DXGI Desktop
+  Duplication emits a new frame on EVERY pointer-move and ddagrab passes it through
+  regardless (`dup_frames=0` only stops padding, doesn't check `LastPresentTime`), so
+  `draw_mouse` 0 vs 1 = identical 478-frame count; GPU stayed ~38-42%. PLUS a
+  double-cursor-on-drag artifact (app drag-images stay baked in the video while the
+  CSS cursor moves independently). So beta.4 is STRICTLY WORSE than beta.3. Root cause
+  is structural (ddagrab has no change-detection) — fixable only with a custom DXGI
+  capturer, NOT a flag.
+- **PIVOT → full Parsec-parity roadmap (owner, 2026-07-08: "แก้มันทั้งหมด ไล่ทีละอย่าง
+  เอาให้เหมือน Parsec"):** owner found a research doc
+  (`~/Downloads/low-latency-remote-streaming-guide.md`, Parsec/Moonlight/Sunshine
+  architecture); measured against our pipeline we already do ~80% right (zero-copy
+  cap→enc + enc→render, B-off/zerolatency/no-lookahead, jitter=0, input channel + seq
+  + normalized coords, NACK/PLI, HUD). The gaps + the incremental plan are now in
+  **[`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md)** —
+  Step 0 revert beta.4 + ship v1.25.0 baseline; Step 1 intra-refresh (no 1s keyframe
+  spike); Step 2 multi-slice + present tuning; **Step 3 custom DXGI capturer with
+  change-detection = the real Parsec-GPU fix + proper cursor (reuses beta.4's cursor
+  channel + Mac CSS overlay, sourcing shape from DXGI metadata)**; Step 4 FEC
+  (deferred). Doing 0→1→2 first (cheap, existing ffmpeg pipeline), then Step 3
+  (big native, phased, prerelease-per-substep). **NOW EXECUTING Step 0.**
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller
@@ -569,6 +592,11 @@ Lessons:
 
 ## Backlog (rough priority)
 
+0. **Parsec-parity streaming roadmap** — active. Full plan in
+   [`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md):
+   Step 0 v1.25.0 baseline → 1 intra-refresh → 2 multi-slice/present tuning →
+   3 custom DXGI capturer (change-detection = the real GPU + cursor fix) → 4 FEC.
+   Doing 0→1→2 on the ffmpeg pipeline first, Step 3 is the big native endgame.
 1. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
 2. Computers-page search/sort; per-controller device visibility (family use).

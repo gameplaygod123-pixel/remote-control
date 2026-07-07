@@ -79,14 +79,17 @@ export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   minBitrateKbps: 10_000,
   startBitrateKbps: 25_000,
   maxBitrateKbps: 40_000,
-  // 'separate' (was 'composited'): ddagrab captures WITHOUT the cursor
-  // (draw_mouse=0) and the agent reports the cursor SHAPE out of band for the
-  // Mac to draw natively (CSS). This is what finally makes the GPU sit near-
-  // idle on a static screen -- with a composited cursor, every mouse twitch was
-  // a "desktop change" so NVENC re-encoded ~40fps continuously even with
-  // dup_frames=0 (measured ~40% Video-Encode vs Parsec's ~6%, which draws the
-  // cursor as a separate overlay too). See input-helper/cursorCapture.ts.
-  cursor: 'separate'
+  // 'composited' (reverted from the beta.4 'separate' experiment): ddagrab bakes
+  // the OS cursor into the frame. beta.4 tried 'separate' (draw_mouse=0 + a native
+  // CSS cursor on the Mac) to cut GPU, but on ddagrab it gave ZERO benefit --
+  // DXGI emits a frame on every pointer-move and ddagrab passes it through
+  // regardless (draw_mouse 0 vs 1 = identical frame count on real hardware), so
+  // the encoder never idled AND we got a double-cursor-on-drag artifact. The real
+  // Parsec-GPU fix needs change-detection at the capture layer (skip pointer-only
+  // frames) -- a custom DXGI capturer, Step 3 of docs/streaming-improvements-plan.md.
+  // The cursor-overlay plumbing (input-helper cursor channel + Mac CSS overlay) is
+  // kept but DORMANT (gated behind PR_CURSOR_OVERLAY) and reused in Step 3d.
+  cursor: 'composited'
 }
 
 /**
