@@ -13,9 +13,11 @@
 // HOW TO USE (run ELEVATED, with the SYSTEM task already installed via
 // scripts/track2-e2e.ps1 so the injector is running):
 //   1. run this; wait for "connected to live injector pipe".
-//   2. LOCK the screen (Start -> your user -> Lock), wait ~3s, then unlock
-//      (type your REAL PIN — the screen/video is frozen, that's expected).
-//   3. Ctrl+C here, then read C:\Windows\Temp\input-service.log and look for:
+//   2. press the PHYSICAL Win+L on the real keyboard to lock (don't fight the
+//      cursor with the mouse — the heartbeat parks it at center). No password
+//      needed: even a passwordless account shows the Winlogon secure desktop.
+//   3. wait ~4s on the lock screen, then press any physical key / sign back in.
+//   4. Ctrl+C here, then read C:\Windows\Temp\input-service.log and look for:
 //        input desktop -> 'Winlogon' (was 'Default')      = PASS (followed in)
 //        input desktop -> 'Default'  (was 'Winlogon')     = followed back out
 //        SetThreadDesktop('Winlogon') failed, GetLastError=...  = the one to debug
@@ -53,27 +55,24 @@ async function main(): Promise<void> {
   }
 
   console.log('[phase3] connected to live injector pipe.')
-  console.log('[phase3] >>> NOW LOCK THE SCREEN (Start -> your user -> Lock). <<<')
-  console.log('[phase3]     Wait ~3s on the lock screen, then unlock with your REAL PIN.')
-  console.log('[phase3]     (video/screen is frozen there — expected.) Ctrl+C when done,')
-  console.log('[phase3]     then check C:\\Windows\\Temp\\input-service.log for the Winlogon flip.')
-  console.log('[phase3] forwarding a heartbeat move every 500ms...')
+  console.log('[phase3] >>> NOW PRESS THE PHYSICAL Win+L KEY TO LOCK THE SCREEN. <<<')
+  console.log('[phase3]     (use the real keyboard, not the mouse — the heartbeat parks the')
+  console.log('[phase3]      cursor at center. No password needed to prove the follow.)')
+  console.log('[phase3]     Wait ~4s locked, press any physical key to come back, then Ctrl+C')
+  console.log('[phase3]     and read C:\\Windows\\Temp\\input-service.log for the Winlogon flip.')
+  console.log('[phase3] forwarding a heartbeat every 750ms (cursor parks at center)...')
 
-  // Toggle between two nearby points so each forward is a real, distinct move
-  // (the injector calls syncInputDesktop() before each inject regardless).
-  let flip = false
+  // Park the cursor at the SAME center point each beat: the injector still calls
+  // syncInputDesktop() before every inject (that's the whole point), but the
+  // cursor doesn't jitter, so the physical Win+L / sign-in isn't disrupted.
   let n = 0
   for (;;) {
-    const p = flip ? 0.5 : 0.505
-    const ok = maybeForwardInput({ t: 'move', x: p, y: p })
-    flip = !flip
+    const ok = maybeForwardInput({ t: 'move', x: 0.5, y: 0.5 })
     n++
-    // Heartbeat to the console once a second so it's obviously alive; if the
-    // injector drops (respawn), maybeForwardInput goes false until it reconnects.
     if (n % 2 === 0) {
       process.stdout.write(`\r[phase3] heartbeats sent: ${n}  forwarding=${ok}   `)
     }
-    await sleep(500)
+    await sleep(750)
   }
 }
 

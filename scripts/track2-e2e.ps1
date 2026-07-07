@@ -81,8 +81,9 @@ Start-Sleep -Seconds 6
 $harness = if ($Secure) { 'src/input-service/dev/phase3-secure.ts' } else { 'src/input-service/dev/phase2e2e-live.ts' }
 if ($Secure) {
   Write-Host "`n=== SECURE-DESKTOP (Phase 3) mode ===" -ForegroundColor Cyan
-  Write-Host "When it says 'connected', LOCK the screen (Start -> your user -> Lock)," -ForegroundColor Cyan
-  Write-Host "wait ~3s, unlock with your REAL PIN, then Ctrl+C and re-check the log." -ForegroundColor Cyan
+  Write-Host "When it says 'connected', press the PHYSICAL Win+L to lock (use the real" -ForegroundColor Cyan
+  Write-Host "keyboard, not the mouse). Wait ~4s, press any key to return, then Ctrl+C" -ForegroundColor Cyan
+  Write-Host "and read the log for:  input desktop -> 'Winlogon'" -ForegroundColor Cyan
 }
 Push-Location $desktop
 try {
