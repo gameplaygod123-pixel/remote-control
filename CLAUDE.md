@@ -130,6 +130,21 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   verify (ffmpeg) before a full release (golden rule #1). Live HUD badge
   `⚡ NATIVE`/`WebRTC` (`.pipeline-badge`, app.css) in `ControllerSession` shows
   which path is ACTUALLY rendering (bolt = saved intent; badge = live reality).
+- **ffmpeg BUNDLED + PRERELEASE v1.24.0-beta.1 (2026-07-07, `7d72300`)**: native
+  video now ships out of the box on Windows. Windows-Claude verified the agent's
+  ffmpeg (ddagrab DXGI + h264_nvenc, static LGPL master 2026-07-06) runs the exact
+  `buildFfmpegArgs()` argv on real hardware (RTX, zero-copy NVENC, 8.86MB H.264 in
+  2s, no stderr). Owner chose to bundle (vs per-machine FFMPEG_PATH). Mac side:
+  `electron-builder.yml` `win.extraResources` packs `apps/desktop/ffmpeg/` →
+  `resources/ffmpeg/ffmpeg.exe` (where `resolveFfmpegPath()` looks);
+  `build-win.sh` downloads+caches the LGPL build once, VERIFIES it's a PE AND that
+  `strings` contains `ddagrab`+`h264_nvenc` before packing, stages it, and asserts
+  it's in the packed app. Installer +67MB (100→167MB). Built via `build-win.sh` @
+  `7d72300`, all 3 packed-binary checks pass (ndc/koffi/ffmpeg). Published as
+  **PRERELEASE v1.24.0-beta.1** (golden rule #1 — native = FFI). **NEXT: real e2e**
+  — install over v1.23.0, control from the Mac, confirm the HUD badge shows
+  `⚡NATIVE` (not WebRTC) + it feels smoother + the agent's `videoSenderHost`
+  spawns ffmpeg (check logs). If good → promote to full v1.24.0.
 - **STILL TODO to ship (revised for the owner's dev setup)**: the "bundle
   `librvr.dylib` into Mac app Resources + codesign/notarize" TODO is **moot while
   the owner runs the Mac controller from `electron-vite dev`** (no packaged .dmg —
