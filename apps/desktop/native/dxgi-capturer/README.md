@@ -14,11 +14,12 @@ this process, which the sender host respawns, instead of taking down Electron.
 
 ## Status
 
-- **3a — isolation harness (DONE, this dir).** Acquire/classify loop + cursor
-  metadata + per-second logging. No NVENC, no output. Verified on the real
-  RTX 3060 Ti agent (see "Decider results" below).
-- **3b — DXGI→NVENC zero-copy → .h264 file.** Next. `-g 120`, no intra-refresh.
-- **3c — wire into the sender** replacing ddagrab (RTP path unchanged).
+- **3a — change-detection harness (DONE).** Acquire/classify loop + cursor
+  metadata + per-second logging. Verified on the real RTX 3060 Ti agent.
+- **3b — DXGI→NVENC zero-copy → .h264 file (DONE).** `nvenc.{h,cpp}`. Encodes ONLY
+  real-change frames, zero-copy from the D3D11 texture. Verified (see 3b results).
+- **3c — wire into the sender** replacing ffmpeg (Annex-B → stdout, RTP path
+  unchanged). Next.
 - **3d — cursor from DXGI** `PointerShape` over the existing 'cursor' channel.
 
 ## Build
@@ -78,3 +79,32 @@ Notepad hover). `ACCESS_LOST` auto-reinit was verified on the owner's live Win+L
 lock (~22s): `[access-lost]` → throttled retry → `[reinit] recovered after 87
 attempt(s)` on unlock → resumed — no crash, no spam. Multiple ACCESS_LOST events
 recovered in one run (consistent with Parsec grabbing the desktop = coexistence).
+
+## 3b — NVENC encode to .h264 (`nvenc.{h,cpp}`)
+
+```
+capturer.exe --encode out.h264 [--duration <sec>] [--output <index>]
+```
+
+Only the frames 3a classifies as real changes are fed to NVENC, zero-copy: the
+still-held desktop `ID3D11Texture2D` is `CopyResource`'d into an owned registered
+texture (no CPU download) then encoded. Config = what we proved on the VideoToolbox
+receiver: **H.264 P1 + ultra-low-latency, VBR 25/40 Mbps, VBV 250ms, no B-frames,
+wall-clock IDR ~every 2s, NO intra-refresh** (Step 1 proved intra-refresh freezes
+the VT decoder), `repeatSPSPPS=1` (in-band SPS/PPS before every IDR). `nvEncodeAPI64.dll`
+ships with the driver; the header is auto-fetched by `build.ps1`. On `ACCESS_LOST`
+the encoder is torn down and rebuilt against the recreated device (fresh IDR).
+
+### 3b decider results (RTX 3060 Ti, 2560×1440, Parsec running concurrently)
+
+| Scenario | frames NVENC actually encoded (7s) | vs ddagrab (60fps) |
+|---|---|---|
+| **static screen + mouse MOVING** | **13** (~2/s: residual + forced IDR) | ~420 |
+| active screen | 70 (~10/s, tracks real change) | ~420 |
+
+The encoder stays idle through constant mouse movement (`skipped_pointeronly ~60/s`,
+frames ≈ residual only) — the root cause of the GPU win. ddagrab re-encodes ~420
+frames in *both* cases. Absolute encoder-% vs Parsec's ~6% is muddied here by
+Parsec's own concurrent NVENC session; frames-encoded is the clean metric and the
+final % is best read in 3c real-use. Both `.h264` outputs **decode cleanly in
+ffmpeg 8.1** (0 errors): H.264 High, 2560×1440, yuv420p, I/P only (no B), IDR ~2s.

@@ -175,6 +175,31 @@ Parsec's ~6% (vs our ffmpeg's ~40%), because pointer-only frames are never encod
 The `.h264` decodes cleanly in VLC/ffplay; SPS/PPS in-band before each IDR; IDR every
 ~2s.
 
+#### 3b — implementation status & notes (Windows-Claude, 2026-07-08: DONE, verified)
+
+Implemented in [`nvenc.{h,cpp}`](../apps/desktop/native/dxgi-capturer/) + a
+`--encode <file>` mode on the capturer. `nvEncodeAPI64.dll` (ships with the driver)
+loaded at runtime; the header (`nvEncodeAPI.h`, redistributable, FFmpeg/nv-codec-
+headers) is auto-fetched by `build.ps1` (gitignored, mirrors build-win.sh's ffmpeg).
+Zero-copy = `CopyResource` the still-held desktop `ID3D11Texture2D` into an owned
+registered texture (NVENC `NV_ENC_BUFFER_FORMAT_ARGB` == DXGI BGRA byte order) then
+encode; no CPU download. Only real-change frames are fed in. Config exactly as spec:
+P1 + ULL, VBR 25/40 Mbps, VBV 250ms, `frameIntervalP=1` (no B), `enableIntraRefresh=0`,
+`repeatSPSPPS=1`. IDR is driven by **wall clock** (`idrPeriod=INFINITE`, FORCEIDR
+every 2s) rather than a frame count — because with change-detection the frame rate is
+variable, so "120 frames" ≠ 2s. On `ACCESS_LOST` the encoder is torn down before the
+device is released and rebuilt against the new device (fresh SPS/PPS + IDR).
+
+Verified (RTX 3060 Ti, 2560×1440, Parsec running):
+- **GPU decider (frames actually encoded, 7s):** static + mouse-moving = **13**
+  (~2/s, residual + forced IDR) vs active screen = 70; ddagrab would encode ~420 in
+  both. The encoder idles through constant mouse movement — the GPU win's root cause.
+- Absolute encoder-% vs Parsec's ~6% is muddied by Parsec's concurrent NVENC session
+  (nvidia-smi enc% is GPU-aggregate); frames-encoded is the clean proof. Final % is
+  best read in 3c real-use (or with Parsec briefly closed).
+- **Decodes cleanly in ffmpeg 8.1** (0 errors): H.264 High, 2560×1440, yuv420p, I/P
+  only (no B-frames), IDR ~every 2s, in-band SPS/PPS.
+
 ### 3c — Wire into the sender (replace ffmpeg), full e2e prerelease
 
 `capturer.exe` writes the same Annex-B contract to stdout that ffmpeg does.
