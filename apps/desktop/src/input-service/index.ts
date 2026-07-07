@@ -1,13 +1,20 @@
 // injector-in-session entry point. Runs as SYSTEM (high integrity) INSIDE the
-// interactive session, spawned by service.ts (session 0) via CreateProcessAsUser.
-// Started with ELECTRON_RUN_AS_NODE=1 like the input-helper. UNTESTED handoff
-// code (docs/input-elevation-plan.md, phase 1-3).
+// interactive session, spawned by the session-0 launcher (service.ts) via
+// CreateProcessAsUser. Started with ELECTRON_RUN_AS_NODE=1 like the input-helper.
 //
-// It hosts the named pipe, receives RemoteInputMessages from the medium-
-// integrity input-helper, follows the active desktop, and injects via raw
-// SendInput. Because BOTH mouse and keyboard go through the same thread's
+// PIPE ROLE (Fix A, docs/input-elevation-plan.md): the medium input-helper HOSTS
+// the pipe; THIS SYSTEM injector CONNECTS to it. Rationale from the Phase 2 e2e
+// round: a SYSTEM process that hosts a libuv/net pipe gets a default DACL
+// (SYSTEM+Admins only) that DENIES the medium helper. Inverting roles fixes it --
+// SYSTEM can open any user-owned pipe, so we connect to the helper's pipe with no
+// custom SDDL. (Fix B, the injector owning the pipe via CreateNamedPipeW+SDDL, is
+// Phase 4.)
+//
+// Data still flows helper -> injector: the helper WRITES RemoteInputMessages onto
+// the connection, we READ them, follow the active desktop, and inject via raw
+// SendInput. Because both mouse and keyboard go through the same thread's
 // SendInput after SetThreadDesktop, injection lands on Task Manager / elevated
-// apps (high integrity) and on the Winlogon secure desktop (UAC / lock).
+// apps (high integrity) and the Winlogon secure desktop (UAC / lock).
 
 import net from 'node:net'
 import { appendFileSync } from 'node:fs'
@@ -18,6 +25,8 @@ import { injectRaw } from './rawInject'
 import { syncInputDesktop } from './win32Session'
 
 const LOG = join(tmpdir(), 'input-service.log')
+const RECONNECT_MS = 1000
+
 function log(msg: string): void {
   try {
     appendFileSync(LOG, `[injector ${new Date().toISOString()}] ${msg}\n`)
@@ -26,10 +35,20 @@ function log(msg: string): void {
   }
 }
 
-function handleConnection(sock: net.Socket): void {
-  log('helper connected to pipe')
+let sock: net.Socket | null = null
+let connecting = false
+
+function connect(): void {
+  if (connecting || sock) return
+  connecting = true
+  const s = net.connect(PIPE_NAME)
   const decoder = new FrameDecoder()
-  sock.on('data', (chunk: Buffer) => {
+  s.on('connect', () => {
+    connecting = false
+    sock = s
+    log('connected to helper pipe')
+  })
+  s.on('data', (chunk: Buffer) => {
     for (const message of decoder.push(chunk)) {
       try {
         // Follow the input desktop first — cheap, and only re-binds when it
@@ -44,23 +63,29 @@ function handleConnection(sock: net.Socket): void {
       }
     }
   })
-  sock.on('error', (e) => log(`pipe socket error: ${e.message}`))
-  sock.on('close', () => log('helper disconnected'))
+  s.on('error', (e) => {
+    // Helper not hosting yet (agent without PR_INPUT_SERVICE, or helper still
+    // starting / restarting). The 'close' handler schedules the retry.
+    log(`pipe connect error: ${e.message}`)
+    if (sock === s) sock = null
+    connecting = false
+    s.destroy()
+  })
+  s.on('close', () => {
+    if (sock === s) sock = null
+    connecting = false
+    // The helper is the persistent host; reconnect to it (it survives our
+    // respawns and we survive its restarts).
+    setTimeout(connect, RECONNECT_MS)
+  })
 }
 
 function start(): void {
   log(`injector starting (pid ${process.pid})`)
-  const server = net.createServer(handleConnection)
-  server.on('error', (e) => {
-    // EADDRINUSE => a stale pipe/instance. Log and exit so the service respawns
-    // us cleanly rather than two injectors racing on one pipe.
-    log(`server error: ${e.message}; exiting for respawn`)
-    process.exit(1)
-  })
-  server.listen(PIPE_NAME, () => log(`listening on ${PIPE_NAME}`))
+  connect()
 
-  // Belt-and-suspenders: if the parent service dies we should too (no orphaned
-  // SYSTEM injector left behind). The service also kills us on session change.
+  // Belt-and-suspenders: if the parent launcher dies we should too (no orphaned
+  // SYSTEM injector left behind). The launcher also kills us on session change.
   process.on('disconnect', () => process.exit(0))
 }
 

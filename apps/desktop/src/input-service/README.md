@@ -13,19 +13,31 @@ This adds a SYSTEM path that can.
 A Windows **service runs in session 0** and physically cannot reach the logged-in
 user's desktop. So:
 
-- `service.ts` — session-0 **launcher** (LocalSystem). Spawns/respawns the
-  injector into the interactive session via `CreateProcessAsUserW`. Never injects.
+- `service.ts` — session-0 **launcher** (SYSTEM). Spawns/respawns the injector
+  into the interactive session via `CreateProcessAsUserW`. Never injects. Runs as
+  a **Scheduled Task `/ru SYSTEM /rl HIGHEST`**, NOT an SCM service (it's plain-Node
+  electron.exe with no `StartServiceCtrlDispatcher`, which trips SCM error 1053).
 - `index.ts` — **injector-in-session** (SYSTEM, high integrity, inside session 1).
-  Hosts the pipe, follows the active desktop, does the `SendInput`.
-- `serviceClient.ts` (in `../input-helper/`) — the medium-integrity helper
-  forwards input over the pipe; **falls back to local injection** if the service
-  isn't there.
+  CONNECTS to the helper's pipe (Fix A role split, below), follows the active
+  desktop, does the `SendInput`.
+- `serviceClient.ts` (in `../input-helper/`) — the medium-integrity helper HOSTS
+  the pipe and forwards input over it; **falls back to local injection** if no
+  injector is connected.
 
 ```
-helper (session1, medium) --pipe--> injector (session1, SYSTEM) --SendInput--> active desktop
-                                        ^ spawned by
-                                     service (session0, LocalSystem)
+helper (session1, medium, HOSTS pipe) <--connect-- injector (session1, SYSTEM)
+        |  forwards RemoteInputMessages -->                 |  SendInput
+        v (fallback: local inject)                          v  active desktop
+                                     injector spawned by launcher (session0, SYSTEM task)
 ```
+
+**Fix A (pipe role split):** a SYSTEM process hosting a libuv/`net` pipe gets a
+default DACL (SYSTEM+Admins only) that DENIES the medium helper. So the roles are
+inverted — the **helper hosts** and the **SYSTEM injector connects** (SYSTEM can
+open any user-owned pipe, no custom SDDL). Fix B (injector owns the pipe via
+`CreateNamedPipeW`+SDDL, the tighter trust model) + pipe-squat hardening are
+Phase 4. Residual same-user info-leak/squat on the medium-hosted pipe is accepted
+for a sole-user home tool and documented in the plan.
 
 ## Files
 
@@ -33,11 +45,11 @@ helper (session1, medium) --pipe--> injector (session1, SYSTEM) --SendInput--> a
 |---|---|---|
 | `rawInject.ts` | raw SendInput mouse+keyboard | written, UNTESTED |
 | `protocol.ts` | length-prefixed JSON pipe framing | written |
-| `win32Session.ts` | `syncInputDesktop()` (done) + `spawnInjectorInSession()` (scaffold) | mixed |
-| `index.ts` | injector-in-session entry (pipe server + inject loop) | written, UNTESTED |
+| `win32Session.ts` | `syncInputDesktop()` (done) + `spawnInjectorInSession()` (done, phase 2) | mixed |
+| `index.ts` | injector-in-session entry (pipe CLIENT + inject loop) | written |
 | `service.ts` | session-0 launcher/supervisor | written, scaffold |
-| `../input-helper/serviceClient.ts` | helper forward-or-fallback (gated) | written |
-| `../../../scripts/{install,uninstall}-input-service.ps1` | service lifecycle | written, UNTESTED |
+| `../input-helper/serviceClient.ts` | helper pipe HOST + forward-or-fallback (gated) | written |
+| `../../../scripts/{install,uninstall}-input-service.ps1` | task lifecycle (schtasks `/ru SYSTEM`) | written |
 
 ## Build
 

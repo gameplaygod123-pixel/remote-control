@@ -1,14 +1,18 @@
-// Phase 2 end-to-end LIVE proof. Unlike phase1 (which spawns its own injector)
-// this connects the REAL helper serviceClient to the ALREADY-RUNNING injector
-// that the installed PersonalRemoteInput service spawned into this session. It
-// then forwards a couple of normalized 'move' messages over the pipe and reads
-// GetCursorPos back to prove the full production chain is live:
+// Track-2 end-to-end LIVE proof (STEP C). This runs the REAL helper serviceClient
+// as the pipe HOST (Fix A role split: the medium helper hosts, the SYSTEM injector
+// connects) and waits for the injector that the installed SYSTEM task spawned into
+// this session to connect. It then forwards a few normalized 'move' messages and
+// reads GetCursorPos back to prove the full production chain is live:
 //
-//   serviceClient.maybeForwardInput  ->  \\.\pipe\personal-remote-input
-//     ->  SYSTEM injector (session-in-session)  ->  SendInput  ->  real cursor
+//   serviceClient (HOST \\.\pipe\personal-remote-input, medium)
+//     <- connect - SYSTEM injector (session-in-session, WinSta0\Default)
+//   serviceClient.maybeForwardInput -> injector -> SendInput -> real cursor
 //
-// PR_INPUT_SERVICE=1 must be set by the launcher BEFORE this loads (serviceClient
-// reads it at import time). Run via scripts and tsx like the other dev harnesses.
+// Run in an INTERACTIVE, ELEVATED terminal (SendInput only moves the visible
+// cursor from a thread on the active input desktop; the SYSTEM injector is spawned
+// onto WinSta0\Default by the task, and this harness's GetCursorPos must run on
+// that same interactive desktop). PR_INPUT_SERVICE=1 must be set BEFORE this loads
+// (serviceClient reads it at import time). Run via tsx like the other harnesses.
 
 import koffi from 'koffi'
 import { startServiceClient, maybeForwardInput } from '../../input-helper/serviceClient'

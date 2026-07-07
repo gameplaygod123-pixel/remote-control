@@ -1,13 +1,14 @@
 // Named-pipe framing between the user-session input-helper (sender) and the
 // SYSTEM injector-in-session (receiver). A pipe is a byte stream, so frame each
 // RemoteInputMessage as a 4-byte little-endian length prefix + UTF-8 JSON.
-// UNTESTED handoff code (docs/input-elevation-plan.md).
 
 import type { RemoteInputMessage } from '../renderer/src/shared/input/inputProtocol'
 
-// Both endpoints are in the interactive session (session 1), so the default
-// pipe ACL already lets the medium-integrity user connect to the SYSTEM-hosted
-// pipe — no custom SDDL. Pipe-name squatting is a documented hardening TODO.
+// Fix A role split (docs/input-elevation-plan.md): the MEDIUM helper HOSTS this
+// pipe and the SYSTEM injector CONNECTS. A SYSTEM-hosted pipe gets a default DACL
+// that denies the medium helper; a user-hosted pipe is openable by SYSTEM, so
+// inverting the roles needs no custom SDDL. Injector-owned pipe with an explicit
+// SDDL (Fix B) + pipe-squat hardening are documented Phase 4 TODOs.
 export const PIPE_NAME = '\\\\.\\pipe\\personal-remote-input'
 
 const LEN_BYTES = 4

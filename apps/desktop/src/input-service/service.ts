@@ -1,6 +1,8 @@
-// Session-0 service entry point (LocalSystem). Installed by
-// scripts/install-input-service.ps1 and run as electron.exe with
-// ELECTRON_RUN_AS_NODE=1. UNTESTED handoff code (docs/input-elevation-plan.md).
+// Session-0 launcher entry point (SYSTEM). Installed by
+// scripts/install-input-service.ps1 as a Scheduled Task `/ru SYSTEM /rl HIGHEST`
+// (NOT an SCM service -- this is plain-Node electron.exe with no
+// StartServiceCtrlDispatcher, which trips SCM error 1053; the task avoids that
+// while staying in session 0). Run as electron.exe with ELECTRON_RUN_AS_NODE=1.
 //
 // This process NEVER injects. Its only job is to keep exactly one
 // injector-in-session (index.ts) running as SYSTEM inside the CURRENT
