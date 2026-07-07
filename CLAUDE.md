@@ -132,6 +132,35 @@ to push FPS.
   (should fall with VBR). If clean → promote full v1.25.0.** Optional: `VIDEO_NVENC_
   BITRATE_KBPS` still sweeps the VBR target live. STILL OPEN: fix any re-pair that
   hangs at "connecting" (controller side) if it recurs post-fix.
+- **beta.2 VERIFIED stable (owner, real hardware): the freeze is GONE** — used it
+  long with no mouse-death. Windows-Claude confirmed agent-side: 60fps, VBR
+  `-b:v 25000k -maxrate 40000k`, ndc spam 0, and **NVENC util dropped 67%→8%** at
+  60fps VBR. beta.2 is promotable BUT two follow-ups emerged before promoting (see
+  below), and the owner's REAL use = **Parsec always open as the primary monitor
+  (do NOT close/modify Parsec)** — so coexistence must be proven with Parsec
+  running (the stable test had it closed).
+- **GPU efficiency vs Parsec — dup_frames=0 (PENDING Windows standalone verify,
+  staged in `ffmpegArgs.ts` @ `cc4e381`, NOT built):** Task Manager showed our
+  ffmpeg at **45.7% Video-Encode engine** vs Parsec 6.1% (same tool). Cause: we run
+  `ddagrab=...:framerate=60` with default dup_frames=1, so NVENC re-encodes the
+  STATIC screen 60×/s. Fix = **`dup_frames=0`** (emit only on actual desktop change;
+  framerate becomes a cap) — Parsec's trick; our RTP path already uses wall-clock TS
+  for this variable interval (phase1/NOTES #64). RISK: our cursor is COMPOSITED into
+  the video (not sent separately like Parsec), so a cursor-only move must still
+  count as a "change" or the cursor freezes on a static screen. **GATE before
+  building beta.3: Windows-Claude runs standalone ffmpeg dup_frames=0 → confirm (a)
+  option accepted, (b) Video-Encode engine drops toward ~6%, (c) CURSOR stays smooth
+  when only the mouse moves over a still screen.** If cursor freezes, need a
+  different approach (separate cursor = big, or a min-fps floor).
+- **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
+  block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
+  Alt-Tab) sent the physical keyup to the new foreground window, so the controller
+  never forwarded keyup → the key stuck "down" on the agent (Thai still typed via
+  Unicode; shortcuts broke). Windows-Claude proved it from input logs (down=2 up=1
+  UNMATCHED). Fix in `ControllerSession.tsx`: track physically-held key codes +
+  **panic-release** (keyup all + clear) on window `blur`/`pagehide`/visibility-hidden.
+  Mac runs the controller from dev so the owner tests by relaunching (hold Shift →
+  switch to Parsec → back → no stuck key).
 
 IN PROGRESS (branch `feat/native-video`, NOT released — needs packaging +
 PRERELEASE per golden rule #1): **the native video pipeline works END TO END on
