@@ -386,12 +386,31 @@ Lessons:
      Covers everything EXCEPT the secure desktop (UAC consent / Ctrl+Alt+Del /
      lock), which needs SYSTEM.
    - **DECISION (owner, 2026-07-07):** ship BOTH, layered:
-     - **(TRACK 1, quick win) auto-elevate the agent** via a **Scheduled Task at
-       logon with "highest privileges"** (elevated, NO per-launch UAC nag, works
-       with tray auto-start). This is the Task-Manager fix. Windows-Claude to
-       script + integrate. Caveat: dragging a file from a medium Explorer ONTO the
-       elevated agent window is UIPI-blocked (receiving files from the controller
-       is unaffected).
+     - **(TRACK 1) auto-elevate the agent — ✅ DONE + VERIFIED on real hardware
+       2026-07-07: controlling Task Manager over the remote now works** (the
+       owner's original "open Task Manager → mouse dies" bug is fixed). Shipped as
+       a **Scheduled Task `PersonalRemoteAgent`** (AtLogOn / LogonType=Interactive
+       / RunLevel=Highest → elevated, NO per-launch UAC nag). Commits `a146d1c`
+       (task + `scripts/install-agent-autostart.ps1`/uninstall; `main/index.ts`
+       drops `elevated-autostart.flag` when it runs elevated and then sets
+       `openAtLogin:false` so it never re-adds the medium HKCU Run key — the task
+       is the sole autostart) + `ec04135` (the crux). **Key finding: elevation
+       only sticks when the TASK launches the agent** — a shortcut click / Windows
+       "restart apps" / manual launch = Medium → helper Medium → Task Manager dead.
+       Fix in `ec04135`: on startup, BEFORE the single-instance lock, if
+       packaged+win32+not-elevated+task-exists → `schtasks /run` + exit, so the
+       task relaunches a High instance (30s guard + the elevated instance sees
+       itself elevated ⇒ no loop). Two bugs found+fixed while doing it: (1)
+       `isElevatedWindows()` via `net session` returns success even from Medium on
+       this machine (false "elevated") → handoff never fired; now reads token
+       integrity via `whoami /groups` (High = S-1-16-12288). (2) module-scope
+       `getPath('userData')` returns `...\Electron` before app-ready → gate on task
+       existence + a marker in `getPath('temp')`. input-helper integrity was NEVER
+       a problem — `child_process.fork` inherits the parent token, so helper+children
+       = High whenever main is High (verified). Only `main/index.ts` changed; built
+       via `build-win.sh`; default runtime unaffected. Caveat: dragging a file from
+       a medium Explorer ONTO the elevated agent window is UIPI-blocked (receiving
+       files from the controller is unaffected).
      - **(TRACK 2, continue) finish the SYSTEM service** for the secure-desktop
        cases only. Once done it routes ALL input through the SYSTEM injector
        (helper forwards; local elevated inject is the fallback) → resilient layers.
