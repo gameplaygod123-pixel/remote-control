@@ -209,6 +209,55 @@ path so nothing regresses). The `NalSplitter` / `AccessUnitAssembler` / RTP path
 the whole Mac receiver are UNCHANGED (that's the payoff of matching the contract).
 Wall-clock RTP timestamps already handle the now-variable frame interval.
 
+**Split of work:** WC adds the `--output stdout` mode + CLI arg parsing to
+`capturer.exe` (against the contract below) and delivers the built binary to Mac's
+packaging (see "Binary delivery"). Mac writes the TS `CapturerFrameSource`, the
+resolver, the gate, and the electron-builder / build-win.sh packaging + verify.
+
+#### 3c CLI contract (Mac owns this; WC implements it in capturer.exe)
+
+```
+capturer.exe [options]
+  --output stdout | <path.h264>   default: stdout. A path => write to file (3b/testing).
+  --monitor <idx>                 DXGI output index. default: 0 (primary).
+  --fps <n>                       framerate CAP (change-detection => variable ≤ cap). default: 60.
+  --bitrate <kbps>                NVENC VBR target average. default: 25000.
+  --maxrate <kbps>                NVENC VBR hard cap (-maxrate). default: 40000.
+  --gop <frames>                  IDR interval. default: 120 (≈2s@60). NO intra-refresh, EVER.
+  --selftest                      3a change-detection log loop only (no encode).
+```
+
+Behavioural contract (must match what the receiver already expects from ffmpeg):
+- **stdout** = raw H.264 **Annex-B** elementary stream, 4-byte start codes
+  (`LongStartSequence`), **in-band SPS/PPS before every IDR**, **flushed per frame**
+  (no muxer buffering — low latency). Byte-identical role to ffmpeg `-f h264 pipe:1`.
+- First emitted frame is an **IDR**. Periodic IDR every `--gop` frames. I/P only, no B.
+- **stderr** = human log lines prefixed `[capturer] ...` (the sender's `onLog`
+  captures them; keep the per-second `emitted/skipped_*` counters there too).
+- **Exit codes:** 0 = clean shutdown (stdin closed / EOF). Non-zero = fatal → the
+  sender's existing crash-recovery respawns it (same as an ffmpeg fatal). **`ACCESS_LOST`
+  must recover IN-PROCESS (no exit)** — it's expected (desktop switch / lock / Parsec),
+  not a fatal; emit a fresh IDR after rebuild.
+- **stdin control channel (forced IDR on demand):** when the sender receives an RTCP
+  PLI it writes a single byte **`'I'`** (0x49) to the capturer's stdin → the capturer
+  emits an IDR at the next frame. This is the cheap forced-IDR-without-respawn that
+  makes PLI recovery instant (the "flat-bitrate endgame" the ffmpeg path couldn't do —
+  ffmpeg had to respawn). A closed stdin = shutdown signal → exit 0. If unimplemented
+  at first, the periodic `--gop` IDR still bounds recovery to ≤2s; wire it when ready.
+
+#### Binary delivery (how the WC-built .exe reaches Mac's packaging)
+
+Mac runs `build-win.sh` (darwin host, cross-packages win32) but can't compile
+`capturer.exe`. So WC delivers the built binary to a committed path
+**`apps/desktop/native/dxgi-capturer/bin/capturer.exe`** (un-ignore JUST that file;
+source `third_party/` + intermediate build output stay ignored). Then, mirroring the
+ffmpeg bundling: `electron-builder.yml` `win.extraResources` packs it to
+`resources/capturer/capturer.exe`, `resolveCapturerPath()` looks there, and
+`build-win.sh` asserts it's a PE + packed (like the ffmpeg strings-verify). Rebuild
+the exe only when the capturer source changes (re-commit the binary). Small single
+exe, one agent — the binary-in-git cost is acceptable (same spirit as bundling
+ffmpeg, just self-built instead of downloaded).
+
 **3c success (WC, Parsec left open):** control 10+ min → GPU Video-Encode during
 active control near Parsec, video smooth, coexists with Parsec (ACCESS_LOST recovers
 in place), no freeze/stuck-keys. HUD fps tracks real change rate (idle low, active

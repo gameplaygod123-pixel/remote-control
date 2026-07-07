@@ -27,6 +27,7 @@ async function bundle() {
   const entry = `
     export { NalSplitter, AccessUnitAssembler } from ${JSON.stringify(join(SENDER, 'nalSplitter.ts'))}
     export { buildFfmpegArgs } from ${JSON.stringify(join(SENDER, 'ffmpegArgs.ts'))}
+    export { buildCapturerArgs } from ${JSON.stringify(join(SENDER, 'capturerArgs.ts'))}
     export { parseRtcpFeedback, isKeyframeRequest } from ${JSON.stringify(join(SENDER, 'rtcpFeedback.ts'))}
   `
   await esbuild.build({
@@ -50,6 +51,7 @@ bundle()
       NalSplitter,
       AccessUnitAssembler,
       buildFfmpegArgs,
+      buildCapturerArgs,
       parseRtcpFeedback,
       isKeyframeRequest
     } = m
@@ -184,6 +186,48 @@ bundle()
         buildFfmpegArgs(cfg, { encoder: 'h264_mf', bitrateKbps: 30000 })
           .join(' ')
           .includes('-b:v 30000k')
+      )
+    }
+
+    // ── buildCapturerArgs (Step 3 custom DXGI capturer CLI contract) ──
+    console.log('buildCapturerArgs')
+    {
+      const cfg = {
+        width: 1920,
+        height: 1080,
+        fps: 60,
+        codec: 'h264',
+        minBitrateKbps: 6000,
+        startBitrateKbps: 25000,
+        maxBitrateKbps: 40000,
+        cursor: 'composited'
+      }
+      const a = buildCapturerArgs(cfg).join(' ')
+      check('capturer: stdout output by default', a.includes('--output stdout'))
+      check('capturer: monitor 0 default', a.includes('--monitor 0'))
+      check('capturer: fps from config', a.includes('--fps 60'))
+      check(
+        'capturer: VBR target 25000 + maxrate 40000 from config',
+        a.includes('--bitrate 25000') && a.includes('--maxrate 40000')
+      )
+      check(
+        'capturer: -g 120 default (NVENC_KEYFRAME_GOP, NO intra-refresh flag)',
+        a.includes('--gop 120') && !a.includes('intra-refresh')
+      )
+      const b = buildCapturerArgs(cfg, {
+        output: '/tmp/out.h264',
+        outputIdx: 1,
+        gop: 60,
+        bitrateKbps: 30000,
+        maxBitrateKbps: 50000
+      }).join(' ')
+      check(
+        'capturer: overrides (output path, monitor, gop, bitrate, maxrate)',
+        b.includes('--output /tmp/out.h264') &&
+          b.includes('--monitor 1') &&
+          b.includes('--gop 60') &&
+          b.includes('--bitrate 30000') &&
+          b.includes('--maxrate 50000')
       )
     }
 
