@@ -12,8 +12,9 @@ import {
   dialog
 } from 'electron'
 import { join, basename } from 'path'
-import { statSync } from 'fs'
+import { statSync, existsSync, writeFileSync } from 'fs'
 import { readFile } from 'fs/promises'
+import { execSync } from 'child_process'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import {
@@ -121,6 +122,22 @@ const inputTest = process.env.INPUT_TEST === '1'
 // (double-clicking the app / plain start-agent.bat/.vbs) still show the
 // window normally.
 const startHidden = process.env.START_HIDDEN === '1' || process.argv.includes('--hidden')
+
+// Windows: are we running elevated (high integrity)? The input-elevation feature
+// (Track 1) auto-elevates the agent via the PersonalRemoteAgent scheduled task
+// (logon + "highest privileges"), so the forked input-helper inherits high
+// integrity and can SendInput into Task Manager / run-as-admin windows. `net
+// session` needs admin -- it succeeds elevated, errors otherwise. Cheap, runs
+// once at startup. Non-Windows has no such model here, so always false.
+function isElevatedWindows(): boolean {
+  if (process.platform !== 'win32') return false
+  try {
+    execSync('net session', { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
 
 // backgroundThrottling:false on the window wasn't enough on Windows: when
 // the agent window is hidden to the tray mid-session, Chromium backgrounds
@@ -368,16 +385,32 @@ app.whenReady().then(async () => {
   const appMode: AppMode = envMode ?? getSavedMode() ?? (await promptForMode())
   if (!envMode) saveMode(appMode)
 
-  // The installed app previously had *no* auto-start mechanism at all --
-  // the old enable-autostart.vbs script only ever applied to the dev-mode
-  // source checkout (a Startup-folder shortcut to start-agent-background.vbs),
-  // which doesn't exist once that folder is deleted after installing the
-  // real packaged app. Only the agent needs this: it's the side that has
-  // to be reachable for incoming connections after an unattended reboot.
-  // Safe to call on every launch -- it's how Electron expects this to be
-  // kept in sync (e.g. if the install path ever changes after an update).
+  // Autostart (agent only -- it's the side that must be reachable after an
+  // unattended reboot). Two possible mechanisms, and they must NOT both fire:
+  // the single-instance lock means whichever wins the logon race sticks, so if
+  // the medium-integrity `openAtLogin` Run key beats the elevated
+  // PersonalRemoteAgent scheduled task (Track 1 auto-elevate), we'd silently
+  // drop back to medium integrity and Task Manager input dies again.
+  //
+  // Once the elevated scheduled task has launched us even once it drops a flag
+  // file; from then on the task is the SOLE autostart and we keep the medium Run
+  // key OFF -- even on later non-elevated manual launches. Machines without the
+  // task (flag never written) keep the medium openAtLogin fallback unchanged.
   if (app.isPackaged && appMode === 'agent') {
-    app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] })
+    const elevatedAutostartFlag = join(app.getPath('userData'), 'elevated-autostart.flag')
+    const elevated = isElevatedWindows()
+    if (elevated) {
+      try {
+        writeFileSync(elevatedAutostartFlag, '1')
+      } catch {
+        /* best effort -- worst case we fall back to the medium Run key below */
+      }
+    }
+    if (elevated || existsSync(elevatedAutostartFlag)) {
+      app.setLoginItemSettings({ openAtLogin: false })
+    } else {
+      app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] })
+    }
   }
 
   // Only the agent side ever needs to inject input, so only it spawns the

@@ -14,7 +14,9 @@ import koffi from 'koffi'
 import { startServiceClient, maybeForwardInput } from '../../input-helper/serviceClient'
 
 const user32 = koffi.load('user32.dll')
-const POINT = koffi.struct('POINT', { x: 'long', y: 'long' })
+// Registered by name so the GetCursorPos signature string can reference POINT*;
+// koffi keeps it in its own registry, so we don't bind the return value.
+koffi.struct('POINT', { x: 'long', y: 'long' })
 const GetCursorPos = user32.func('bool __stdcall GetCursorPos(_Out_ POINT* p)')
 const GetSystemMetrics = user32.func('int __stdcall GetSystemMetrics(int i)')
 
