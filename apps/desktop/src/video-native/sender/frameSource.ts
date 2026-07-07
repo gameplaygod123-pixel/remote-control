@@ -13,6 +13,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { VideoConfig } from '../shared/contract'
 import { buildFfmpegArgs, type SenderEncoder } from './ffmpegArgs'
+import { buildCapturerArgs, type CapturerArgOptions } from './capturerArgs'
 import { AccessUnitAssembler, NalSplitter, type AccessUnit } from './nalSplitter'
 
 export interface FrameSourceCallbacks {
@@ -193,6 +194,180 @@ export class FfmpegFrameSource implements FrameSource {
         return
       }
       this.cb.onFatal(`ffmpeg exited unexpectedly (code=${code} signal=${signal})`)
+    })
+  }
+}
+
+/**
+ * Step 3 (custom DXGI capturer) source: spawns our `capturer.exe`, which does DXGI
+ * Desktop Duplication + change-detection + NVENC and writes the SAME Annex-B stream
+ * to stdout that ffmpeg does (so NalSplitter/AccessUnitAssembler/RTP are unchanged).
+ * The win over FfmpegFrameSource: change-detection skips unchanged AND pointer-only
+ * frames, so a static screen with the mouse moving encodes ~0 frames (Parsec-level
+ * GPU) — the thing ddagrab structurally can't do.
+ *
+ * Differences from FfmpegFrameSource:
+ *  - forceKeyframe() writes a single byte 'I' to the capturer's stdin (the 3c
+ *    contract) → a fresh IDR at the next frame, WITHOUT respawning. This is the
+ *    cheap PLI recovery ffmpeg couldn't do (it had to respawn ~210ms).
+ *  - No MF fallback: the capturer is NVENC-only. If it can't run (non-NVIDIA /
+ *    missing / broken) the choice at the call site should be ffmpeg instead; here a
+ *    never-produced exit or spawn error is fatal.
+ *  - ACCESS_LOST is recovered INSIDE capturer.exe (it doesn't exit), so mid-stream
+ *    exits should be rare; if one happens after streaming we still restart in place
+ *    (same crash-loop-guarded logic as ffmpeg) as a belt-and-braces.
+ */
+export class CapturerFrameSource implements FrameSource {
+  private proc: ChildProcess | null = null
+  private splitter = new NalSplitter()
+  private assembler = new AccessUnitAssembler()
+  private everProduced = false
+  private stopped = false
+  private respawning = false
+  private restartTimer: ReturnType<typeof setTimeout> | undefined
+  private crashTimes: number[] = []
+  private static readonly RESTART_DELAY_MS = 300
+  private static readonly CRASH_WINDOW_MS = 10_000
+  private static readonly MAX_CRASHES_IN_WINDOW = 5
+
+  constructor(
+    private readonly capturerPath: string,
+    private readonly config: VideoConfig,
+    private readonly gop: number,
+    private readonly cb: FrameSourceCallbacks,
+    private readonly tuning: CapturerArgOptions = {}
+  ) {}
+
+  start(): void {
+    this.spawn()
+  }
+
+  forceKeyframe(): void {
+    if (this.stopped) return
+    // The cheap PLI recovery: ask capturer.exe for an IDR via stdin — no respawn.
+    const proc = this.proc
+    if (proc?.stdin?.writable) {
+      try {
+        proc.stdin.write('I')
+        this.cb.onLog?.('forceKeyframe -> sent I to capturer stdin')
+        return
+      } catch {
+        /* fall through to respawn if the pipe is wedged */
+      }
+    }
+    this.cb.onLog?.('forceKeyframe -> capturer stdin unavailable; respawning')
+    this.respawn()
+  }
+
+  stop(): void {
+    this.stopped = true
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = undefined
+    }
+    this.kill()
+  }
+
+  private kill(): void {
+    if (this.proc) {
+      const p = this.proc
+      this.proc = null
+      p.removeAllListeners()
+      try {
+        p.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  private respawn(): void {
+    this.respawning = true
+    this.kill()
+    this.splitter.reset()
+    this.assembler.reset()
+    this.spawn()
+    this.respawning = false
+  }
+
+  private spawn(): void {
+    if (this.stopped) return
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = undefined
+    }
+    const args = buildCapturerArgs(this.config, {
+      output: 'stdout',
+      gop: this.gop,
+      outputIdx: this.tuning.outputIdx,
+      bitrateKbps: this.tuning.bitrateKbps,
+      maxBitrateKbps: this.tuning.maxBitrateKbps
+    })
+    const brk = this.tuning.bitrateKbps ?? this.config.startBitrateKbps
+    this.cb.onLog?.(
+      `spawn capturer ${this.config.width}x${this.config.height}@${this.config.fps} g=${this.gop} ${brk}k`
+    )
+    // stdin piped so forceKeyframe() can send 'I'; a closed stdin = the contract's
+    // shutdown signal, so keep it open for the process lifetime.
+    const proc = spawn(this.capturerPath, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    this.proc = proc
+
+    proc.stdout!.on('data', (chunk: Buffer) => {
+      for (const nal of this.splitter.push(chunk)) {
+        const au = this.assembler.push(nal)
+        if (au) {
+          this.everProduced = true
+          this.cb.onAccessUnit(au)
+        }
+      }
+    })
+    proc.stderr!.on('data', (chunk: Buffer) => {
+      const line = chunk.toString().trim()
+      if (line) this.cb.onLog?.(`capturer: ${line}`)
+    })
+    // Ignore EPIPE on stdin if the capturer has already exited.
+    proc.stdin!.on('error', () => {
+      /* capturer gone; the exit handler deals with recovery */
+    })
+    proc.on('error', (err) => {
+      if (this.stopped || this.respawning) return
+      this.cb.onFatal(`capturer spawn error: ${err.message}`)
+    })
+    proc.on('exit', (code, signal) => {
+      if (this.stopped || this.respawning || this.proc !== proc) return
+      this.proc = null
+      // Never produced a frame -> the capturer can't run here (no NVENC / broken).
+      // Unlike ffmpeg there's no MF fallback; escalate so the call site can choose
+      // the ffmpeg path instead.
+      if (!this.everProduced) {
+        this.cb.onFatal(`capturer produced no frames (code=${code} signal=${signal})`)
+        return
+      }
+      // Died AFTER streaming. capturer.exe recovers ACCESS_LOST internally, so this
+      // is unexpected; restart in place (fresh IDR) unless it's crash-looping.
+      const now = Date.now()
+      this.crashTimes = this.crashTimes.filter(
+        (t) => now - t < CapturerFrameSource.CRASH_WINDOW_MS
+      )
+      this.crashTimes.push(now)
+      if (this.crashTimes.length > CapturerFrameSource.MAX_CRASHES_IN_WINDOW) {
+        this.cb.onFatal(
+          `capturer crash-looping (${this.crashTimes.length} exits in ` +
+            `${CapturerFrameSource.CRASH_WINDOW_MS}ms, code=${code} signal=${signal})`
+        )
+        return
+      }
+      this.cb.onLog?.(
+        `capturer exited mid-stream (code=${code} signal=${signal}); restarting in ` +
+          `${CapturerFrameSource.RESTART_DELAY_MS}ms ` +
+          `(${this.crashTimes.length}/${CapturerFrameSource.MAX_CRASHES_IN_WINDOW})`
+      )
+      this.splitter.reset()
+      this.assembler.reset()
+      this.restartTimer = setTimeout(() => {
+        this.restartTimer = undefined
+        this.spawn()
+      }, CapturerFrameSource.RESTART_DELAY_MS)
     })
   }
 }

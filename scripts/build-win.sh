@@ -80,6 +80,27 @@ mkdir -p "$FFMPEG_STAGE"
 cp "$FFMPEG_CACHE" "$FFMPEG_STAGE/ffmpeg.exe"
 echo "staged ffmpeg -> $FFMPEG_STAGE/ffmpeg.exe"
 
+# Stage the Step 3 custom DXGI capturer IF Windows-Claude has delivered the built
+# binary (committed at native/dxgi-capturer/bin/capturer.exe -- small, self-built,
+# unlike ffmpeg which is downloaded). Absent = build without it; VIDEO_CAPTURER then
+# silently falls back to ffmpeg, so the build still works either way.
+CAPTURER_SRC="$REPO_ROOT/apps/desktop/native/dxgi-capturer/bin/capturer.exe"
+CAPTURER_STAGE="$REPO_ROOT/apps/desktop/capturer"
+mkdir -p "$CAPTURER_STAGE"
+rm -f "$CAPTURER_STAGE/capturer.exe"
+EXPECT_CAPTURER=0
+if [ -f "$CAPTURER_SRC" ]; then
+  file "$CAPTURER_SRC" | grep -q "PE32+" || {
+    echo "ERROR: native/dxgi-capturer/bin/capturer.exe is not a Windows PE -- aborting" >&2
+    exit 1
+  }
+  cp "$CAPTURER_SRC" "$CAPTURER_STAGE/capturer.exe"
+  echo "staged capturer -> $CAPTURER_STAGE/capturer.exe"
+  EXPECT_CAPTURER=1
+else
+  echo "note: native/dxgi-capturer/bin/capturer.exe not present -- building WITHOUT the DXGI capturer (VIDEO_CAPTURER falls back to ffmpeg)"
+fi
+
 # Swap in the Windows binary for the duration of the build, then restore the
 # darwin one no matter how the build exits.
 BACKUP="$NDC_BINARY.darwin-backup"
@@ -125,3 +146,15 @@ if [ -z "$PACKED_FFMPEG" ] || ! file "$PACKED_FFMPEG" | grep -q "PE32+"; then
   exit 1
 fi
 echo "OK: packaged ffmpeg present ($PACKED_FFMPEG)"
+
+# If we staged the custom DXGI capturer, it must be packed at
+# resources/capturer/capturer.exe (resolveCapturerPath()). Only asserted when a
+# binary was delivered (EXPECT_CAPTURER=1) so a capturer-less build still passes.
+if [ "$EXPECT_CAPTURER" = "1" ]; then
+  PACKED_CAPTURER=$(find dist/win-unpacked/resources/capturer -name capturer.exe | head -1)
+  if [ -z "$PACKED_CAPTURER" ] || ! file "$PACKED_CAPTURER" | grep -q "PE32+"; then
+    echo "ERROR: packaged resources/capturer/capturer.exe is missing or not a Windows PE" >&2
+    exit 1
+  fi
+  echo "OK: packaged capturer present ($PACKED_CAPTURER)"
+fi

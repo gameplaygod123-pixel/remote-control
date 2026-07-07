@@ -324,14 +324,25 @@ to push FPS.
     session pollutes nvidia-smi's GPU-wide enc%); frames-encoded is the clean metric,
     real % shows at 3c. Output = `.h264` file (stdout/RTP is 3c). third_party/ + the
     built binary are gitignored.
-  - **3c (NEXT): wire capturer.exe into the sender, replacing ffmpeg (gated, ffmpeg
-    stays the fallback), + full e2e PRERELEASE (golden rule #1).** Split: WC adds a
-    `--output stdout` mode + accepts the config CLI contract (Mac defines it in
-    [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md)) + delivers the built
-    `capturer.exe` to Mac's packaging; Mac writes the TS `CapturerFrameSource` (reuses
-    NalSplitter/AU/RTP untouched) + `resolveCapturerPath` + the gate + electron-builder
-    pack + build-win.sh verify. Receiver UNCHANGED (Annex-B contract matches ffmpeg).
-    DECIDER: GPU during active control near Parsec, coexists with Parsec, no freeze.
+  - **3c IN PROGRESS — Mac side DONE (committed), awaiting WC's capturer stdout mode +
+    binary, then joint e2e PRERELEASE (golden rule #1).** MAC (done): `capturerArgs.ts`
+    (`buildCapturerArgs`, unit-tested), `CapturerFrameSource` in `frameSource.ts` (spawns
+    capturer.exe, reuses NalSplitter/AU/RTP untouched; **`forceKeyframe()` writes `'I'`
+    to stdin = cheap PLI recovery, no respawn**; crash-loop-guarded restart),
+    `resolveCapturerPath()` + `capturerEnabled()` gate (**opt-in `VIDEO_CAPTURER=1`,
+    default OFF → byte-identical ffmpeg path; capturer missing/fails → SILENT ffmpeg
+    fallback**, never a black screen), `electron-builder.yml` packs
+    `resources/capturer/capturer.exe`, `build-win.sh` stages from
+    `native/dxgi-capturer/bin/capturer.exe` if delivered + verifies it packed (tolerant:
+    absent → builds without it). typecheck + lint(0 err) + units pass. WC (todo): add
+    `--output stdout` + CLI arg parsing to capturer.exe (contract in
+    [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md) "3c CLI contract":
+    `--output/--monitor/--fps/--bitrate/--maxrate/--gop`, Annex-B/flush-per-frame,
+    **stdin `'I'`=forced IDR**, ACCESS_LOST recovers in-process); commit the built
+    `capturer.exe` to `native/dxgi-capturer/bin/` (needs a `.gitignore` exception — that
+    dir currently ignores `capturer.exe`). Then Mac builds the PRERELEASE
+    (`VIDEO_CAPTURER=1`). Receiver UNCHANGED. DECIDER: GPU during active control near
+    Parsec, coexists with Parsec, no freeze/stuck-keys, PLI recovery via stdin works.
   - 3d cursor from DXGI over the dormant `'cursor'` channel (un-gate
     `PR_CURSOR_OVERLAY`) → Mac CSS overlay (reuse beta.4's plumbing).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not

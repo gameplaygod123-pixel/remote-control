@@ -32,7 +32,13 @@ import {
 } from 'node-datachannel'
 import type { MainToVideoSender, VideoSenderToMain } from '../shared/ipc'
 import type { NativeVideoStats, VideoConfig } from '../shared/contract'
-import { FfmpegFrameSource, SyntheticFrameSource, type FrameSource } from './frameSource'
+import {
+  FfmpegFrameSource,
+  CapturerFrameSource,
+  SyntheticFrameSource,
+  type FrameSource,
+  type FrameSourceCallbacks
+} from './frameSource'
 import { NVENC_KEYFRAME_GOP } from './ffmpegArgs'
 import { isKeyframeRequest, parseRtcpFeedback } from './rtcpFeedback'
 import { logVideoSender } from '../../main/videoSenderLog'
@@ -102,6 +108,26 @@ function resolveFfmpegTuning(): { preset?: string; bitrateKbps?: number } {
   const br = Number(process.env.VIDEO_NVENC_BITRATE_KBPS)
   if (Number.isFinite(br) && br > 0) tuning.bitrateKbps = Math.round(br)
   return tuning
+}
+
+// ── Step 3: custom DXGI capturer (opt-in) ─────────────────────────────────────
+// The capturer replaces ffmpeg/ddagrab with a change-detecting DXGI capturer
+// (skips pointer-only frames -> Parsec-level GPU). OPT-IN (VIDEO_CAPTURER=1) and
+// default OFF so a plain build is byte-identical to the ffmpeg path; if it's
+// enabled but can't run (non-NVIDIA / missing / fails), we silently fall back to
+// ffmpeg. Prefer an explicit path (dev), else the bundled binary under resources.
+function capturerEnabled(): boolean {
+  return process.env.VIDEO_CAPTURER === '1'
+}
+function resolveCapturerPath(): string | null {
+  const fromEnv = process.env.CAPTURER_PATH
+  if (fromEnv && existsSync(fromEnv)) return fromEnv
+  const resDir = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+  if (resDir) {
+    const bundled = join(resDir, 'capturer', 'capturer.exe')
+    if (existsSync(bundled)) return bundled
+  }
+  return null
 }
 
 // ── active session state ─────────────────────────────────────────────────────
@@ -276,7 +302,11 @@ function startFrameSource(session: Session): void {
   if (process.env.VIDEO_FAKE_SOURCE === '1') {
     log('VIDEO_FAKE_SOURCE=1 -> synthetic frame source (no ffmpeg)')
     session.source = new SyntheticFrameSource(session.config, cb, session.config.fps)
-  } else {
+    session.source.start()
+    return
+  }
+
+  const startFfmpeg = (): void => {
     const ffmpegPath = resolveFfmpegPath()
     if (!ffmpegPath) {
       cb.onFatal('ffmpeg not found (set FFMPEG_PATH or bundle resources/ffmpeg/ffmpeg.exe)')
@@ -288,8 +318,36 @@ function startFrameSource(session: Session): void {
       log(`quality-sweep override: preset=${tuning.preset ?? 'p1'} bitrateKbps=${tuning.bitrateKbps ?? session.config.startBitrateKbps}`)
     }
     session.source = new FfmpegFrameSource(ffmpegPath, session.config, gop, cb, 'h264_nvenc', tuning)
+    session.source.start()
   }
-  session.source.start()
+
+  // Step 3: opt-in custom DXGI capturer with silent ffmpeg fallback (a capturer that
+  // isn't present, or can't run, must never black-screen -- degrade to ffmpeg).
+  if (capturerEnabled()) {
+    const capturerPath = resolveCapturerPath()
+    if (capturerPath) {
+      log(`capturer: ${capturerPath}`)
+      const tuning = resolveFfmpegTuning() // shares VIDEO_NVENC_BITRATE_KBPS sweep
+      let fellBack = false
+      const wrapped: FrameSourceCallbacks = {
+        onAccessUnit: cb.onAccessUnit,
+        onLog: cb.onLog,
+        onFatal: (msg) => {
+          if (fellBack || current !== session) return
+          fellBack = true
+          log(`capturer failed (${msg}) -> falling back to ffmpeg`)
+          startFfmpeg()
+        }
+      }
+      session.source = new CapturerFrameSource(capturerPath, session.config, gop, wrapped, {
+        bitrateKbps: tuning.bitrateKbps
+      })
+      session.source.start()
+      return
+    }
+    log('VIDEO_CAPTURER=1 but capturer.exe not found -> using ffmpeg')
+  }
+  startFfmpeg()
 }
 
 function reportStats(session: Session): void {
