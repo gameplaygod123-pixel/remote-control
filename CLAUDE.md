@@ -411,9 +411,29 @@ Lessons:
        via `build-win.sh`; default runtime unaffected. Caveat: dragging a file from
        a medium Explorer ONTO the elevated agent window is UIPI-blocked (receiving
        files from the controller is unaffected).
-     - **(TRACK 2, continue) finish the SYSTEM service** for the secure-desktop
-       cases only. Once done it routes ALL input through the SYSTEM injector
-       (helper forwards; local elevated inject is the fallback) → resilient layers.
+     - **(TRACK 2) SYSTEM service for the secure desktop — ✅ CODE DONE + PROVEN
+       end-to-end on real hardware 2026-07-07: the owner locked the screen (Win+L)
+       and controlled input from the Mac.** All STEPs pass: A (Fix A pipe — helper
+       HOSTS, SYSTEM injector CONNECTS — the Phase-2 ACL blocker is gone; e2e
+       cursor px-exact), B (session-0 launcher as a `schtasks /ru SYSTEM /rl HIGHEST`
+       task, not an SCM service → no 1053), C (chain on the normal desktop), D
+       (`syncInputDesktop()` follows into `Winlogon` → UAC / Ctrl+Alt+Del / lock
+       take input; video stays frozen there = expected, SYSTEM-capture is separate).
+       Shipped as **PRERELEASE v1.23.0-beta.1** (golden rule #1) off
+       `feat/native-video @ 3a62001` via `build-win.sh` (node-datachannel + koffi
+       win32 verified packed, asar off) — gated behind `PR_INPUT_SERVICE=1` + the
+       SYSTEM service being installed; default runtime byte-identical. **NOT yet a
+       clean-install/reboot-permanent test**: the working setup was a dev rig (dev
+       agent + flag + service installed from the repo path). Windows-Claude to make
+       it permanent from the installed .exe: (1) install the prerelease over
+       v1.22.0; (2) set `PR_INPUT_SERVICE=1` on the Track-1 `PersonalRemoteAgent`
+       task's launched process + install the `PersonalRemoteInput` SYSTEM launcher
+       pointing `-ScriptPath` at the INSTALLED app's `input-service.js` (not the dev
+       repo path); (3) reboot → confirm Task Manager (T1) + lock/UAC (T2) both take
+       input with nothing set up by hand. If the SYSTEM service is down the helper
+       falls back to local High inject, so Track 1 still works (resilient layers).
+       Not yet auto-on for a plain install — enabling it (in-app toggle / default)
+       is a separate productization step.
    - **Phase 2 e2e findings (real hardware):** ✅ service→CreateProcessAsUser→
      injector-hosts-pipe auto-spawn works; ✅ full medium→medium chain injects
      px-exact via pipe (forwarded, not fallback). **Two blockers found:**
@@ -431,9 +451,11 @@ Lessons:
         instead of an SCM service (no dispatcher needed; still session 0 → still
         uses the working `CreateProcessAsUser` primitive). Do NOT hand-roll the
         dispatcher in koffi (callback-from-native segfault risk).
-   - ⏭ Phase 3 desktop-follow (UAC/lock via `syncInputDesktop()`), Phase 4 harden
-     (Fix B pipe SDDL + squat guard, session-change re-target, injector crash-
-     respawn, uninstall cleanup).
+   - ✅ Phase 3 desktop-follow (UAC/lock via `syncInputDesktop()`) DONE (see Track 2
+     above). ⏭ REMAINING: reboot-permanent test from the installed prerelease (the
+     3 steps above), then Phase 4 harden (Fix B pipe SDDL + squat guard,
+     session-change re-target, injector crash-respawn, uninstall cleanup), then a
+     full release once the reboot test signs off.
    - Golden rule #1 throughout: PRERELEASE + real-hardware before any full release.
      Secure-desktop cases land input-only (video stays frozen = separate SYSTEM-
      capture project).
