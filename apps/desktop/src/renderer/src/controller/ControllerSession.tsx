@@ -194,10 +194,20 @@ export default function ControllerSession({
 
   // Mouse -> remote position. The WebRTC path derives it from the <video>'s
   // intrinsic size (videoWidth/Height) for object-fit letterboxing. In native
-  // mode that element carries NO video track (videoWidth=0), so we map linearly
-  // over the element box instead -- which matches the native render window that
-  // fills the same box (videoGravity .resize). Without this, native input got
-  // null (no move) and clicks landed at the stale cursor position.
+  // mode that element carries NO video track (videoWidth=0), so we can't read the
+  // frame size from it -- instead we take the remote frame dimensions from the
+  // native stats and reproduce the SAME letterbox math.
+  //
+  // The native surface (AVSampleBufferDisplayLayer, embed.swift) draws with
+  // `.resizeAspect` -- it preserves the frame aspect and letterboxes inside the
+  // element box. That box is the whole session window, which the aspect lock
+  // (main setAspectRatio) only APPROXIMATELY holds at the remote's ratio, so the
+  // drawn video rect can be a hair shorter/narrower than the box. Mapping the
+  // pointer over the full box (the old code) then drifts symmetrically from centre
+  // over the bars -- the exact "Y offset grows toward top/bottom" bug. So map over
+  // the ACTUAL letterboxed video rect, mirroring videoRelativePosition's object-fit
+  // handling; a pointer on the black bars returns null (no move), like the bars
+  // aren't part of the remote screen.
   function relativePosition(
     el: HTMLVideoElement,
     clientX: number,
@@ -206,8 +216,25 @@ export default function ControllerSession({
     if (useNativeVideoRef.current) {
       const rect = el.getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0) return null
-      const x = (clientX - rect.left) / rect.width
-      const y = (clientY - rect.top) / rect.height
+      const vw = nativeStats?.width ?? 0
+      const vh = nativeStats?.height ?? 0
+      const videoAspect = vw > 0 && vh > 0 ? vw / vh : 16 / 9
+      const boxAspect = rect.width / rect.height
+      let contentW = rect.width
+      let contentH = rect.height
+      let offX = 0
+      let offY = 0
+      if (boxAspect > videoAspect) {
+        // Pillarbox: bars left/right, video is full height.
+        contentW = rect.height * videoAspect
+        offX = (rect.width - contentW) / 2
+      } else if (boxAspect < videoAspect) {
+        // Letterbox: bars top/bottom, video is full width.
+        contentH = rect.width / videoAspect
+        offY = (rect.height - contentH) / 2
+      }
+      const x = (clientX - rect.left - offX) / contentW
+      const y = (clientY - rect.top - offY) / contentH
       if (x < 0 || x > 1 || y < 0 || y > 1) return null
       return { x, y }
     }
