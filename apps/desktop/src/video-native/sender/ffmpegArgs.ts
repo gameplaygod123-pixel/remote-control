@@ -28,9 +28,11 @@ export interface FfmpegArgOptions {
    *  Quality-sweep knob (env VIDEO_NVENC_PRESET at the call site) — p1→p4 is the
    *  Mac-approved sweep to try at the real-ffmpeg run. Ignored by the MF fallback. */
   preset?: string
-  /** CBR target in kbps. Default = config.startBitrateKbps (20 Mbps). Quality-sweep
-   *  knob (env VIDEO_NVENC_BITRATE_KBPS) — the 20→30 Mbps sweep. Applies to both encoders. */
+  /** VBR target average in kbps. Default = config.startBitrateKbps. Sweep knob
+   *  (env VIDEO_NVENC_BITRATE_KBPS). Applies to both encoders. */
   bitrateKbps?: number
+  /** VBR hard cap in kbps. Default = config.maxBitrateKbps. The `-maxrate` ceiling. */
+  maxBitrateKbps?: number
 }
 
 /**
@@ -43,16 +45,24 @@ function encoderArgs(
   encoder: SenderEncoder,
   gop: number,
   preset: string,
-  bitrateKbps: number
+  bitrateKbps: number,
+  maxBitrateKbps: number
 ): string[] {
-  const bitrate = `${bitrateKbps}k` // fixed CBR for v1 (item D); change = respawn
+  const bitrate = `${bitrateKbps}k`
   if (encoder === 'h264_nvenc') {
+    // VBR (was CBR): the target is the AVERAGE, `-maxrate` the hard cap. A static
+    // screen falls to a few Mbps (like Parsec) instead of pumping the full rate
+    // constantly -- big cut in average traffic, which is what strained ICE at 60
+    // Mbps CBR. `-bufsize` ~250ms keeps the burst bounded so latency stays low;
+    // `-tune ull` + `-bf 0` + `-zerolatency` keep the per-frame path low-latency.
     return [
       '-c:v', 'h264_nvenc',
       '-preset', preset, // p1 (fastest) default; p1→p4 quality sweep
       '-tune', 'ull', // ultra-low-latency
-      '-rc', 'cbr',
-      '-b:v', bitrate,
+      '-rc', 'vbr',
+      '-b:v', bitrate, // VBR target average (sweepable via env)
+      '-maxrate', `${maxBitrateKbps}k`, // hard cap (owner: ≤40 Mbps)
+      '-bufsize', `${Math.max(1, Math.round(maxBitrateKbps / 4))}k`, // ~250ms burst bound
       '-bf', '0', // NO B-frames (no reorder delay)
       '-g', String(gop),
       '-delay', '0', // no output reorder delay
@@ -63,7 +73,7 @@ function encoderArgs(
   }
   // Media Foundation fallback: fewer knobs than nvenc; the input is already CPU
   // (bgra) after hwdownload in the filter chain below, so no GPU-encoder flags.
-  return ['-c:v', 'h264_mf', '-b:v', bitrate]
+  return ['-c:v', 'h264_mf', '-b:v', bitrate, '-maxrate', `${maxBitrateKbps}k`]
 }
 
 /**
@@ -110,11 +120,12 @@ export function buildFfmpegArgs(config: VideoConfig, opts: FfmpegArgOptions = {}
   const outputIdx = opts.outputIdx ?? 0
   const preset = opts.preset ?? 'p1'
   const bitrateKbps = opts.bitrateKbps ?? config.startBitrateKbps
+  const maxBitrateKbps = opts.maxBitrateKbps ?? config.maxBitrateKbps
   return [
     '-hide_banner',
     '-loglevel', 'error',
     '-filter_complex', filterChain(encoder, config, outputIdx),
-    ...encoderArgs(encoder, gop, preset, bitrateKbps),
+    ...encoderArgs(encoder, gop, preset, bitrateKbps, maxBitrateKbps),
     '-bsf:v', 'dump_extra',
     '-f', 'h264',
     '-flush_packets', '1',

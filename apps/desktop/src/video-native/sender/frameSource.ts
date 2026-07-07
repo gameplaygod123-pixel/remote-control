@@ -49,6 +49,17 @@ export class FfmpegFrameSource implements FrameSource {
   private triedMf = false
   private stopped = false
   private respawning = false
+  // Auto-recovery from a MID-STREAM ffmpeg death (the common one is ddagrab losing
+  // DXGI Desktop Duplication -- DXGI_ERROR_ACCESS_LOST 0x887a0026 -- on a desktop/
+  // mode switch or another capturer grabbing the desktop). We restart ffmpeg IN
+  // PLACE instead of failing the helper, so the peer connection survives (a full
+  // re-pair froze video+input for seconds = the "mouse dead" symptom). Guarded by
+  // a crash-loop limit so a genuinely broken ffmpeg still escalates to onFatal.
+  private restartTimer: ReturnType<typeof setTimeout> | undefined
+  private crashTimes: number[] = []
+  private static readonly RESTART_DELAY_MS = 300
+  private static readonly CRASH_WINDOW_MS = 10_000
+  private static readonly MAX_CRASHES_IN_WINDOW = 5
 
   constructor(
     private readonly ffmpegPath: string,
@@ -73,6 +84,10 @@ export class FfmpegFrameSource implements FrameSource {
 
   stop(): void {
     this.stopped = true
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = undefined
+    }
     this.kill()
   }
 
@@ -100,6 +115,12 @@ export class FfmpegFrameSource implements FrameSource {
 
   private spawn(): void {
     if (this.stopped) return
+    // A fresh spawn supersedes any pending auto-restart (e.g. forceKeyframe raced
+    // the restart timer) -- clear it so we never double-spawn.
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = undefined
+    }
     const args = buildFfmpegArgs(this.config, {
       gop: this.gop,
       encoder: this.encoder,
@@ -140,6 +161,35 @@ export class FfmpegFrameSource implements FrameSource {
         this.splitter.reset()
         this.assembler.reset()
         this.spawn()
+        return
+      }
+      // Died AFTER streaming -> almost always a recoverable capture loss (ddagrab
+      // DXGI_ERROR_ACCESS_LOST). Restart ffmpeg in place (fresh IDR + in-band
+      // SPS/PPS) WITHOUT tearing down the session -- unless it's crash-looping.
+      if (this.everProduced) {
+        const now = Date.now()
+        this.crashTimes = this.crashTimes.filter(
+          (t) => now - t < FfmpegFrameSource.CRASH_WINDOW_MS
+        )
+        this.crashTimes.push(now)
+        if (this.crashTimes.length > FfmpegFrameSource.MAX_CRASHES_IN_WINDOW) {
+          this.cb.onFatal(
+            `ffmpeg crash-looping (${this.crashTimes.length} exits in ` +
+              `${FfmpegFrameSource.CRASH_WINDOW_MS}ms, code=${code} signal=${signal})`
+          )
+          return
+        }
+        this.cb.onLog?.(
+          `ffmpeg exited mid-stream (code=${code} signal=${signal}) -- likely ddagrab ` +
+            `ACCESS_LOST; restarting capture in ${FfmpegFrameSource.RESTART_DELAY_MS}ms ` +
+            `(${this.crashTimes.length}/${FfmpegFrameSource.MAX_CRASHES_IN_WINDOW})`
+        )
+        this.splitter.reset()
+        this.assembler.reset()
+        this.restartTimer = setTimeout(() => {
+          this.restartTimer = undefined
+          this.spawn()
+        }, FfmpegFrameSource.RESTART_DELAY_MS)
         return
       }
       this.cb.onFatal(`ffmpeg exited unexpectedly (code=${code} signal=${signal})`)

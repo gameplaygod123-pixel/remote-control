@@ -65,19 +65,20 @@ export interface VideoConfig {
 export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   width: 1920,
   height: 1080,
-  // 120 fps: the Mac controller is ProMotion 120Hz and a 144Hz+ source can feed
-  // it, so 120 is the perceptible smoothness ceiling (min of both displays). The
-  // NVENC path ignores width/height (encodes at native capture res) but honors fps
-  // via ddagrab's framerate + the 1s GOP. Real-hardware verified via prerelease.
-  fps: 120,
+  // 60 fps: 120 was proven encodable (NVENC had headroom) but drove GPU load hard
+  // and, with fixed 60 Mbps CBR, stressed the link (ICE "Lost connectivity"). The
+  // owner chose 60 fps + auto bitrate ≤40. The NVENC path ignores width/height
+  // (encodes at native capture res) but honors fps via ddagrab framerate + 1s GOP.
+  fps: 60,
   codec: 'h264',
-  // CBR target = startBitrateKbps (item D). 60 Mbps to keep 1440p120 crisp per
-  // frame (2x the frames of 60fps need ~2x bits); Parsec runs ~60-70 Mbps here.
-  // The owner's direct ~11ms link has ample headroom. Sweep via
-  // VIDEO_NVENC_BITRATE_KBPS env without a rebuild.
-  minBitrateKbps: 20_000,
-  startBitrateKbps: 60_000,
-  maxBitrateKbps: 70_000,
+  // Auto (VBR) bitrate: NVENC spends bits only on motion (a static screen drops to
+  // a few Mbps like Parsec) and caps at maxBitrateKbps -- far less average traffic
+  // than the old fixed 60 Mbps CBR, which is what strained ICE. startBitrateKbps =
+  // VBR target average, maxBitrateKbps = the hard cap (owner: "ไม่เกิน 40"). The
+  // env VIDEO_NVENC_BITRATE_KBPS still overrides the target for live sweeps.
+  minBitrateKbps: 10_000,
+  startBitrateKbps: 25_000,
+  maxBitrateKbps: 40_000,
   cursor: 'composited'
 }
 

@@ -91,14 +91,14 @@ bundle().then((m) => {
     // its VideoProcessor won't configure BGRA->NV12 on this GPU; real-ffmpeg run).
     check('nvenc: zero-copy, NO scale_d3d11 filter', !nv.includes('scale_d3d11'))
     check('nvenc: low-latency flags (ull, bf 0, zerolatency)', nv.includes('-tune ull') && nv.includes('-bf 0') && nv.includes('-zerolatency 1'))
-    check('nvenc: CBR at startBitrate (20000k), gop 60', nv.includes('-rc cbr') && nv.includes('-b:v 20000k') && nv.includes('-g 60'))
+    check('nvenc: VBR target 20000k + maxrate cap 30000k, gop 60', nv.includes('-rc vbr') && nv.includes('-b:v 20000k') && nv.includes('-maxrate 30000k') && nv.includes('-g 60'))
     check('nvenc: Annex-B pipe out with in-band params', nv.includes('-bsf:v dump_extra') && nv.includes('-f h264') && nv.includes('-flush_packets 1') && nv.endsWith('pipe:1'))
     const mf = buildFfmpegArgs(cfg, { gop: 60, encoder: 'h264_mf' }).join(' ')
     check('mf fallback: hwdownload + CPU scale + h264_mf', mf.includes('hwdownload,format=bgra,scale=1920:1080') && mf.includes('-c:v h264_mf'))
     // quality-sweep knobs: default byte-identical (p1/20000k), override honoured
     check('default preset is p1 (contract default)', nv.includes('-preset p1'))
     const swept = buildFfmpegArgs(cfg, { gop: 60, preset: 'p4', bitrateKbps: 30000 }).join(' ')
-    check('sweep override: preset p4 + 30000k CBR', swept.includes('-preset p4') && swept.includes('-b:v 30000k') && !swept.includes('-b:v 20000k'))
+    check('sweep override: preset p4 + 30000k VBR target', swept.includes('-preset p4') && swept.includes('-b:v 30000k') && !swept.includes('-b:v 20000k'))
     check('sweep bitrate reaches mf fallback too', buildFfmpegArgs(cfg, { encoder: 'h264_mf', bitrateKbps: 30000 }).join(' ').includes('-b:v 30000k'))
   }
 

@@ -51,7 +51,9 @@ function log(session: number, message: string): void {
 // NDC_LOG_LEVEL if it proves too noisy to read by hand. Logged with
 // `sessionCounter` (not a per-pc session, since these lines originate from
 // the native library itself, not from one of our own pc-bound handlers).
-initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Debug', (level, message) => {
+// 'Warning' (was 'Debug') so shipped input-helper.log isn't 98% [ndc:Debug] spam
+// that buries real diagnostics -- set NDC_LOG_LEVEL=Debug to bring it back.
+initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Warning', (level, message) => {
   logInputHelper('HELPER', `[session ${sessionCounter}] [ndc:${level}] ${message}`)
 })
 
