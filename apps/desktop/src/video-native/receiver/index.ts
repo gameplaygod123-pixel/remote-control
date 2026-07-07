@@ -230,6 +230,13 @@ function reportStats(session: Session): void {
     jitterMs: session.framesInWindow > 0 ? Math.round(session.jitterMs) : null,
     codec: 'h264'
   }
+  // Per-second stats to the log too (not just the HUD) so frame-pacing evidence —
+  // fps swing + jitter over time, vs Parsec — is inspectable after the fact (golden
+  // rule #1). With change-detection capture fps is INTENTIONALLY variable (idle→low,
+  // motion→high, like Parsec); jitterMs is the real smoothness metric.
+  log(
+    `stats fps=${stats.fps} jitter=${stats.jitterMs ?? '-'}ms kbps=${stats.kbps} ${stats.width}x${stats.height}`
+  )
   session.framesInWindow = 0
   session.bytesInWindow = 0
   send({ evt: 'stats', stats })
