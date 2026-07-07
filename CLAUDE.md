@@ -236,9 +236,30 @@ to push FPS.
     `sender/index.ts` now sets `gop = NVENC_INTRA_REFRESH_GOP` (the `config.fps` "1s
     GOP" comment predated intra-refresh; MF fallback is unaffected — its argv has no
     `-g`). Rebuilt → **PRERELEASE v1.25.1-beta.2**.
-  - **NEXT: WC installs beta.2, dumps argv to confirm `-g 999999`, controls a session
-    → HUD kbps FLAT (no ~1s spikes), no banding, PLI recovery works. If clean →
-    promote v1.25.1, then Step 2 (multi-slice + present tuning).**
+  - **beta.2 REGRESSION (WC, real hardware) → FIXED in beta.3:** argv was finally
+    correct (`-intra-refresh 1 -g 999999 -forced-idr 1`, image sharp) BUT the Mac
+    receiver FROZE mid-session — owner had to reconnect every 1-3 min. Proven
+    receiver-side: during each freeze the sender log was error-free (pure P-frame
+    stream, NO ddagrab ACCESS_LOST / respawn / fatal) = a VideoToolbox decode stall,
+    not capture. ROOT CAUSE: **pure intra-refresh (`-g 999999` = one IDR ever) removes
+    the periodic IDR that AVSampleBufferDisplayLayer NEEDS to recover** — VT does NOT
+    resume off intra-refresh's rolling I-MB recovery, so any loss/reference gap sticks
+    forever (drag felt worse = more motion → more glitches → more freezes). forced-idr-
+    on-PLI didn't save it (receiver wasn't sending PLI on decode-stall; forcing an IDR
+    then needed a heavy ffmpeg respawn). **NEVER ship pure intra-refresh on this VT
+    pipeline** (saved to memory). FIX (Option B): keep intra-refresh (spreads the
+    keyframe cost across P-frames) but restore a MODERATE periodic IDR safety net —
+    `NVENC_INTRA_REFRESH_GOP` 999999→**120** (IDR every ~2s@60fps, half v1.25.0's 1s
+    spike frequency) so VT self-heals at least every 2s. `ffmpegArgs.ts` +
+    `sender/index.ts` comments + unit test updated (`-g 120`, not 60/999999); all pass,
+    typecheck clean. Rebuilt → **PRERELEASE v1.25.1-beta.3**.
+  - **NEXT: WC installs beta.3, dumps argv to confirm `-g 120`, controls 10+ min →
+    the mid-session FREEZE must be GONE (no forced reconnects), HUD kbps milder than
+    v1.25.0 (spike every ~2s not 1s), no banding, PLI recovery works. If STILL freezes
+    → fall back to Option A (full revert to periodic `-g 60`, pursue smoothness via
+    Step 2 only). If clean → promote v1.25.1, then Step 2 (multi-slice + present
+    tuning). The spike-free endgame (Option C = receiver detects decode-stall → PLI →
+    cheap forced IDR, no respawn) is deferred to Step 2/3 receiver work.**
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller

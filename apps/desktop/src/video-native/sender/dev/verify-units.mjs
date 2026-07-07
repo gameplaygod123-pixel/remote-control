@@ -147,13 +147,16 @@ bundle()
         'nvenc: VBR target 20000k + maxrate cap 30000k',
         nv.includes('-rc vbr') && nv.includes('-b:v 20000k') && nv.includes('-maxrate 30000k')
       )
-      // Step 1: intra-refresh replaces the periodic full IDR (no ~1s bitrate spike).
+      // Step 1: intra-refresh + a MODERATE periodic IDR (120 ≈ 2s@60fps). Pure
+      // intra-refresh (-g 999999, no periodic IDR) froze the VideoToolbox receiver,
+      // so we keep a 2s IDR safety net (halved from v1.25.0's 1s -g 60).
       check(
-        'nvenc: intra-refresh + forced-idr, NO periodic IDR (-g huge, not 60)',
+        'nvenc: intra-refresh + forced-idr + 2s periodic IDR (-g 120, not 60/999999)',
         nv.includes('-intra-refresh 1') &&
           nv.includes('-forced-idr 1') &&
-          nv.includes('-g 999999') &&
-          !nv.includes('-g 60')
+          nv.includes('-g 120') &&
+          !nv.includes('-g 60') &&
+          !nv.includes('-g 999999')
       )
       check(
         'nvenc: Annex-B pipe out with in-band params',

@@ -241,10 +241,11 @@ function startSession(config: VideoConfig): void {
 }
 
 function startFrameSource(session: Session): void {
-  // Step 1: intra-refresh, NOT a periodic full IDR. A huge -g suppresses the 1s
-  // keyframe spike (the old `config.fps` = 1s GOP predates intra-refresh and, by
-  // overriding buildFfmpegArgs' default, was silently re-enabling periodic IDRs --
-  // proven on hardware). Recovery is via forced-idr on PLI, not a periodic IDR.
+  // Step 1: intra-refresh WITH a moderate periodic IDR (NVENC_INTRA_REFRESH_GOP =
+  // 120 ≈ 2s@60fps). Do NOT pass config.fps here (=1s GOP, the old pre-intra-
+  // refresh value) and do NOT use a huge -g: pure intra-refresh (no periodic IDR)
+  // froze the VideoToolbox receiver, which only recovers off a real IDR (WC, real
+  // hardware, beta.2). The intra-refresh flags still spread the keyframe cost.
   // Harmless to the MF fallback (its argv has no -g).
   const gop = NVENC_INTRA_REFRESH_GOP
   const cb = {

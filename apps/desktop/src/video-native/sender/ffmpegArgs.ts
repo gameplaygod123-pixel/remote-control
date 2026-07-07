@@ -17,16 +17,24 @@ import type { VideoConfig } from '../shared/contract'
  *  (needs a per-frame GPU->CPU hwdownload, ~130% CPU) -- see RESULTS.md §C. */
 export type SenderEncoder = 'h264_nvenc' | 'h264_mf'
 
-/** `-g` value used with intra-refresh: huge, so NVENC never emits a periodic full
- *  IDR (the refresh rolls through P-frames instead). WC-verified on the RTX agent
- *  (`-intra-refresh 1 -g 999999` -> 1 I-frame at start, no periodic keyframe). */
-export const NVENC_INTRA_REFRESH_GOP = 999999
+/** `-g` (IDR interval, frames) used WITH intra-refresh. Step 1 first tried a huge
+ *  value (999999 = one IDR ever, refresh rolls through P-frames) but that REGRESSED
+ *  on the VideoToolbox receiver: AVSampleBufferDisplayLayer needs a periodic IDR to
+ *  recover from any loss/reference gap -- it does NOT resume off intra-refresh's
+ *  rolling recovery -- so with no periodic IDR the Mac froze mid-session and had to
+ *  reconnect (WC, real hardware, v1.25.1-beta.2). So we keep intra-refresh (flatter
+ *  bitrate: the refresh spreads the keyframe cost across P-frames) but restore a
+ *  MODERATE periodic IDR safety net: 120 frames = an IDR every ~2s at 60fps. That
+ *  halves v1.25.0's 1s-IDR spike frequency while giving VT a self-heal point at
+ *  least every 2s; PLI still forces an IDR on demand. */
+export const NVENC_INTRA_REFRESH_GOP = 120
 
 export interface FfmpegArgOptions {
-  /** `-g` value in frames. With intra-refresh (Step 1) there is no periodic IDR,
-   *  so this is deliberately HUGE by default (NVENC_INTRA_REFRESH_GOP) to suppress
-   *  any periodic keyframe; recovery is via forced-idr on PLI. Override only for
-   *  tests / experiments. */
+  /** `-g` (IDR interval) in frames. With intra-refresh (Step 1) this is a MODERATE
+   *  periodic-IDR safety net (NVENC_INTRA_REFRESH_GOP = 120 ≈ 2s at 60fps) that the
+   *  VideoToolbox receiver needs to auto-recover from loss; the refresh spreads the
+   *  keyframe cost across P-frames so the spike is milder than a per-second IDR.
+   *  Override only for tests / experiments. */
   gop?: number
   encoder?: SenderEncoder
   /** DXGI output index to duplicate (0 = primary). Multi-monitor is Phase 3. */
@@ -79,16 +87,16 @@ function encoderArgs(
       `${Math.max(1, Math.round(maxBitrateKbps / 4))}k`, // ~250ms burst bound
       '-bf',
       '0', // NO B-frames (no reorder delay)
-      // Intra-refresh instead of a periodic full IDR (Step 1, guide §4.1 --
-      // streaming-improvements-plan.md). A full IDR every GOP is a bitrate SPIKE
-      // -> a ~1s micro-stutter and a non-flat bitrate. Intra-refresh rolls the
-      // refresh across a band of P-frames every cycle so the bitrate stays flat
-      // and loss self-heals without a spike. `-g` is set very large so there is
-      // NO periodic IDR (WC-verified on the RTX agent: 1 I-frame at start, rolling
-      // I-macroblocks in the P-frames after, decode clean). `-forced-idr` keeps a
-      // PLI / session-start able to force a REAL IDR -- now our only full-frame
-      // recovery path -- and `-bsf:v dump_extra` still repeats SPS/PPS in-band so a
-      // mid-stream join / post-respawn decoder still gets parameter sets.
+      // Intra-refresh ON TOP OF a moderate periodic IDR (Step 1, guide §4.1 --
+      // streaming-improvements-plan.md). Intra-refresh rolls the refresh across a
+      // band of P-frames every cycle so the keyframe cost is spread out (milder
+      // bitrate bumps than a hard per-second IDR). We do NOT drop the periodic IDR
+      // entirely: pure intra-refresh (`-g 999999`) FROZE the VideoToolbox receiver
+      // (it only resumes off a real IDR, not off rolling recovery -- WC, real
+      // hardware, beta.2), so `-g` = NVENC_INTRA_REFRESH_GOP (120 ≈ 2s@60fps) keeps
+      // a self-heal point every ~2s. `-forced-idr` also lets a PLI / session-start
+      // force a REAL IDR on demand, and `-bsf:v dump_extra` repeats SPS/PPS in-band
+      // so a mid-stream join / post-respawn decoder still gets parameter sets.
       '-intra-refresh',
       '1',
       '-forced-idr',
