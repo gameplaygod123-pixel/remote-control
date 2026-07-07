@@ -20,6 +20,37 @@ export type RemoteInputMessage =
   | { t: 'keyup'; code: string }
   | { t: 'text'; text: string }
 
+// The remote machine's CURRENT cursor SHAPE, reported agent -> controller by
+// the input helper (Windows) so the controller can draw the matching NATIVE
+// cursor. The native video ships WITHOUT a composited cursor (ddagrab
+// draw_mouse=0) so a mouse-only move isn't a "desktop change" and NVENC sits
+// near-idle on a static screen -- the Parsec-style GPU win. Each value is a
+// valid CSS `cursor` keyword, applied verbatim on the video element, so macOS
+// renders the real shape itself (crisp, 0-latency, correct hotspot); 'none'
+// hides it (the remote app hid its cursor). Unknown/custom app cursors fall
+// back to 'default'. Only standard system cursors are recognised -- shape, not
+// pixels, crosses the wire, so the FFI stays a single GetCursorInfo call (no
+// bitmap plumbing, which is what segfaulted the v1.15.0 clipboard FFI).
+export type CursorShape =
+  | 'default'
+  | 'text'
+  | 'pointer'
+  | 'wait'
+  | 'progress'
+  | 'help'
+  | 'crosshair'
+  | 'move'
+  | 'not-allowed'
+  | 'ns-resize'
+  | 'ew-resize'
+  | 'nwse-resize'
+  | 'nesw-resize'
+  | 'none'
+
+// Sent over the dedicated 'cursor' data channel (helper mode only), reliable/
+// ordered and only on change -- negligible traffic.
+export type RemoteCursorMessage = { shape: CursorShape }
+
 // Physical-key-code injection (nut.js's Key enum) only covers a fixed,
 // US-layout-shaped set of keys -- there's no way to express "type a Thai
 // character" as a physical key press at all. Printable characters are sent

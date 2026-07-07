@@ -151,11 +151,45 @@ to push FPS.
   desktop change (draw_mouse composites it) → ~54fps while moving, ~5fps idle. Also
   added a **receiver jitter guard** (exclude AU gaps >100ms) so the HUD jitter doesn't
   spike under the now-variable frame rate. Built via `build-win.sh`, published beta.3.
-  **NEXT (in-app, Parsec OPEN): GPU during real use near Parsec + coexists; cursor
-  smooth; a fully-static screen at ~5fps holds the last frame (no black/stall, ICE
-  up); no mouse-death/stuck-keys. If clean → promote full v1.25.0** (rolls up
-  60fps+VBR≤40, ddagrab crash-recovery, dup_frames=0, quiet ndc log, HUD telemetry,
-  stuck-key panic-release).
+  **beta.3 in-app result (owner+Windows-Claude, Parsec running, ~12min):** ✅ no
+  black/stall on a static screen (fps ran 50-77); ✅ ddagrab ACCESS_LOST hit once
+  (Parsec grabbed the desktop) and beta.3 recovered in place (`restarting capture
+  300ms`, no re-pair). ❌ **GPU still ~38-42% (avgFps ~38), NOT near Parsec's ~6%**;
+  ⚠️ cursor a touch stuttery. ROOT CAUSE FOUND: **we composite the cursor into the
+  video (`draw_mouse` default-on), and in real use the mouse moves nonstop → ddagrab
+  sees a "desktop change" every frame → NVENC re-encodes ~38fps continuously**, so
+  dup_frames=0 can't idle. Parsec is at 6% because it draws the cursor as a SEPARATE
+  overlay (not in the video). Same reason the cursor stutters — its smoothness was
+  tied to the video framerate.
+- **CURSOR-OUT-OF-VIDEO → the real Parsec-GPU fix (owner picked "แบบ Parsec เป๊ะ",
+  code DONE, awaiting koffi verify + build):** ship `draw_mouse=0` (cursor NOT baked
+  into the frame → a mouse-only move is no longer a change → the encoder finally
+  idles on a static screen) AND draw the cursor natively on the Mac. Chose the SAFE
+  realization over transmitting a cursor bitmap (koffi GetDIBits = the kind of pixel
+  FFI that dangling-pointer-crashed v1.15.0): the agent reports only the **semantic
+  cursor SHAPE** and the Mac applies it as a **CSS `cursor`** so macOS draws the real
+  native cursor (0-latency, correct hotspot, 1:1 position — the Mac already knows the
+  position, it's the input source). Standard cursors (arrow/I-beam/hand/resize/wait/
+  hidden) map to CSS keywords; custom app cursors fall back to arrow. New code:
+  `input-helper/cursorCapture.ts` (Windows koffi `GetCursorInfo` + `LoadCursorW`
+  handle-compare, lazy load per golden rule #5, struct-size guard, fully try/no-op
+  guarded → any failure degrades to the local Mac cursor, never a black hole); a
+  dedicated `'cursor'` data channel on the input pc (`input-helper/index.ts` creates
+  it, `peerConnection.ts` `onCursorChannel`, `ControllerSession` applies the shape as
+  CSS on the video el, native mode only so WebRTC is untouched); `CursorShape`/
+  `RemoteCursorMessage` in `inputProtocol.ts`; `contract.ts` `DEFAULT_VIDEO_CONFIG.
+  cursor` `'composited'`→`'separate'`; `ffmpegArgs.ts` grab now `...:dup_frames=0:
+  draw_mouse=${separate?0:1}`. Mac-side verified: typecheck (node+web) + sender unit
+  tests (draw_mouse 0/1 asserted) + lint(prod, 0 err) all clean. **NEXT (golden rule
+  #1 — koffi FFI): Windows-Claude runs the ISOLATION harness FIRST**
+  `node src/input-helper/dev/cursor-capture-test.mjs` on the real agent (hover varied
+  UI, confirm the printed shape tracks + NO segfault) — a bad koffi signature
+  segfaults uncatchably (v1.15.0 crash-loop). If the harness passes → Mac builds+ships
+  **PRERELEASE v1.25.0-beta.4** for the real e2e: GPU should drop toward Parsec's ~6%
+  during active control (cursor no longer re-encodes the screen), cursor shows the
+  correct NATIVE shape + no stutter, coexists with Parsec. If clean → promote full
+  v1.25.0 (rolls up 60fps+VBR≤40, ddagrab crash-recovery, dup_frames=0, cursor-out-
+  of-video, quiet ndc log, HUD telemetry, stuck-key panic-release).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
   block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
   Alt-Tab) sent the physical keyup to the new foreground window, so the controller

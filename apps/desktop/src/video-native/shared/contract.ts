@@ -79,7 +79,14 @@ export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   minBitrateKbps: 10_000,
   startBitrateKbps: 25_000,
   maxBitrateKbps: 40_000,
-  cursor: 'composited'
+  // 'separate' (was 'composited'): ddagrab captures WITHOUT the cursor
+  // (draw_mouse=0) and the agent reports the cursor SHAPE out of band for the
+  // Mac to draw natively (CSS). This is what finally makes the GPU sit near-
+  // idle on a static screen -- with a composited cursor, every mouse twitch was
+  // a "desktop change" so NVENC re-encoded ~40fps continuously even with
+  // dup_frames=0 (measured ~40% Video-Encode vs Parsec's ~6%, which draws the
+  // cursor as a separate overlay too). See input-helper/cursorCapture.ts.
+  cursor: 'separate'
 }
 
 /**

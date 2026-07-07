@@ -32,6 +32,7 @@ import {
   type ClipboardChannelLike
 } from '../renderer/src/shared/clipboard/clipboardSyncCore'
 import { readClipboardText, writeClipboardText } from './clipboardNative'
+import { startCursorCapture } from './cursorCapture'
 import { logInputHelper } from '../main/inputHelperLog'
 
 // TEMP diagnostic (helper-session-flapping investigation, see
@@ -255,6 +256,9 @@ let connectTimeout: ReturnType<typeof setTimeout> | undefined
 // re-created per negotiation attempt, so the previous one must be torn down
 // before the next starts (otherwise stale poll intervals stack up).
 let clipboardStop: (() => void) | null = null
+// Same lifecycle for the cursor-shape poll (see the 'cursor' data channel
+// below): stopped before each new attempt so no stale interval keeps polling.
+let cursorStop: (() => void) | null = null
 
 function clearConnectTimeout(): void {
   if (connectTimeout) clearTimeout(connectTimeout)
@@ -267,6 +271,10 @@ function closeSession(): void {
   if (clipboardStop) {
     clipboardStop()
     clipboardStop = null
+  }
+  if (cursorStop) {
+    cursorStop()
+    cursorStop = null
   }
   if (pc) {
     // Belt-and-suspenders: null the pc-level handlers before close(), on top
@@ -405,6 +413,28 @@ function attemptNegotiation(): void {
     read: readClipboardText,
     write: writeClipboardText
   })
+
+  // Cursor SHAPE side-channel (agent -> controller). The native video pipeline
+  // ships draw_mouse=0 (cursor NOT baked into the frame, so a mouse-only move
+  // isn't a "desktop change" and the encoder idles on a static screen -- the
+  // Parsec-style GPU win), so the controller needs to know which cursor to draw
+  // natively. We report only the semantic shape, on change. Windows-only + fully
+  // guarded (see cursorCapture.ts): on any other platform / FFI failure it's a
+  // no-op and the controller keeps the local OS cursor.
+  const cursor = conn.createDataChannel('cursor')
+  cursor.onopen = () => {
+    if (pc !== conn) return
+    log(mySession, 'data channel "cursor" open')
+    const capture = startCursorCapture((shape) => {
+      if (pc !== conn || cursor.readyState !== 'open') return
+      try {
+        cursor.send(JSON.stringify({ shape }))
+      } catch {
+        /* channel closing between the guard and send -- ignore */
+      }
+    })
+    cursorStop = () => capture.stop()
+  }
 
   void (async () => {
     const offer = await conn.createOffer()

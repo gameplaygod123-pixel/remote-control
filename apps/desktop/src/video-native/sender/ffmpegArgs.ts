@@ -56,19 +56,32 @@ function encoderArgs(
     // Mbps CBR. `-bufsize` ~250ms keeps the burst bounded so latency stays low;
     // `-tune ull` + `-bf 0` + `-zerolatency` keep the per-frame path low-latency.
     return [
-      '-c:v', 'h264_nvenc',
-      '-preset', preset, // p1 (fastest) default; p1→p4 quality sweep
-      '-tune', 'ull', // ultra-low-latency
-      '-rc', 'vbr',
-      '-b:v', bitrate, // VBR target average (sweepable via env)
-      '-maxrate', `${maxBitrateKbps}k`, // hard cap (owner: ≤40 Mbps)
-      '-bufsize', `${Math.max(1, Math.round(maxBitrateKbps / 4))}k`, // ~250ms burst bound
-      '-bf', '0', // NO B-frames (no reorder delay)
-      '-g', String(gop),
-      '-delay', '0', // no output reorder delay
-      '-zerolatency', '1',
-      '-rc-lookahead', '0',
-      '-no-scenecut', '1' // keep GOP deterministic (no surprise I-frames)
+      '-c:v',
+      'h264_nvenc',
+      '-preset',
+      preset, // p1 (fastest) default; p1→p4 quality sweep
+      '-tune',
+      'ull', // ultra-low-latency
+      '-rc',
+      'vbr',
+      '-b:v',
+      bitrate, // VBR target average (sweepable via env)
+      '-maxrate',
+      `${maxBitrateKbps}k`, // hard cap (owner: ≤40 Mbps)
+      '-bufsize',
+      `${Math.max(1, Math.round(maxBitrateKbps / 4))}k`, // ~250ms burst bound
+      '-bf',
+      '0', // NO B-frames (no reorder delay)
+      '-g',
+      String(gop),
+      '-delay',
+      '0', // no output reorder delay
+      '-zerolatency',
+      '1',
+      '-rc-lookahead',
+      '0',
+      '-no-scenecut',
+      '1' // keep GOP deterministic (no surprise I-frames)
     ]
   }
   // Media Foundation fallback: fewer knobs than nvenc; the input is already CPU
@@ -90,10 +103,19 @@ function filterChain(encoder: SenderEncoder, config: VideoConfig, outputIdx: num
   // NVENC re-encodes the same static screen 60×/s -- ~45% of the Video Encode
   // engine doing nothing useful. On-change capture is how Parsec sits near-idle on
   // a still screen; our RTP path already uses wall-clock timestamps for exactly
-  // this variable interval (phase1/NOTES #64). draw_mouse stays default-on so a
-  // cursor move is itself a "change" that produces a frame (keeps the composited
-  // cursor live -- verified on real hardware before shipping).
-  const grab = `ddagrab=output_idx=${outputIdx}:framerate=${config.fps}:dup_frames=0`
+  // this variable interval (phase1/NOTES #64).
+  //
+  // draw_mouse: 0 with cursor:'separate'. dup_frames=0 ALONE didn't cut the GPU in
+  // real use -- with the cursor composited (draw_mouse=1) every mouse-only move is
+  // a "desktop change", so during actual control (mouse moving nonstop) NVENC still
+  // re-encoded ~40fps (~40% Video-Encode, vs Parsec's ~6%). Parsec draws the cursor
+  // as a separate overlay, NOT baked into the video; we do the same -- the agent
+  // reports the cursor SHAPE out of band (input-helper/cursorCapture.ts) and the Mac
+  // draws it natively (CSS). With the cursor OUT of the frame, a mouse-only move is
+  // no longer a change, so the encoder actually idles on a static screen. 1 keeps
+  // the OS cursor in the frame (the old composited path) for cursor:'composited'.
+  const drawMouse = config.cursor === 'separate' ? 0 : 1
+  const grab = `ddagrab=output_idx=${outputIdx}:framerate=${config.fps}:dup_frames=0:draw_mouse=${drawMouse}`
   if (encoder === 'h264_nvenc') {
     // TRUE zero-copy: hand ddagrab's D3D11 RGB surface straight to NVENC, which
     // ingests the d3d11 frame and does RGB->NV12 on-GPU internally (verified:
@@ -131,12 +153,17 @@ export function buildFfmpegArgs(config: VideoConfig, opts: FfmpegArgOptions = {}
   const maxBitrateKbps = opts.maxBitrateKbps ?? config.maxBitrateKbps
   return [
     '-hide_banner',
-    '-loglevel', 'error',
-    '-filter_complex', filterChain(encoder, config, outputIdx),
+    '-loglevel',
+    'error',
+    '-filter_complex',
+    filterChain(encoder, config, outputIdx),
     ...encoderArgs(encoder, gop, preset, bitrateKbps, maxBitrateKbps),
-    '-bsf:v', 'dump_extra',
-    '-f', 'h264',
-    '-flush_packets', '1',
+    '-bsf:v',
+    'dump_extra',
+    '-f',
+    'h264',
+    '-flush_packets',
+    '1',
     'pipe:1'
   ]
 }

@@ -12,6 +12,8 @@ import { useVideoStats, type VideoStats } from '../shared/webrtc/useVideoStats'
 import { attachClipboardChannel } from '../shared/clipboard/clipboardSync'
 import {
   RemoteInputMessage,
+  type CursorShape,
+  type RemoteCursorMessage,
   isPrintableKey,
   isEditableTarget,
   videoRelativePosition
@@ -68,6 +70,13 @@ export default function ControllerSession({
   // sits BEHIND the transparent macOS window) shows through, while the opaque
   // floating controls stay on top and clickable.
   const [nativeActive, setNativeActive] = useState(false)
+  // The remote machine's current cursor SHAPE (helper mode), applied as a CSS
+  // `cursor` on the video element so macOS draws the matching native cursor
+  // while the native video ships without a composited one (draw_mouse=0). Null
+  // until the first shape arrives -> the local OS cursor shows meanwhile, so a
+  // never-connecting cursor channel (or a non-Windows agent) degrades to the
+  // plain local arrow instead of no cursor at all.
+  const [remoteCursor, setRemoteCursor] = useState<CursorShape | null>(null)
   // OS fullscreen state. Native video composites inside this window now, so
   // fullscreen "just works" (one window); we only use this to hide the drag
   // titlebar in fullscreen, where the OS traffic-lights/exit are available.
@@ -124,6 +133,24 @@ export default function ControllerSession({
     setInputReady(channel.readyState === 'open')
     channel.addEventListener('open', () => setInputReady(true))
     channel.addEventListener('close', () => setInputReady(false))
+  }
+
+  // Remote cursor SHAPE channel (agent's input-helper -> here). Each message is
+  // a semantic cursor id we apply as a CSS `cursor`, so macOS renders the real
+  // shape at 0 latency and the correct hotspot -- the native video carries no
+  // composited cursor (draw_mouse=0, the Parsec-style GPU win).
+  function trackCursorChannel(channel: RTCDataChannel): void {
+    channel.addEventListener('message', (e: MessageEvent) => {
+      try {
+        const msg = JSON.parse(e.data as string) as RemoteCursorMessage
+        if (msg && typeof msg.shape === 'string') setRemoteCursor(msg.shape)
+      } catch {
+        /* ignore a malformed cursor frame */
+      }
+    })
+    // If the channel closes (session torn down / re-paired), drop back to the
+    // local OS cursor rather than freezing on a stale remote shape.
+    channel.addEventListener('close', () => setRemoteCursor(null))
   }
 
   function handleDragOver(e: React.DragEvent<HTMLVideoElement>): void {
@@ -660,7 +687,9 @@ export default function ControllerSession({
             // hidden -- the agent's helper process owns the other end. This
             // controller side stays in the renderer, which is fine: the
             // controller window is focused while controlling, never throttled.
-            onClipboardChannel: attachClipboardChannel
+            onClipboardChannel: attachClipboardChannel,
+            // Remote cursor shape (native video draws no cursor of its own).
+            onCursorChannel: trackCursorChannel
           })
           inputPcRef.current = pc
           await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
@@ -856,6 +885,11 @@ export default function ControllerSession({
         <video
           ref={videoRef}
           autoPlay
+          // Native mode: the video carries NO cursor (draw_mouse=0), so we draw
+          // the remote shape natively here -- macOS renders the real cursor at
+          // 0 latency + correct hotspot. Null (or WebRTC mode, whose video has
+          // the cursor composited in) -> unset -> the plain local OS cursor.
+          style={nativeActive && remoteCursor ? { cursor: remoteCursor } : undefined}
           onMouseMove={handleMouseMove}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}

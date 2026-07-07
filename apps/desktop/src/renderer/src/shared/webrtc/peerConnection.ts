@@ -64,6 +64,11 @@ export interface PeerConnectionOptions {
   // channel for the same isolation reason as file-transfer: a big pasted
   // text must never queue ahead of input events.
   onClipboardChannel?: (channel: RTCDataChannel) => void
+  // Remote cursor SHAPE updates (agent -> controller), created by the native
+  // input-helper alongside 'input' so the Mac can draw the correct cursor
+  // natively while the video ships without a composited one. Helper mode only;
+  // an older agent never opens this channel, so it simply never fires.
+  onCursorChannel?: (channel: RTCDataChannel) => void
 }
 
 export function createPeerConnection(
@@ -91,6 +96,7 @@ export function createPeerConnection(
     else if (event.channel.label === 'input-moves') options.onMoveChannel?.(event.channel)
     else if (event.channel.label === 'file-transfer') options.onFileChannel?.(event.channel)
     else if (event.channel.label === 'clipboard') options.onClipboardChannel?.(event.channel)
+    else if (event.channel.label === 'cursor') options.onCursorChannel?.(event.channel)
   }
 
   if (options.createInputChannel) {
