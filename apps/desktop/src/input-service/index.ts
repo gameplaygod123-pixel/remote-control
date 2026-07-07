@@ -18,13 +18,11 @@
 
 import net from 'node:net'
 import { appendFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-import { PIPE_NAME, FrameDecoder } from './protocol'
+import { PIPE_NAME, FrameDecoder, SERVICE_LOG } from './protocol'
 import { injectRaw } from './rawInject'
 import { syncInputDesktop } from './win32Session'
 
-const LOG = join(tmpdir(), 'input-service.log')
+const LOG = SERVICE_LOG
 // Reconnect backoff: start fast so the first input after a spawn isn't lost to
 // the startup race (injector up before the helper hosts the pipe -> a short
 // burst of ENOENT), then ease off. Reset to fast on every successful connect.

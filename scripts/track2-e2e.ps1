@@ -95,7 +95,7 @@ try {
 }
 
 Write-Host "`n===== harness exit: $code (0 = PASS) ====="
-$log = 'C:\Windows\Temp\input-service.log'
+$log = 'C:\Users\Public\personal-remote-input-service.log'
 Write-Host "===== SYSTEM injector log ($log) ====="
 if (Test-Path $log) { Get-Content $log -Tail 20 } else { Write-Host '(no log -- did the task start? check: schtasks /query /tn PersonalRemoteInput /v)' }
 Write-Host "`nDone. Remove the task with:  scripts\track2-e2e.ps1 -Uninstall"

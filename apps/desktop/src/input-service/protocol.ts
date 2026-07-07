@@ -2,7 +2,20 @@
 // SYSTEM injector-in-session (receiver). A pipe is a byte stream, so frame each
 // RemoteInputMessage as a 4-byte little-endian length prefix + UTF-8 JSON.
 
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import type { RemoteInputMessage } from '../renderer/src/shared/input/inputProtocol'
+
+// SYSTEM-side log path (injector + launcher). Deliberately under C:\Users\Public
+// so the file inherits a world-READABLE ACL: the SYSTEM processes' default
+// C:\Windows\Temp files get a SYSTEM+Admins-only DACL that blocks a non-elevated
+// read, which made every diagnostic require an elevated shell. Public lets a
+// medium tool (or the owner's normal shell) tail it directly. Non-Windows
+// (the Mac-side harness) falls back to tmpdir.
+export const SERVICE_LOG =
+  process.platform === 'win32'
+    ? 'C:\\Users\\Public\\personal-remote-input-service.log'
+    : join(tmpdir(), 'personal-remote-input-service.log')
 
 // Fix A role split (docs/input-elevation-plan.md): the MEDIUM helper HOSTS this
 // pipe and the SYSTEM injector CONNECTS. A SYSTEM-hosted pipe gets a default DACL

@@ -13,10 +13,10 @@
 
 import { appendFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { getActiveSessionId, spawnInjectorInSession } from './win32Session'
+import { SERVICE_LOG } from './protocol'
 
-const LOG = join(tmpdir(), 'input-service.log')
+const LOG = SERVICE_LOG
 function log(msg: string): void {
   try {
     appendFileSync(LOG, `[service ${new Date().toISOString()}] ${msg}\n`)

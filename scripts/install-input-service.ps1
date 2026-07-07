@@ -36,6 +36,20 @@ try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction 
 & sc.exe stop   $TaskName | Out-Null
 & sc.exe delete $TaskName | Out-Null
 
+# Kill any STRAY injector processes orphaned by a previous run. Unregistering the
+# task does NOT stop an already-spawned injector-in-session, so repeated
+# installs otherwise pile up multiple injectors all fighting for the one pipe
+# (each logging ENOENT). Match only the injector entry so the agent / other
+# electron apps are untouched.
+try {
+  Get-CimInstance Win32_Process -Filter "Name='electron.exe'" -ErrorAction Stop |
+    Where-Object { $_.CommandLine -like '*input-injector.js*' } |
+    ForEach-Object {
+      Write-Host "  killing stray injector pid $($_.ProcessId)"
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+} catch {}
+
 # --- action: cmd sets ELECTRON_RUN_AS_NODE=1 then runs the launcher -------------
 # `set "VAR=1"` (quoted form) strips trailing spaces; && runs the launcher with it
 # inherited. Both paths quoted for "Program Files" spaces.
@@ -60,4 +74,4 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
 Start-ScheduledTask -TaskName $TaskName
 
 Write-Host "Installed + started scheduled task '$TaskName' (SYSTEM, HIGHEST, session-0 launcher)."
-Write-Host "Log: C:\Windows\Temp\input-service.log (SYSTEM's %TEMP%)."
+Write-Host "Log: C:\Users\Public\personal-remote-input-service.log (world-readable — no elevation to tail)."

@@ -17,7 +17,8 @@
 //      cursor with the mouse — the heartbeat parks it at center). No password
 //      needed: even a passwordless account shows the Winlogon secure desktop.
 //   3. wait ~4s on the lock screen, then press any physical key / sign back in.
-//   4. Ctrl+C here, then read C:\Windows\Temp\input-service.log and look for:
+//   4. the harness auto-stops after ~120s (no Ctrl+C needed); then read
+//      C:\Users\Public\personal-remote-input-service.log (world-readable) for:
 //        input desktop -> 'Winlogon' (was 'Default')      = PASS (followed in)
 //        input desktop -> 'Default'  (was 'Winlogon')     = followed back out
 //        SetThreadDesktop('Winlogon') failed, GetLastError=...  = the one to debug
@@ -58,22 +59,29 @@ async function main(): Promise<void> {
   console.log('[phase3] >>> NOW PRESS THE PHYSICAL Win+L KEY TO LOCK THE SCREEN. <<<')
   console.log('[phase3]     (use the real keyboard, not the mouse — the heartbeat parks the')
   console.log('[phase3]      cursor at center. No password needed to prove the follow.)')
-  console.log('[phase3]     Wait ~4s locked, press any physical key to come back, then Ctrl+C')
-  console.log('[phase3]     and read C:\\Windows\\Temp\\input-service.log for the Winlogon flip.')
+  console.log('[phase3]     Wait ~4s locked, then press any physical key / sign back in.')
+  console.log('[phase3]     Auto-stops in ~120s — no Ctrl+C needed. Then the log has the answer.')
   console.log('[phase3] forwarding a heartbeat every 750ms (cursor parks at center)...')
 
   // Park the cursor at the SAME center point each beat: the injector still calls
   // syncInputDesktop() before every inject (that's the whole point), but the
   // cursor doesn't jitter, so the physical Win+L / sign-in isn't disrupted.
+  // Auto-stop after ~120s so the owner doesn't have to Ctrl+C (the log is the
+  // proof, read afterward); the SYSTEM injector keeps running regardless.
+  const DEADLINE = Date.now() + 120_000
   let n = 0
-  for (;;) {
+  while (Date.now() < DEADLINE) {
     const ok = maybeForwardInput({ t: 'move', x: 0.5, y: 0.5 })
     n++
     if (n % 2 === 0) {
-      process.stdout.write(`\r[phase3] heartbeats sent: ${n}  forwarding=${ok}   `)
+      const left = Math.round((DEADLINE - Date.now()) / 1000)
+      process.stdout.write(`\r[phase3] heartbeats sent: ${n}  forwarding=${ok}  auto-stop in ${left}s   `)
     }
     await sleep(750)
   }
+  console.log('\n[phase3] done. Read C:\\Users\\Public\\personal-remote-input-service.log for:')
+  console.log("[phase3]   input desktop -> 'Winlogon' (was 'Default')   = Phase 3 PASS")
+  process.exit(0)
 }
 
 main().catch((e) => {
