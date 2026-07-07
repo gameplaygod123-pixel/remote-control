@@ -343,6 +343,27 @@ to push FPS.
     dir currently ignores `capturer.exe`). Then Mac builds the PRERELEASE
     (`VIDEO_CAPTURER=1`). Receiver UNCHANGED. DECIDER: GPU during active control near
     Parsec, coexists with Parsec, no freeze/stuck-keys, PLI recovery via stdin works.
+  - **3c WC HALF DONE + delivered → PRERELEASE v1.26.0-beta.1 BUILT (awaiting e2e).**
+    WC (`016e72c` 3b, `022e8d4` 3c) implemented the exact contract read from
+    `capturerArgs.ts`/`CapturerFrameSource` (no guessing): CLI `--output stdout|<path>
+    --monitor --fps --bitrate --maxrate --gop` (+`--selftest/--duration`); stdout =
+    binary Annex-B (`_setmode _O_BINARY` — no CRLF corruption, verified decodes clean in
+    ffmpeg 8.1), 4-byte start codes, in-band SPS/PPS, flush per frame, first frame IDR;
+    **stdin `'I'` (separate thread) → forces an IDR next frame, no respawn** (on a static
+    screen it re-encodes the last frame as IDR so the receiver re-syncs), EOF → exit 0;
+    IDR interval is **wall-clock** (gop/fps seconds, since change-detection makes fps
+    variable), fps is a real cap; all logs → stderr `[capturer]` (stdout is pure stream);
+    ACCESS_LOST recovers in-process. Built `capturer.exe` (192KB PE) committed to
+    `native/dxgi-capturer/bin/` with a `!bin/capturer.exe` gitignore exception (gotcha:
+    no trailing `#` comment on that line). Mac built **PRERELEASE v1.26.0-beta.1** via
+    build-win.sh (all 4 packed checks pass incl. `resources/capturer/capturer.exe`,
+    signed). **ENABLE AT RUNTIME:** the helper inherits the agent env
+    (`videoSenderHost` forks with `{...process.env}`), so launch the agent with
+    **`VIDEO_CAPTURER=1`** (e.g. `set VIDEO_CAPTURER=1 && PersonalRemote.exe`) — default
+    OFF = ffmpeg. **NEXT (WC e2e, Parsec open, 10+ min): GPU during active control near
+    Parsec (now measurable clean — one NVENC session), smooth, coexists (ACCESS_LOST
+    recovers), HUD ⚡NATIVE + fps tracks real change, PLI recovery via stdin, no
+    stuck-key/mouse-dead. Clean → promote v1.26.0, then 3d (cursor).**
   - 3d cursor from DXGI over the dormant `'cursor'` channel (un-gate
     `PR_CURSOR_OVERLAY`) → Mac CSS overlay (reuse beta.4's plumbing).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
