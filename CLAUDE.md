@@ -862,18 +862,34 @@ Lessons:
    `B<kbps>` to the capturer stdin. **(B) H.265** — the real remaining Parsec gap
    (1.6× efficiency, ~half bitrate); needs codec-aware `nalSplitter.ts` + HEVC
    `decoder.swift` (VideoToolbox HW-decodes HEVC on the M4 Pro). Do A first, then B.
-   - **(A) BWE — ✅ PRERELEASE v1.27.0-beta.1 SHIPPED (awaiting owner e2e on real
-     hardware).** Both halves landed (Mac AIMD `20e05bf`, agent forward `3790ad2`).
-     Mac ops done THIS session: signaling server rebuilt + restarted (PID 35445 now
-     relays `video-bitrate`); prerelease built via `build-win.sh` (all 4 packed checks
-     incl. `resources/capturer/capturer.exe`, 175MB) off `feat/native-video` →
-     **v1.27.0-beta.1**. **ENABLE: launch the agent with `VIDEO_CAPTURER=1`** (default
-     OFF = ffmpeg = no BWE; capturer engages native). **NEXT e2e (owner + WC): static
-     screen → target holds; constrain the link → loss → bitrate drops; leave it →
-     ramps to 60 & holds. PASS = received-fps ≈ emitted (net-drop 0) + smooth (NOT
-     "locked 60"). Capturer logs NO retune — WC can tail `video-sender.log` for
-     `set-bitrate → sent B<kbps>`, judge by the bitrate that actually goes out. If
-     clean → promote full v1.27.0.** Detail of each half below.
+   - **(A) BWE — ✅ PRERELEASE v1.27.0-beta.2 (bufferbloat fix, awaiting owner e2e).**
+     Both halves landed (Mac AIMD `20e05bf`, agent forward `3790ad2`); signaling
+     server rebuilt+restarted (PID 35445 relays `video-bitrate`). **ENABLE: launch the
+     agent with `VIDEO_CAPTURER=1`** (default OFF = ffmpeg = no BWE).
+     - **beta.1 (`7cdea74`, cap 60, loss-only) = REGRESSION → BUFFERBLOAT (WC diagnosis
+       from `video-sender.log`):** capped BWE at 60 Mbps but the owner's link is ~40, so
+       a 60 Mbps VBR burst filled the queue → **3 symptoms, one cause:** double cursor
+       (instant local Mac cursor vs the delayed in-video cursor), higher end-to-end
+       latency, eventual freeze (queue finally overflows → packet loss → decoder waits
+       for IDR). Loss-only AIMD **never backed off** (bitrate pinned B60000, 2 backoffs
+       all session) because **bufferbloat is DELAY, not packet loss, until overflow.**
+       NOT an agent-forward bug (forward relayed every value correctly). Also: **cap 60
+       was the wrong target from the start** — Parsec runs 1440p60 smooth at ~3 Mbps via
+       H.265, so the low-bitrate win is Feature B (H.265), NOT pushing H.264 to 60.
+       [[loss-only-bwe-misses-bufferbloat]]
+     - **beta.2 FIX (`baab0df`, `receiver/bwe.ts`):** (1) **CEIL 60 → 25 Mbps** =
+       v1.26.0's proven-smooth VBR target (maxrate ~40 on this link); **START = CEIL** so
+       BWE starts at the known-good point and can only back OFF, never overshoot into
+       bloat (worst case == v1.26.0 = smooth). (2) **Added a DELAY signal** — back off on
+       a frame-pacing **jitter spike (>30ms)**, not just loss; jitter climbs as the queue
+       builds, BEFORE loss → catches bufferbloat early. Probe up only when loss<2% AND
+       jitter<18ms (healthy active = 3-13ms). `tick(jitterMs)`; units 14/14 (incl.
+       jitter-only backoff + ramp-back-to-cap). **NEXT e2e (owner + WC, `VIDEO_CAPTURER=1`):
+       should now feel == v1.26.0 on a good link (no double cursor / no added latency /
+       no freeze) AND back off on a degrading link; WC tail `video-sender.log` for
+       `set-bitrate → sent B<kbps>`. If clean → promote full v1.27.0.** (WC offered to
+       roll the owner back to v1.26.0 for an immediate working session meanwhile — fine.)
+     Detail of each half below.
    - **(A) BWE — MAC SIDE DONE (`20e05bf`):**
      `receiver/bwe.ts` (NEW, pure, units 10/10) = wrap-aware `SeqExtender` +
      seq-gap loss-fraction per 1s window + `AimdController` (clean <2% loss →
