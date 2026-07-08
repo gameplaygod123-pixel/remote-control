@@ -53,10 +53,20 @@ channels, not `RtcpReceivingSession`, so the media-only patch can't affect them.
   never NACKed) skips immediately→PLI (no latency penalty). `lossDetector` still MEASURES network
   loss for the analyzer's `loss=`; `pli=`/`hitch` now reflect only UNRECOVERED loss. Unit-tested
   (11 reorder cases: silent-fill, timeout, blackout-skip, wrap, dup-drop) + typecheck + lint clean.
-- ⏳ **Phase D** (next, needs WC + hardware) — install the patched darwin ndc into the controller
-  (`rm`+`cp`+`codesign`), launch with `VIDEO_NACK_BUFFER=1`, agent unchanged → e2e: `analyze-
-  session.mjs` should show per-loss `pli=`/`hitch` drop toward 0 (losses repaired silently) while
-  `loss=` (network) is unchanged. Pair with STEP 2 (lower bitrate) for blackout losses.
+- ✅ **Phase D VERIFIED on real hardware (2026-07-09) — NACK retransmit works e2e.** Patched darwin
+  ndc installed in the controller (`rm`+`cp`+`codesign`), launched `VIDEO_NACK_BUFFER=1`, agent
+  unchanged (stock ndc retransmitted). 278s HEVC stress, `analyze-session.mjs`: **PLI-per-loss
+  1.0 → 0.3** = ~66% of losses repaired SILENTLY. The raw pattern is exactly the design — losses
+  ≤64 pkt (4/7/8/17/24/34/**37**) = `pli=0` silent repair; blackouts >64 (93/101/106) = `pli=1`
+  PLI fallback (~42ms). jitter 1.3ms (↓ from 3.8), verdict MINOR JUDDER (only the blackout hitches
+  remain). The silent-repair endgame is proven.
+- ⚠️ **BUT flicker finding pivots the plan:** the owner reported the image FLICKERS at `vbv=16`
+  (and 33) — a VBR bit-starvation regression ([[small-vbv-flickers]]), so vbv=16 is NOT shippable.
+  Good news: NACK repairs loss WITHOUT needing a tiny VBV. **NEXT: raise VBV back toward 250 (kills
+  flicker), keep the NACK buffer, re-measure the silent-repair rate at the larger VBV** (if losses
+  there become mostly >64-pkt bursts, bump `maxGap`/`holdMs` or find a middle VBV). Then STEP 2
+  (lower bitrate) for the residual blackouts. Packaging the patched darwin ndc into a signed .dmg
+  is deferred (owner runs the controller from dev; the swap+codesign install is the "release").
 
 ## Build approach (the hard part)
 ndc builds via `cmake-js` + cmake FetchContent(libdatachannel v0.24.2) + OpenSSL. Mac lacks

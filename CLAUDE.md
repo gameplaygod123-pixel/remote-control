@@ -1209,12 +1209,20 @@ Lessons:
            retransmit → arrives = silent release (no PLI/hitch), else onGap→PLI; blackout gap (>64) =
            skip now→PLI (no penalty). `lossDetector` still measures network loss (analyzer `loss=`);
            `pli=`/`hitch` now = UNRECOVERED loss only. 11 reorder unit tests + typecheck + lint clean.
-         - ⏳ **NEXT = Phase D (needs WC + hardware, golden rule #1):** install the patched darwin ndc
-           into the controller (`rm`+`cp`+`codesign --force --sign -`, recipe in
-           [`native/ndc-nack/README.md`](apps/desktop/native/ndc-nack/README.md)) + launch controller
-           with `VIDEO_NACK_BUFFER=1`; **agent unchanged** (stock ndc retransmits). e2e decider:
-           `analyze-session.mjs` shows per-loss `pli=`/`hitch` → ~0 (silent repair) while `loss=`
-           (network) unchanged. Pair with STEP 2 (lower bitrate) for blackout losses NACK can't beat.
+         - ✅ **Phase D VERIFIED on real hardware (2026-07-09) — NACK retransmit works e2e.** Patched
+           darwin ndc installed in the controller (`rm`+`cp`+`codesign`, still installed now; backup at
+           `...node_datachannel.node.orig-prebuilt`), launched `VIDEO_NACK_BUFFER=1`, agent unchanged.
+           278s HEVC stress → `analyze-session.mjs`: **PLI-per-loss 1.0 → 0.3 (~66% of losses repaired
+           SILENTLY, no PLI/hitch)**. Raw pattern = the design exactly: loss ≤64 pkt (4/7/8/17/24/34/37)
+           = pli=0 silent; blackout >64 (93/101/106) = pli=1 fallback (~42ms). jitter 1.3ms (↓3.8),
+           MINOR JUDDER (only blackout hitches left). The silent-repair endgame is PROVEN.
+         - ⚠️ **FLICKER PIVOT (owner, 2026-07-09): the image FLICKERS at `vbv=16` (and 33)** — VBR
+           bit-starvation, a quality regression → **vbv=16 is NOT shippable** ([[small-vbv-flickers]]).
+           But NACK repairs loss WITHOUT a tiny VBV. **NEXT: raise VBV back toward 250 (kills flicker) +
+           keep the NACK buffer, re-measure the silent-repair rate at the larger VBV.** If losses there
+           are mostly >64-pkt bursts, bump `maxGap`/`holdMs` (`receiver/reorderBuffer.ts`) or find a
+           middle VBV; then STEP 2 (lower bitrate) for residual blackouts. Config option 2 (vbv=16) is
+           RETIRED — the real config = larger VBV (no flicker) + NACK retransmit + LTR off.
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a
