@@ -7,12 +7,27 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 
 // The NVENC entry points we drive live in a function-list struct filled by the DLL.
 #define FL (reinterpret_cast<NV_ENCODE_API_FUNCTION_LIST*>(fnListMem_))
 #define ENC (enc_)
 
 using CreateInstanceFn = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
+
+// Map an int preset (1..7, clamped) to the NVENC P1..P7 preset GUID. P1 = fastest /
+// lowest per-frame encode time (our default); higher = more encode time + quality.
+static GUID presetGuidFor(int p) {
+    switch (p) {
+        case 2: return NV_ENC_PRESET_P2_GUID;
+        case 3: return NV_ENC_PRESET_P3_GUID;
+        case 4: return NV_ENC_PRESET_P4_GUID;
+        case 5: return NV_ENC_PRESET_P5_GUID;
+        case 6: return NV_ENC_PRESET_P6_GUID;
+        case 7: return NV_ENC_PRESET_P7_GUID;
+        default: return NV_ENC_PRESET_P1_GUID;
+    }
+}
 
 // All logs go to stderr (stdout is the H.264 stream in the sender path).
 static void NvLog(const char* fmt, ...) {
@@ -58,12 +73,13 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     NVCK(FL->nvEncOpenEncodeSessionEx(&op, &enc_), "nvEncOpenEncodeSessionEx");
 
     const GUID codecGuid = cfg_.hevc ? NV_ENC_CODEC_HEVC_GUID : NV_ENC_CODEC_H264_GUID;
+    const GUID presetGuid = presetGuidFor(cfg_.preset);
 
-    // --- start from the P1 + ultra-low-latency preset, then pin our config ---
+    // --- start from the chosen preset (default P1) + ultra-low-latency, then pin our config ---
     NV_ENC_PRESET_CONFIG pc = {};
     pc.version = NV_ENC_PRESET_CONFIG_VER;
     pc.presetCfg.version = NV_ENC_CONFIG_VER;
-    NVCK(FL->nvEncGetEncodePresetConfigEx(enc_, codecGuid, NV_ENC_PRESET_P1_GUID,
+    NVCK(FL->nvEncGetEncodePresetConfigEx(enc_, codecGuid, presetGuid,
                                           NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &pc),
          "nvEncGetEncodePresetConfigEx");
 
@@ -107,7 +123,7 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     NV_ENC_INITIALIZE_PARAMS& ip = *ipPtr;
     ip.version = NV_ENC_INITIALIZE_PARAMS_VER;
     ip.encodeGUID = codecGuid;
-    ip.presetGUID = NV_ENC_PRESET_P1_GUID;
+    ip.presetGUID = presetGuid;
     ip.tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
     ip.encodeWidth = cfg_.width;   ip.encodeHeight = cfg_.height;
     ip.darWidth = cfg_.width;      ip.darHeight = cfg_.height;
@@ -147,9 +163,9 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     NVCK(FL->nvEncCreateBitstreamBuffer(enc_, &bb), "nvEncCreateBitstreamBuffer");
     bitstream_ = bb.bitstreamBuffer;
 
-    NvLog("nvenc %s P1/ULL VBR %d/%d kbps, VBV %dms, IDR ~%.1fs, %dx%d@%d, no-B no-intra-refresh",
-          cfg_.hevc ? "HEVC" : "H264", cfg_.targetKbps, cfg_.maxKbps, cfg_.vbvMs, cfg_.idrIntervalSec,
-          cfg_.width, cfg_.height, cfg_.fps);
+    NvLog("nvenc %s P%d/ULL VBR %d/%d kbps, VBV %dms, IDR ~%.1fs, %dx%d@%d, no-B no-intra-refresh",
+          cfg_.hevc ? "HEVC" : "H264", cfg_.preset, cfg_.targetKbps, cfg_.maxKbps, cfg_.vbvMs,
+          cfg_.idrIntervalSec, cfg_.width, cfg_.height, cfg_.fps);
     return true;
 }
 
@@ -238,6 +254,11 @@ bool NvEncoder::encodeMapped(int nvPicType) {
     if (nvPicType == NV_ENC_PIC_TYPE_IDR)
         pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
 
+    // Time the HW encode ONLY: submit -> the synchronous LockBitstream that blocks until the
+    // frame is encoded. writeBitstream() stops the clock right after LockBitstream, BEFORE the
+    // fwrite/fflush to stdout (which can block on pipe/network backpressure and would otherwise
+    // inflate the number — it did in-session; a file dump hid it). encStart_ read there.
+    encStart_ = std::chrono::steady_clock::now();
     NVENCSTATUS st = FL->nvEncEncodePicture(enc_, &pic);
     bool ok = true;
     if (st == NV_ENC_SUCCESS) {
@@ -254,11 +275,26 @@ bool NvEncoder::encodeMapped(int nvPicType) {
     return ok;
 }
 
+double NvEncoder::takeAvgEncodeMs() {
+    if (encMsCount_ == 0) return 0.0;
+    double avg = encMsSum_ / (double)encMsCount_;
+    encMsSum_ = 0.0;
+    encMsCount_ = 0;
+    return avg;
+}
+
 bool NvEncoder::writeBitstream() {
     NV_ENC_LOCK_BITSTREAM lb = {};
     lb.version = NV_ENC_LOCK_BITSTREAM_VER;
     lb.outputBitstream = bitstream_;
     NVCK(FL->nvEncLockBitstream(enc_, &lb), "nvEncLockBitstream");
+
+    // Encode is done here (LockBitstream returned). Record PURE encode latency now, BEFORE the
+    // fwrite/fflush below — that write goes to a pipe in the sender path and blocks under
+    // network backpressure, which is NOT encode time.
+    encMsSum_ += std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - encStart_).count();
+    ++encMsCount_;
 
     if (lb.bitstreamSizeInBytes && out_) {
         fwrite(lb.bitstreamBufferPtr, 1, lb.bitstreamSizeInBytes, out_);

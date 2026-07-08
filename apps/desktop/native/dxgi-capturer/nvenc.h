@@ -11,6 +11,7 @@
 #include <d3d11.h>
 #include <cstdint>
 #include <cstdio>
+#include <chrono>
 
 struct NvEncConfig {
     int width = 0;
@@ -21,6 +22,8 @@ struct NvEncConfig {
     int vbvMs = 250;          // VBV buffer ~250ms
     double idrIntervalSec = 2.0;  // wall-clock IDR period (not a frame count — we skip frames)
     bool hevc = false;        // false = H.264, true = H.265/HEVC (Parsec-parity GPU experiment)
+    int preset = 1;           // NVENC preset 1..7: P1=fastest/lowest encode-ms .. P7=slow/quality.
+                              // Raising it lifts per-frame encode time (quality/latency tradeoff).
 };
 
 // Opaque to callers; the impl holds all NVENC handles.
@@ -77,6 +80,9 @@ public:
 
     uint64_t framesEncoded() const { return framesEncoded_; }
     uint64_t bytesOut()      const { return bytesOut_; }
+    // Average per-frame HW encode time (ms) since the last call; resets the accumulator.
+    // Measured around nvEncEncodePicture + the synchronous nvEncLockBitstream (encode done).
+    double takeAvgEncodeMs();
 
 private:
     bool encodeMapped(int nvPicType);  // map registered tex -> encode as pictureType -> emit (shared)
@@ -99,4 +105,8 @@ private:
     uint64_t framesEncoded_ = 0;
     uint64_t bytesOut_ = 0;
     uint64_t ptsCounter_ = 0;
+    double   encMsSum_ = 0.0;   // accumulated per-frame encode time (ms) for the current log window
+    uint64_t encMsCount_ = 0;
+    std::chrono::steady_clock::time_point encStart_{};  // set before EncodePicture; measured to
+                                                        // just after LockBitstream (excludes fwrite)
 };

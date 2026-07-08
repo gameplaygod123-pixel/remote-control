@@ -359,7 +359,10 @@ function reportStats(session: Session): void {
     height: session.config.height,
     kbps: Math.round((session.bytesInWindow * 8) / 1000 / windowSec),
     captureMs: null, // ffmpeg exposes no per-frame capture/encode split (phase1 #4)
-    encodeMs: null,
+    // The capturer measures HW encode time (its `enc_ms=` stderr line, parsed in
+    // CapturerFrameSource); ffmpeg/synthetic return null. Non-null => AgentView
+    // forwards it to the Mac HUD's "Encode Xms".
+    encodeMs: session.source?.getEncodeMs() ?? null,
     decodeMs: null, // receiver-side fields
     renderMs: null,
     rttMs: null,

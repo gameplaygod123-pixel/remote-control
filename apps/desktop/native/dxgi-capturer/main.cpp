@@ -87,6 +87,8 @@ struct CapturerOptions {
     int gopFrames = 120;            // IDR interval in frames (~2s@60), NO intra-refresh
     bool hevc = false;              // false=H.264 (receiver-compatible today), true=H.265/HEVC
                                     // (Parsec uses HEVC — ~2x cheaper NVENC at 1440p; A/B experiment)
+    int preset = 1;                 // NVENC preset 1..7 (P1=fastest/lowest encode-ms, default;
+                                    // higher = more per-frame encode time + quality). --preset / tune.
     int floorFps = 0;               // min-fps FLOOR during activity (0 = off, DEFAULT); duplicates
                                     // the last frame as a cheap P-frame so low-motion (typing)
                                     // has steady cadence, decaying to idle when truly static.
@@ -327,10 +329,11 @@ private:
         auto now = Clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - intervalStart).count() < 1000) return;
         // emitted = the LOCKED cadence (should read ~fps steady); real/skip = the content split.
-        Log("emitted=%llu real=%llu skip=%llu idr=%llu coalesced=%llu cursor=(%ld,%ld,%s,%s)",
+        // enc_ms = avg per-frame HW encode latency this window (the "Encode" time metric).
+        Log("emitted=%llu real=%llu skip=%llu idr=%llu coalesced=%llu enc_ms=%.1f cursor=(%ld,%ld,%s,%s)",
             (unsigned long long)sent, (unsigned long long)real, (unsigned long long)skip,
-            (unsigned long long)idr, (unsigned long long)coalesced, cursorX, cursorY,
-            cursorVisible ? "visible" : "hidden", PtrTypeName(shapeType));
+            (unsigned long long)idr, (unsigned long long)coalesced, encoder_.takeAvgEncodeMs(),
+            cursorX, cursorY, cursorVisible ? "visible" : "hidden", PtrTypeName(shapeType));
         sent = real = skip = idr = coalesced = 0;
         intervalStart = now;
     }
@@ -469,6 +472,7 @@ private:
         cfg.width = width_; cfg.height = height_;
         cfg.fps = opt_.fps; cfg.targetKbps = opt_.bitrateKbps; cfg.maxKbps = opt_.maxrateKbps;
         cfg.vbvMs = 250; cfg.idrIntervalSec = gopIntervalSec_; cfg.hevc = opt_.hevc;
+        cfg.preset = (opt_.preset < 1) ? 1 : (opt_.preset > 7 ? 7 : opt_.preset);  // clamp P1..P7
         haveEncodedFrame_ = false;  // first frame after (re)init = IDR
         if (!encoder_.Init(device_.Get(), context_.Get(), cfg, encFile_)) { Log("fatal: NVENC init failed"); return false; }
         return true;
@@ -590,6 +594,7 @@ static void applyTuneFile(CapturerOptions& o) {
         else if (k == "floor-fps") o.floorFps = std::atoi(v.c_str());
         else if (k == "floor-decay") o.floorDecayMs = std::atoi(v.c_str());
         else if (k == "codec") o.hevc = (v == "h265" || v == "hevc" || v == "HEVC");
+        else if (k == "preset") o.preset = std::atoi(v.c_str());
         else if (k == "legacy") o.lockedCadence = !(v == "1" || v == "true" || v == "on");
         else if (k == "locked-cadence") o.lockedCadence = (v == "1" || v == "true" || v == "on");
         else if (k == "locked-idle-ms") o.lockedIdleMs = std::atoi(v.c_str());
@@ -612,6 +617,7 @@ int main(int argc, char** argv) {
         else if (a == "--maxrate") next(o.maxrateKbps);
         else if (a == "--gop") next(o.gopFrames);
         else if (a == "--codec" && i + 1 < argc) { std::string c = argv[++i]; o.hevc = (c == "h265" || c == "hevc" || c == "HEVC"); }
+        else if (a == "--preset") next(o.preset);
         else if (a == "--floor-fps") next(o.floorFps);
         else if (a == "--floor-decay") next(o.floorDecayMs);
         else if (a == "--legacy-emit") o.lockedCadence = false;  // revert to emit-on-change
@@ -627,6 +633,8 @@ int main(int argc, char** argv) {
                    "  --maxrate <kbps>         NVENC VBR cap (default 40000)\n"
                    "  --gop <frames>           IDR interval (~2s@60, default 120; NO intra-refresh)\n"
                    "  --codec h264|h265        H.264 (default) or H.265/HEVC (Parsec-parity GPU test)\n"
+                   "  --preset <1..7>          NVENC preset P1..P7 (default 1=fastest/lowest encode-ms;\n"
+                   "                           higher = more per-frame encode time + quality). tune: preset=N\n"
                    "  --floor-fps <n>          min-fps floor during activity (default 0=off;\n"
                    "                           env VIDEO_CAPTURER_FLOOR_FPS overrides for live tuning)\n"
                    "  --floor-decay <ms>       floor stays alive this long after a change (default 350)\n"

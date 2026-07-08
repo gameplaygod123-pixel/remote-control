@@ -31,6 +31,11 @@ export interface FrameSource {
   /** BWE: set a new VBR target (kbps) live. The capturer retunes NVENC in place
    *  (no respawn); other sources that can't retune live no-op. */
   setBitrate(kbps: number): void
+  /** Latest per-frame HW encode time (ms) if the source measures it, else null.
+   *  Only the capturer reports it (parsed from its `enc_ms=` stderr); ffmpeg
+   *  exposes no capture/encode split, synthetic has none. Feeds the HUD's
+   *  "Encode Xms" (NativeVideoStats.encodeMs). */
+  getEncodeMs(): number | null
   stop(): void
 }
 
@@ -91,6 +96,11 @@ export class FfmpegFrameSource implements FrameSource {
     // disruptive for BWE's ~1s cadence). BWE is a capturer-path feature; on the
     // ffmpeg fallback we log and hold the fixed rate rather than churn the encoder.
     this.cb.onLog?.(`setBitrate(${kbps}) ignored -- ffmpeg source can't retune live`)
+  }
+
+  getEncodeMs(): number | null {
+    // ffmpeg exposes no per-frame capture/encode split (phase1 #4).
+    return null
   }
 
   stop(): void {
@@ -236,6 +246,11 @@ export class CapturerFrameSource implements FrameSource {
   private respawning = false
   private restartTimer: ReturnType<typeof setTimeout> | undefined
   private crashTimes: number[] = []
+  // Latest avg per-frame HW encode time (ms), parsed from the capturer's per-second
+  // `enc_ms=` stderr line. null until the first line arrives; held across idle windows
+  // (the capturer reports 0.0 when nothing encoded — we keep the last real value so the
+  // HUD shows the true encode cost instead of flickering to 0 on a static screen).
+  private lastEncodeMs: number | null = null
   private static readonly RESTART_DELAY_MS = 300
   private static readonly CRASH_WINDOW_MS = 10_000
   private static readonly MAX_CRASHES_IN_WINDOW = 5
@@ -286,6 +301,10 @@ export class CapturerFrameSource implements FrameSource {
       }
     }
     this.cb.onLog?.(`setBitrate(${rounded}) skipped -- capturer stdin unavailable`)
+  }
+
+  getEncodeMs(): number | null {
+    return this.lastEncodeMs
   }
 
   stop(): void {
@@ -352,7 +371,16 @@ export class CapturerFrameSource implements FrameSource {
     })
     proc.stderr!.on('data', (chunk: Buffer) => {
       const line = chunk.toString().trim()
-      if (line) this.cb.onLog?.(`capturer: ${line}`)
+      if (!line) return
+      // The per-second locked-cadence log carries `enc_ms=<avg>` — the HW encode time.
+      // Keep the last REAL value (>0); the capturer emits 0.0 on an idle window (nothing
+      // encoded), which isn't a measured encode time, so don't let it clobber the HUD.
+      const m = line.match(/enc_ms=([\d.]+)/)
+      if (m) {
+        const v = Number.parseFloat(m[1])
+        if (Number.isFinite(v) && v > 0) this.lastEncodeMs = v
+      }
+      this.cb.onLog?.(`capturer: ${line}`)
     })
     // Ignore EPIPE on stdin if the capturer has already exited.
     proc.stdin!.on('error', () => {
@@ -433,6 +461,11 @@ export class SyntheticFrameSource implements FrameSource {
 
   setBitrate(): void {
     /* synthetic source emits fixed-size frames; nothing to retune */
+  }
+
+  getEncodeMs(): number | null {
+    /* no real encoder -> no encode time */
+    return null
   }
 
   stop(): void {
