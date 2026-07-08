@@ -10,8 +10,9 @@
 // CLI + behavioural contract: docs/step3-dxgi-capturer.md "3c CLI contract".
 //   stdout = Annex-B (4-byte start codes, in-band SPS/PPS before every IDR, flushed
 //            per frame). First frame = IDR. Periodic IDR every --gop frames. I/P only.
-//   stdin  = a single byte 'I' (0x49) => force an IDR next frame (cheap PLI recovery,
-//            no respawn). Closed stdin / EOF => clean shutdown (exit 0).
+//   stdin  = 'I' (0x49) => force an IDR next frame (cheap PLI recovery, no respawn);
+//            'B'<ascii-kbps>'\n' (e.g. "B25000\n") => set the live VBR bitrate (BWE
+//            feedback, no respawn/IDR). Closed stdin / EOF => clean shutdown (exit 0).
 //   stderr = "[capturer] ..." log lines incl. the per-second emitted/skipped counters.
 //   exit   = 0 clean; non-zero fatal (sender respawns). ACCESS_LOST recovers IN-PROCESS.
 
@@ -78,6 +79,15 @@ struct CapturerOptions {
     int bitrateKbps = 25000;        // NVENC VBR target
     int maxrateKbps = 40000;        // NVENC VBR cap
     int gopFrames = 120;            // IDR interval in frames (~2s@60), NO intra-refresh
+    bool hevc = false;              // false=H.264 (receiver-compatible today), true=H.265/HEVC
+                                    // (Parsec uses HEVC — ~2x cheaper NVENC at 1440p; A/B experiment)
+    int floorFps = 0;               // min-fps FLOOR during activity (0 = off, DEFAULT); duplicates
+                                    // the last frame as a cheap P-frame so low-motion (typing)
+                                    // has steady cadence, decaying to idle when truly static.
+                                    // OFF by default (Mac decision): it costs GPU and is a
+                                    // different problem than drop-judder (which BWE fixes). Opt in
+                                    // via --floor-fps / tune-file / VIDEO_CAPTURER_FLOOR_FPS.
+    int floorDecayMs = 350;         // keep the floor alive this long after the last real change
     bool selftest = false;          // 3a change-detection log loop only (no encode)
     int durationSec = 0;            // 0 = run until stdin EOF / killed (offline testing aid)
 };
@@ -89,6 +99,10 @@ public:
           encoding_(!o.selftest), streamStdout_(o.output == "stdout") {
         gopIntervalSec_ = (o.fps > 0) ? (double)o.gopFrames / o.fps : 2.0;
         minEncodeIntervalSec_ = (o.fps > 0) ? 1.0 / o.fps : 0.0;
+        floorFps_ = o.floorFps;
+        floorIntervalMs_ = (floorFps_ > 0) ? 1000.0 / floorFps_ : 0.0;
+        floorDecayMs_ = o.floorDecayMs;
+        bitrateMaxRatio_ = (o.bitrateKbps > 0) ? (double)o.maxrateKbps / o.bitrateKbps : 1.6;
     }
     ~DuplCapturer() { Release(); }
 
@@ -106,14 +120,16 @@ public:
             if (!setupEncoder()) return 4;
             lastEncode_ = Clock::now();
             if (streamStdout_) { std::thread(&DuplCapturer::stdinLoop, this).detach(); }
-            Log("encoding -> %s  %dx%d  fps<=%d  VBR %d/%d kbps  gop %d frames (~%.1fs)  no-intra-refresh",
+            std::string floorDesc = floorFps_ > 0
+                ? std::to_string(floorFps_) + "fps/" + std::to_string(floorDecayMs_) + "ms" : "off";
+            Log("encoding -> %s  %dx%d  fps<=%d  VBR %d/%d kbps  gop %d frames (~%.1fs)  no-intra-refresh  floor=%s",
                 streamStdout_ ? "stdout" : opt_.output.c_str(), width_, height_, opt_.fps,
-                opt_.bitrateKbps, opt_.maxrateKbps, opt_.gopFrames, gopIntervalSec_);
+                opt_.bitrateKbps, opt_.maxrateKbps, opt_.gopFrames, gopIntervalSec_, floorDesc.c_str());
         }
 
         const auto startT = Clock::now();
         auto intervalStart = startT;
-        uint64_t emitted = 0, skippedTimeout = 0, skippedPointerOnly = 0;
+        uint64_t emitted = 0, skippedTimeout = 0, skippedPointerOnly = 0, floorFrames = 0;
         long cursorX = 0, cursorY = 0;
         bool cursorVisible = false;
         UINT shapeType = 0;
@@ -126,18 +142,46 @@ public:
             if (opt_.durationSec > 0 &&
                 std::chrono::duration_cast<std::chrono::seconds>(now - startT).count() >= opt_.durationSec) break;
 
+            // BWE: apply a pending live bitrate change on THIS (encode) thread — NVENC session
+            // calls aren't thread-safe, so the stdin thread only parks the value. maxrate keeps
+            // the sender's original target:max ratio. No respawn, no IDR.
+            if (encoding_) {
+                int pb = pendingBitrateKbps_.exchange(-1);
+                if (pb > 0) {
+                    int newMax = (int)(pb * bitrateMaxRatio_ + 0.5);
+                    encoder_.SetBitrate(pb, newMax);
+                }
+            }
+
+            // During an activity window the acquire timeout shrinks to the floor interval
+            // so we wake in time to emit a duplicate P-frame; truly idle -> 250ms (sleep).
+            UINT acquireTimeout = kAcquireTimeoutMs;
+            if (encoding_ && floorFps_ > 0 && haveEncodedFrame_ &&
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRealChange_).count() < floorDecayMs_) {
+                acquireTimeout = (UINT)(floorIntervalMs_ > 1.0 ? floorIntervalMs_ : 1.0);
+            }
+
             DXGI_OUTDUPL_FRAME_INFO fi = {};
             ComPtr<IDXGIResource> desktopResource;
-            HRESULT hr = dupl_->AcquireNextFrame(kAcquireTimeoutMs, &fi, &desktopResource);
+            HRESULT hr = dupl_->AcquireNextFrame(acquireTimeout, &fi, &desktopResource);
 
             if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
                 ++skippedTimeout;
-                // PLI on a static screen: no new change is coming, but a recovering
-                // receiver needs a fresh keyframe -> re-encode the last frame as IDR.
-                if (encoding_ && haveEncodedFrame_ && idrRequested_.exchange(false)) {
-                    if (encoder_.EncodeRepeatIdr()) { lastIdr_ = now; lastEncode_ = now; Log("forced IDR (PLI, static screen)"); }
+                if (encoding_ && haveEncodedFrame_) {
+                    // PLI on a static screen: no new change is coming, but a recovering
+                    // receiver needs a fresh keyframe -> re-encode the last frame as IDR.
+                    if (idrRequested_.exchange(false)) {
+                        if (encoder_.EncodeRepeatIdr()) { lastIdr_ = now; lastEncode_ = now; Log("forced IDR (PLI, static screen)"); }
+                    // min-fps FLOOR: within the activity window, keep a steady cadence by
+                    // duplicating the last frame (cheap skip-MB P-frame). Decays to idle
+                    // once the screen is truly static (past floorDecayMs) -> GPU back to ~0.
+                    } else if (floorFps_ > 0 &&
+                               std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRealChange_).count() < floorDecayMs_ &&
+                               std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEncode_).count() >= (long long)floorIntervalMs_) {
+                        if (encoder_.EncodeRepeatFrame()) { lastEncode_ = now; ++floorFrames; }
+                    }
                 }
-                maybeLog(intervalStart, emitted, skippedTimeout, skippedPointerOnly, cursorX, cursorY, cursorVisible, shapeType);
+                maybeLog(intervalStart, emitted, skippedTimeout, skippedPointerOnly, floorFrames, cursorX, cursorY, cursorVisible, shapeType);
                 continue;
             }
             if (hr == DXGI_ERROR_ACCESS_LOST) { Log("access-lost: duplication lost -> re-init"); recover(); continue; }
@@ -147,6 +191,7 @@ public:
             const bool screenChanged = (fi.LastPresentTime.QuadPart != 0);
             if (screenChanged) {
                 ++emitted;
+                lastRealChange_ = now;  // arms the min-fps floor for the next floorDecayMs
                 if (encoding_) {
                     const bool wallIdr = !haveEncodedFrame_ ||
                         std::chrono::duration_cast<std::chrono::milliseconds>(now - lastIdr_).count()
@@ -201,7 +246,7 @@ public:
             HRESULT rr = dupl_->ReleaseFrame();
             if (FAILED(rr)) { LogHr("ReleaseFrame", rr); recover(); continue; }
 
-            maybeLog(intervalStart, emitted, skippedTimeout, skippedPointerOnly, cursorX, cursorY, cursorVisible, shapeType);
+            maybeLog(intervalStart, emitted, skippedTimeout, skippedPointerOnly, floorFrames, cursorX, cursorY, cursorVisible, shapeType);
         }
 
         if (encoding_) {
@@ -217,24 +262,40 @@ public:
 private:
     static constexpr UINT kAcquireTimeoutMs = 250;  // idle wakes ~4x/s to still log
 
+    // stdin control bytes (from the sender): 'I'/'i' = force IDR next frame (PLI, bare byte);
+    // 'B'<ascii-kbps>'\n' = set the live VBR bitrate (BWE feedback). A tiny state machine
+    // handles ReadFile chunking: 'B' opens a digit-accumulate mode ended by any non-digit
+    // (the '\n'); the terminator is re-scanned so a following 'I'/'B' still registers.
     void stdinLoop() {
         HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
         char buf[64]; DWORD n = 0;
+        std::string num; bool inBitrate = false;
         for (;;) {
             BOOL ok = ReadFile(h, buf, sizeof(buf), &n, nullptr);
             if (!ok || n == 0) { shutdownRequested_.store(true); return; }  // EOF / closed pipe
-            for (DWORD i = 0; i < n; ++i) if (buf[i] == 'I' || buf[i] == 'i') idrRequested_.store(true);
+            for (DWORD i = 0; i < n; ++i) {
+                char c = buf[i];
+                if (inBitrate && c >= '0' && c <= '9') { if (num.size() < 9) num.push_back(c); continue; }
+                if (inBitrate) {  // non-digit terminates the number
+                    if (!num.empty()) pendingBitrateKbps_.store(std::atoi(num.c_str()));
+                    num.clear(); inBitrate = false;  // fall through to re-scan c as a command
+                }
+                if (c == 'I' || c == 'i') idrRequested_.store(true);
+                else if (c == 'B') { inBitrate = true; num.clear(); }
+            }
         }
     }
 
     void maybeLog(Clock::time_point& intervalStart, uint64_t& emitted, uint64_t& skippedTimeout,
-                  uint64_t& skippedPointerOnly, long cursorX, long cursorY, bool cursorVisible, UINT shapeType) {
+                  uint64_t& skippedPointerOnly, uint64_t& floorFrames, long cursorX, long cursorY,
+                  bool cursorVisible, UINT shapeType) {
         auto now = Clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - intervalStart).count() < 1000) return;
-        Log("emitted=%llu skipped_timeout=%llu skipped_pointeronly=%llu cursor=(%ld,%ld,%s,%s)",
-            (unsigned long long)emitted, (unsigned long long)skippedTimeout, (unsigned long long)skippedPointerOnly,
-            cursorX, cursorY, cursorVisible ? "visible" : "hidden", PtrTypeName(shapeType));
-        emitted = skippedTimeout = skippedPointerOnly = 0;
+        Log("emitted=%llu floor=%llu skipped_timeout=%llu skipped_pointeronly=%llu cursor=(%ld,%ld,%s,%s)",
+            (unsigned long long)emitted, (unsigned long long)floorFrames, (unsigned long long)skippedTimeout,
+            (unsigned long long)skippedPointerOnly, cursorX, cursorY, cursorVisible ? "visible" : "hidden",
+            PtrTypeName(shapeType));
+        emitted = skippedTimeout = skippedPointerOnly = floorFrames = 0;
         intervalStart = now;
     }
 
@@ -243,7 +304,7 @@ private:
         NvEncConfig cfg;
         cfg.width = width_; cfg.height = height_;
         cfg.fps = opt_.fps; cfg.targetKbps = opt_.bitrateKbps; cfg.maxKbps = opt_.maxrateKbps;
-        cfg.vbvMs = 250; cfg.idrIntervalSec = gopIntervalSec_;
+        cfg.vbvMs = 250; cfg.idrIntervalSec = gopIntervalSec_; cfg.hevc = opt_.hevc;
         haveEncodedFrame_ = false;  // first frame after (re)init = IDR
         if (!encoder_.Init(device_.Get(), context_.Get(), cfg, encFile_)) { Log("fatal: NVENC init failed"); return false; }
         return true;
@@ -325,15 +386,48 @@ private:
     bool streamStdout_ = false;
     FILE* encFile_ = nullptr;
     NvEncoder encoder_;
-    Clock::time_point lastIdr_{}, lastEncode_{};
+    Clock::time_point lastIdr_{}, lastEncode_{}, lastRealChange_{};
     bool haveEncodedFrame_ = false;
     double gopIntervalSec_ = 2.0;
     double minEncodeIntervalSec_ = 0.0;
+    int floorFps_ = 0;               // min-fps floor during activity (0 = off)
+    double floorIntervalMs_ = 0.0;   // 1000/floorFps
+    long floorDecayMs_ = 0;          // floor stays alive this long after the last real change
 
     // control channel (set from the stdin thread)
     std::atomic<bool> idrRequested_{false};
     std::atomic<bool> shutdownRequested_{false};
+    std::atomic<int>  pendingBitrateKbps_{-1};  // 'B<kbps>' from stdin -> apply on encode thread
+    double bitrateMaxRatio_ = 1.6;              // maxrate/target, preserved across BWE retunes
 };
+
+// Live tuning WITHOUT an agent relaunch: if this file exists the capturer reads it at
+// every spawn (per session) and its key=value lines override the sender's CLI args.
+// Lets us A/B bitrate/codec/floor vs Parsec by editing one file + reconnecting — no
+// env (which would need the elevated agent relaunched to inherit) and no rebuild.
+// Absent by default => normal behaviour. Path: %LOCALAPPDATA%\pr-capturer-tune.txt.
+static void applyTuneFile(CapturerOptions& o) {
+    const char* base = std::getenv("LOCALAPPDATA");
+    if (!base) base = std::getenv("TEMP");
+    if (!base) return;
+    std::string path = std::string(base) + "\\pr-capturer-tune.txt";
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        char key[128] = {0}, val[128] = {0};
+        if (sscanf(line, " %127[^=# \t] = %127[^\r\n \t]", key, val) != 2) continue;
+        std::string k = key, v = val;
+        if (k == "bitrate") o.bitrateKbps = std::atoi(v.c_str());
+        else if (k == "maxrate") o.maxrateKbps = std::atoi(v.c_str());
+        else if (k == "fps") o.fps = std::atoi(v.c_str());
+        else if (k == "floor-fps") o.floorFps = std::atoi(v.c_str());
+        else if (k == "floor-decay") o.floorDecayMs = std::atoi(v.c_str());
+        else if (k == "codec") o.hevc = (v == "h265" || v == "hevc" || v == "HEVC");
+    }
+    fclose(f);
+    Log("tune-file applied: %s", path.c_str());
+}
 
 int main(int argc, char** argv) {
     CapturerOptions o;
@@ -348,6 +442,9 @@ int main(int argc, char** argv) {
         else if (a == "--bitrate") next(o.bitrateKbps);
         else if (a == "--maxrate") next(o.maxrateKbps);
         else if (a == "--gop") next(o.gopFrames);
+        else if (a == "--codec" && i + 1 < argc) { std::string c = argv[++i]; o.hevc = (c == "h265" || c == "hevc" || c == "HEVC"); }
+        else if (a == "--floor-fps") next(o.floorFps);
+        else if (a == "--floor-decay") next(o.floorDecayMs);
         else if (a == "--duration") next(o.durationSec);
         else if (a == "--help" || a == "-h") {
             printf("dxgi-capturer (Step 3 custom DXGI capturer)\n"
@@ -357,12 +454,26 @@ int main(int argc, char** argv) {
                    "  --bitrate <kbps>         NVENC VBR target (default 25000)\n"
                    "  --maxrate <kbps>         NVENC VBR cap (default 40000)\n"
                    "  --gop <frames>           IDR interval (~2s@60, default 120; NO intra-refresh)\n"
+                   "  --codec h264|h265        H.264 (default) or H.265/HEVC (Parsec-parity GPU test)\n"
+                   "  --floor-fps <n>          min-fps floor during activity (default 0=off;\n"
+                   "                           env VIDEO_CAPTURER_FLOOR_FPS overrides for live tuning)\n"
+                   "  --floor-decay <ms>       floor stays alive this long after a change (default 350)\n"
                    "  --selftest               3a change-detection log loop only (no encode)\n"
                    "  --duration <sec>         stop after N seconds (offline testing)\n"
-                   "  stdin: byte 'I' -> force IDR; EOF -> clean shutdown\n");
+                   "  stdin: 'I' -> force IDR;  'B'<kbps>'\\n' -> live VBR bitrate;  EOF -> shutdown\n");
             return 0;
         } else Log("ignoring unknown arg: %s", a.c_str());
     }
+
+    // env overrides for live tuning without a rebuild (the sender forks us with its
+    // env, so setx <VAR> + reconnect sweeps it). These WIN over the sender's CLI args
+    // (--bitrate/--maxrate/--floor-fps) so we can A/B against Parsec without a Mac build.
+    if (const char* fenv = std::getenv("VIDEO_CAPTURER_FLOOR_FPS")) o.floorFps = std::atoi(fenv);
+    if (const char* denv = std::getenv("VIDEO_CAPTURER_FLOOR_DECAY_MS")) o.floorDecayMs = std::atoi(denv);
+    if (const char* benv = std::getenv("VIDEO_CAPTURER_BITRATE_KBPS")) o.bitrateKbps = std::atoi(benv);
+    if (const char* menv = std::getenv("VIDEO_CAPTURER_MAXRATE_KBPS")) o.maxrateKbps = std::atoi(menv);
+    if (const char* cenv = std::getenv("VIDEO_CAPTURER_CODEC")) { std::string c = cenv; o.hevc = (c == "h265" || c == "hevc" || c == "HEVC"); }
+    applyTuneFile(o);  // highest priority: a live tune file overrides CLI + env (no relaunch)
 
     SetProcessDPIAware();  // physical pixels for width/height + cursor coords
     Log("start: monitor=%u output=%s fps=%d %s", o.monitor, o.output.c_str(), o.fps,

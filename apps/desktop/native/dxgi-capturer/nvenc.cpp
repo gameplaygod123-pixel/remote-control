@@ -57,15 +57,22 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     op.apiVersion = NVENCAPI_VERSION;
     NVCK(FL->nvEncOpenEncodeSessionEx(&op, &enc_), "nvEncOpenEncodeSessionEx");
 
+    const GUID codecGuid = cfg_.hevc ? NV_ENC_CODEC_HEVC_GUID : NV_ENC_CODEC_H264_GUID;
+
     // --- start from the P1 + ultra-low-latency preset, then pin our config ---
     NV_ENC_PRESET_CONFIG pc = {};
     pc.version = NV_ENC_PRESET_CONFIG_VER;
     pc.presetCfg.version = NV_ENC_CONFIG_VER;
-    NVCK(FL->nvEncGetEncodePresetConfigEx(enc_, NV_ENC_CODEC_H264_GUID, NV_ENC_PRESET_P1_GUID,
+    NVCK(FL->nvEncGetEncodePresetConfigEx(enc_, codecGuid, NV_ENC_PRESET_P1_GUID,
                                           NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &pc),
          "nvEncGetEncodePresetConfigEx");
 
-    NV_ENC_CONFIG encCfg = pc.presetCfg;
+    // Persist the encode config + init params on the heap so SetBitrate() can retune the
+    // live encoder via nvEncReconfigureEncoder (reInitEncodeParams must point at a valid
+    // encodeConfig that OUTLIVES the call). initParams.encodeConfig -> this encCfg.
+    auto* encCfgPtr = new NV_ENC_CONFIG(pc.presetCfg);
+    encCfgMem_ = encCfgPtr;
+    NV_ENC_CONFIG& encCfg = *encCfgPtr;
     encCfg.version = NV_ENC_CONFIG_VER;
     encCfg.gopLength = NVENC_INFINITE_GOPLENGTH;   // we drive IDR ourselves (wall-clock)
     encCfg.frameIntervalP = 1;                     // IPPP — no B-frames
@@ -77,17 +84,29 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
         static_cast<uint64_t>(encCfg.rcParams.maxBitRate) * cfg_.vbvMs / 1000);
     encCfg.rcParams.vbvInitialDelay = encCfg.rcParams.vbvBufferSize;
 
-    NV_ENC_CONFIG_H264& h264 = encCfg.encodeCodecConfig.h264Config;
-    h264.idrPeriod = NVENC_INFINITE_GOPLENGTH;  // no auto-IDR; we force by wall clock
-    h264.repeatSPSPPS = 1;                        // in-band SPS/PPS before every IDR
-    h264.enableIntraRefresh = 0;                  // NEVER (VideoToolbox can't decode it — Step 1)
-    h264.sliceMode = 0;                           // single slice (Step 2 multi-slice skipped)
-    h264.sliceModeData = 0;
-    h264.outputAUD = 0;
+    if (cfg_.hevc) {
+        NV_ENC_CONFIG_HEVC& hevc = encCfg.encodeCodecConfig.hevcConfig;
+        hevc.idrPeriod = NVENC_INFINITE_GOPLENGTH;  // no auto-IDR; we force by wall clock
+        hevc.repeatSPSPPS = 1;                       // in-band VPS/SPS/PPS before every IDR
+        hevc.enableIntraRefresh = 0;                 // NEVER (VideoToolbox can't decode it — Step 1)
+        hevc.sliceMode = 0;                          // single slice
+        hevc.sliceModeData = 0;
+        hevc.outputAUD = 0;
+    } else {
+        NV_ENC_CONFIG_H264& h264 = encCfg.encodeCodecConfig.h264Config;
+        h264.idrPeriod = NVENC_INFINITE_GOPLENGTH;  // no auto-IDR; we force by wall clock
+        h264.repeatSPSPPS = 1;                        // in-band SPS/PPS before every IDR
+        h264.enableIntraRefresh = 0;                  // NEVER (VideoToolbox can't decode it — Step 1)
+        h264.sliceMode = 0;                           // single slice (Step 2 multi-slice skipped)
+        h264.sliceModeData = 0;
+        h264.outputAUD = 0;
+    }
 
-    NV_ENC_INITIALIZE_PARAMS ip = {};
+    auto* ipPtr = new NV_ENC_INITIALIZE_PARAMS{};
+    initParamsMem_ = ipPtr;
+    NV_ENC_INITIALIZE_PARAMS& ip = *ipPtr;
     ip.version = NV_ENC_INITIALIZE_PARAMS_VER;
-    ip.encodeGUID = NV_ENC_CODEC_H264_GUID;
+    ip.encodeGUID = codecGuid;
     ip.presetGUID = NV_ENC_PRESET_P1_GUID;
     ip.tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
     ip.encodeWidth = cfg_.width;   ip.encodeHeight = cfg_.height;
@@ -96,7 +115,7 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     ip.frameRateNum = cfg_.fps;    ip.frameRateDen = 1;
     ip.enablePTD = 1;              // encoder picks frame types; FORCEIDR still honored
     ip.enableEncodeAsync = 0;      // synchronous — LockBitstream blocks until ready
-    ip.encodeConfig = &encCfg;
+    ip.encodeConfig = encCfgPtr;
     NVCK(FL->nvEncInitializeEncoder(enc_, &ip), "nvEncInitializeEncoder");
 
     // --- owned BGRA texture we CopyResource each real-change frame into, registered once ---
@@ -125,8 +144,9 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     NVCK(FL->nvEncCreateBitstreamBuffer(enc_, &bb), "nvEncCreateBitstreamBuffer");
     bitstream_ = bb.bitstreamBuffer;
 
-    NvLog("nvenc H264 P1/ULL VBR %d/%d kbps, VBV %dms, IDR ~%.1fs, %dx%d@%d, no-B no-intra-refresh",
-          cfg_.targetKbps, cfg_.maxKbps, cfg_.vbvMs, cfg_.idrIntervalSec, cfg_.width, cfg_.height, cfg_.fps);
+    NvLog("nvenc %s P1/ULL VBR %d/%d kbps, VBV %dms, IDR ~%.1fs, %dx%d@%d, no-B no-intra-refresh",
+          cfg_.hevc ? "HEVC" : "H264", cfg_.targetKbps, cfg_.maxKbps, cfg_.vbvMs, cfg_.idrIntervalSec,
+          cfg_.width, cfg_.height, cfg_.fps);
     return true;
 }
 
@@ -141,6 +161,41 @@ bool NvEncoder::EncodeFrame(ID3D11Texture2D* srcTex, bool forceIdr) {
 bool NvEncoder::EncodeRepeatIdr() {
     if (!enc_) return false;
     return encodeMapped(/*forceIdr=*/true);  // re-encode the last frame already in encodeTex_
+}
+
+bool NvEncoder::EncodeRepeatFrame() {
+    if (!enc_) return false;
+    return encodeMapped(/*forceIdr=*/false);  // duplicate last frame as a cheap P-frame (floor)
+}
+
+bool NvEncoder::SetBitrate(int targetKbps, int maxKbps) {
+    if (!enc_ || !initParamsMem_ || !encCfgMem_) return false;
+    if (targetKbps <= 0) return false;
+    if (maxKbps < targetKbps) maxKbps = targetKbps;
+
+    auto* encCfg = reinterpret_cast<NV_ENC_CONFIG*>(encCfgMem_);
+    auto* ip     = reinterpret_cast<NV_ENC_INITIALIZE_PARAMS*>(initParamsMem_);
+
+    // Retune ONLY the rate-control fields in the persisted config (everything else — codec,
+    // preset, resolution, GOP, no-B/no-intra-refresh — stays byte-identical so this is a
+    // pure RC change, not a re-init).
+    encCfg->rcParams.averageBitRate = static_cast<uint32_t>(targetKbps) * 1000u;
+    encCfg->rcParams.maxBitRate     = static_cast<uint32_t>(maxKbps) * 1000u;
+    encCfg->rcParams.vbvBufferSize  = static_cast<uint32_t>(
+        static_cast<uint64_t>(encCfg->rcParams.maxBitRate) * cfg_.vbvMs / 1000);
+    encCfg->rcParams.vbvInitialDelay = encCfg->rcParams.vbvBufferSize;
+
+    NV_ENC_RECONFIGURE_PARAMS rp = {};
+    rp.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+    rp.reInitEncodeParams = *ip;   // carries encodeConfig -> our just-updated encCfg
+    rp.resetEncoder = 0;           // keep the running stream (no session reset)
+    rp.forceIDR = 0;               // BWE must NOT trigger a keyframe spike
+    NVCK(FL->nvEncReconfigureEncoder(enc_, &rp), "nvEncReconfigureEncoder");
+
+    cfg_.targetKbps = targetKbps;
+    cfg_.maxKbps = maxKbps;
+    NvLog("nvenc reconfigure VBR %d/%d kbps (live, no reset, no IDR)", targetKbps, maxKbps);
+    return true;
 }
 
 bool NvEncoder::encodeMapped(bool forceIdr) {
@@ -206,6 +261,8 @@ void NvEncoder::Shutdown() {
         enc_ = nullptr;
     }
     if (encodeTex_) { encodeTex_->Release(); encodeTex_ = nullptr; }
+    if (initParamsMem_) { delete reinterpret_cast<NV_ENC_INITIALIZE_PARAMS*>(initParamsMem_); initParamsMem_ = nullptr; }
+    if (encCfgMem_)     { delete reinterpret_cast<NV_ENC_CONFIG*>(encCfgMem_); encCfgMem_ = nullptr; }
     if (fnListMem_) { delete reinterpret_cast<NV_ENCODE_API_FUNCTION_LIST*>(fnListMem_); fnListMem_ = nullptr; }
     if (dll_) { FreeLibrary(reinterpret_cast<HMODULE>(dll_)); dll_ = nullptr; }
     if (out_) { fflush(out_); }  // caller owns the FILE*, we just flush

@@ -20,6 +20,7 @@ struct NvEncConfig {
     int maxKbps = 40000;      // VBR cap
     int vbvMs = 250;          // VBV buffer ~250ms
     double idrIntervalSec = 2.0;  // wall-clock IDR period (not a frame count — we skip frames)
+    bool hevc = false;        // false = H.264, true = H.265/HEVC (Parsec-parity GPU experiment)
 };
 
 // Opaque to callers; the impl holds all NVENC handles.
@@ -44,6 +45,18 @@ public:
     // receiver needs a fresh keyframe. No CopyResource.
     bool EncodeRepeatIdr();
 
+    // Re-encode the LAST frame as a plain (non-IDR) P-frame — the min-fps FLOOR: during
+    // an activity window we keep a steady cadence by duplicating the last frame when no
+    // new desktop change arrives. Content is unchanged, so it encodes to a near-empty
+    // skip-MB P-frame (cheap on GPU + wire) yet regularizes receiver pacing. No CopyResource.
+    bool EncodeRepeatFrame();
+
+    // Change the VBR target/max bitrate LIVE (nvEncReconfigureEncoder, resetEncoder=0,
+    // no forced IDR) — the sender's BWE feedback path: receiver measures the link, sends
+    // the new ceiling, we retune NVENC in place with no respawn and no keyframe spike.
+    // MUST be called from the encode thread (same one that calls EncodeFrame). kbps values.
+    bool SetBitrate(int targetKbps, int maxKbps);
+
     void Shutdown();  // flush EOS + free everything
 
     uint64_t framesEncoded() const { return framesEncoded_; }
@@ -58,6 +71,8 @@ private:
     void* registered_ = nullptr;       // NV_ENC_REGISTERED_PTR for encodeTex_
     void* bitstream_ = nullptr;        // NV_ENC_OUTPUT_PTR
     void* dll_ = nullptr;              // HMODULE nvEncodeAPI64.dll
+    void* initParamsMem_ = nullptr;    // heap NV_ENC_INITIALIZE_PARAMS (persisted for reconfigure)
+    void* encCfgMem_ = nullptr;        // heap NV_ENC_CONFIG (initParams.encodeConfig points here)
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
