@@ -69,6 +69,14 @@ interface Session {
   // the exact ~2s freeze WC saw on HEVC (frames are larger / more loss-sensitive).
   // A forced IDR via PLI recovers in ~1 RTT instead. -1 until the first packet.
   lastSeq16: number
+  // Auto-test instrumentation (parsed by scripts/analyze-session.mjs): a "hitch" is
+  // the interval from a detected loss to the next keyframe AU that recovers decode.
+  // hitchStartMs = perf.now of the loss that opened the current unrecovered hitch (0
+  // = not in a hitch). Per-window loss/pli counters feed the structured stats line.
+  hitchStartMs: number
+  lossEventsInWindow: number
+  lostPacketsInWindow: number
+  pliInWindow: number
   framesInWindow: number
   bytesInWindow: number
   // Frame-pacing jitter: how evenly reassembled AUs land (perceived smoothness).
@@ -107,6 +115,7 @@ function requestKeyframe(s: Session, reason: string): void {
     return // rate-limited to <=1/s so we never storm the sender
   }
   s.lastKeyframeRequestAt = now
+  s.pliInWindow += 1
   log(`requestKeyframe (${reason}) -> PLI`)
   try {
     s.track.requestKeyframe()
@@ -145,6 +154,10 @@ function startSession(): void {
     firstFrameSeen: false,
     lastKeyframeRequestAt: 0,
     lastSeq16: -1,
+    hitchStartMs: 0,
+    lossEventsInWindow: 0,
+    lostPacketsInWindow: 0,
+    pliInWindow: 0,
     framesInWindow: 0,
     bytesInWindow: 0,
     lastAuArrivalMs: 0,
@@ -200,7 +213,14 @@ function startSession(): void {
         // advances forward so a late reorder doesn't read as a second gap.
         if (session.lastSeq16 >= 0) {
           const gap = seqForwardDistance(session.lastSeq16, seq)
-          if (gap > 1) requestKeyframe(session, `packet loss (gap ${gap - 1})`)
+          if (gap > 1) {
+            session.lossEventsInWindow += 1
+            session.lostPacketsInWindow += gap - 1
+            // Open a hitch if not already in one (loss -> broken frame -> decode stalls
+            // until the recovering keyframe). Timed to the recovering AU below.
+            if (session.hitchStartMs === 0) session.hitchStartMs = performance.now()
+            requestKeyframe(session, `packet loss (gap ${gap - 1})`)
+          }
           if (gap > 0) session.lastSeq16 = seq
         } else {
           session.lastSeq16 = seq
@@ -209,6 +229,14 @@ function startSession(): void {
       for (const au of session.depacketizer.push(msg)) {
         session.framesInWindow += 1
         session.bytesInWindow += au.data.length
+        // Close an open hitch when a keyframe (the recovering IDR) arrives: this is the
+        // real perceived-freeze duration (loss -> decodable again). Logged for the
+        // auto-analyzer; the goal is to keep these ~1 RTT (PLI-forced IDR), not ~2s.
+        if (au.keyframe && session.hitchStartMs > 0) {
+          const ms = Math.round(performance.now() - session.hitchStartMs)
+          session.hitchStartMs = 0
+          log(`hitch recovered in ${ms}ms (loss -> keyframe)`)
+        }
         // Read the real resolution off the in-band SPS once (the first AU is an
         // IDR with parameter sets); ndc/VideoToolbox never surface it to Node.
         if (!session.lastStats.width) {
@@ -273,12 +301,18 @@ function reportStats(session: Session): void {
   // Per-second stats to the log too (not just the HUD) so frame-pacing evidence —
   // fps swing + jitter over time, vs Parsec — is inspectable after the fact (golden
   // rule #1). With change-detection capture fps is INTENTIONALLY variable (idle→low,
-  // motion→high, like Parsec); jitterMs is the real smoothness metric.
+  // motion→high, like Parsec); jitterMs is the real smoothness metric. loss/pli are
+  // this window's counts (parsed by scripts/analyze-session.mjs for the auto-report).
   log(
-    `stats fps=${stats.fps} jitter=${stats.jitterMs ?? '-'}ms kbps=${stats.kbps} ${stats.width}x${stats.height}`
+    `stats fps=${stats.fps} jitter=${stats.jitterMs ?? '-'}ms kbps=${stats.kbps} ` +
+      `loss=${session.lossEventsInWindow} lostpkts=${session.lostPacketsInWindow} ` +
+      `pli=${session.pliInWindow} ${stats.width}x${stats.height}`
   )
   session.framesInWindow = 0
   session.bytesInWindow = 0
+  session.lossEventsInWindow = 0
+  session.lostPacketsInWindow = 0
+  session.pliInWindow = 0
   send({ evt: 'stats', stats })
 
   // BWE: close the loss window, run AIMD, and push a new bitrate target to the
