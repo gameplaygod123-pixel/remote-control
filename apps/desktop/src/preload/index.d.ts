@@ -137,6 +137,7 @@ declare global {
         onStats: (
           handler: (stats: import('../video-native/shared/contract').NativeVideoStats) => void
         ) => void
+        onBitrate: (handler: (kbps: number) => void) => void
         onDown: (handler: () => void) => void
       }
     }

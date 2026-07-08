@@ -178,9 +178,11 @@ wss.on("connection", (socket) => {
 
       // SDP/ICE messages just get relayed between whichever two sockets are
       // paired for this deviceId -- the server never inspects their contents.
+      // video-bitrate (native-video BWE, controller->agent) relays the same way.
       case "sdp-offer":
       case "sdp-answer":
-      case "ice-candidate": {
+      case "ice-candidate":
+      case "video-bitrate": {
         const target = resolveRelayTarget(message.deviceId, socket);
         if (target) send(target, message);
         break;

@@ -200,6 +200,9 @@ const api = {
     onStats: (handler: (stats: NativeVideoStats) => void): void => {
       ipcRenderer.on('video-receiver:stats', (_event, stats) => handler(stats))
     },
+    onBitrate: (handler: (kbps: number) => void): void => {
+      ipcRenderer.on('video-receiver:bitrate', (_event, kbps) => handler(kbps))
+    },
     onDown: (handler: () => void): void => {
       ipcRenderer.on('video-receiver:down', () => handler())
     }

@@ -26,6 +26,7 @@ import type { MainToVideoReceiver, VideoReceiverToMain } from '../shared/ipc'
 import type { NativeVideoStats } from '../shared/contract'
 import { H264Depacketizer, isRtcp } from './rtpDepacketizer'
 import { spsDimensions } from './spsDimensions'
+import { BandwidthEstimator } from './bwe'
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 
 // Must match the sender (sender/index.ts): same STUN pair (golden rule #4), same
@@ -52,6 +53,9 @@ interface Session {
   pc: InstanceType<typeof PeerConnection>
   track: Track | null
   depacketizer: H264Depacketizer
+  // Loss-based AIMD bitrate estimator (feeds the sender's live bitrate over
+  // signaling via evt:'bitrate'). Media-only pc has no built-in BWE -- see bwe.ts.
+  bwe: BandwidthEstimator
   firstFrameSeen: boolean
   lastKeyframeRequestAt: number
   framesInWindow: number
@@ -122,6 +126,7 @@ function startSession(): void {
     pc,
     track: null,
     depacketizer: new H264Depacketizer(),
+    bwe: new BandwidthEstimator(),
     firstFrameSeen: false,
     lastKeyframeRequestAt: 0,
     framesInWindow: 0,
@@ -166,6 +171,9 @@ function startSession(): void {
     track.onMessage((msg: Buffer) => {
       if (current !== session) return
       if (isRtcp(msg)) return // RTCP (e.g. sender reports) -- ndc handles it
+      // Feed the RTP sequence number (bytes 2-3) to the BWE estimator BEFORE
+      // depacketizing -- loss is a per-packet signal, independent of AU reassembly.
+      if (msg.length >= 4) session.bwe.observe(msg.readUInt16BE(2))
       for (const au of session.depacketizer.push(msg)) {
         session.framesInWindow += 1
         session.bytesInWindow += au.data.length
@@ -240,6 +248,16 @@ function reportStats(session: Session): void {
   session.framesInWindow = 0
   session.bytesInWindow = 0
   send({ evt: 'stats', stats })
+
+  // BWE: close the loss window, run AIMD, and push a new bitrate target to the
+  // sender ONLY when it moved enough to matter (hysteresis in the estimator). A
+  // static screen produces no packets -> tick() is null -> hold. main relays this
+  // over signaling ('video-bitrate') -> agent -> capturer stdin 'B<kbps>'.
+  const bwe = session.bwe.tick()
+  if (bwe?.changed) {
+    log(`bwe loss=${(bwe.lossFraction * 100).toFixed(1)}% -> target ${bwe.targetKbps}kbps`)
+    send({ evt: 'bitrate', kbps: bwe.targetKbps })
+  }
 }
 
 // ── IPC in (MainToVideoReceiver) ──────────────────────────────────────────────

@@ -92,6 +92,21 @@ export const IceCandidateMessage = z.object({
   channel: SignalChannel.optional(),
 });
 
+// BWE (native video): the controller's loss-based estimator tells the agent's
+// sender what bitrate to encode at (≤60 Mbps cap). The native video pc is
+// media-only (no data channel), so the target rides the signaling channel like
+// SDP/ICE -- the server just relays it between the paired sockets (resolveRelayTarget),
+// never inspecting it. `channel` is 'video-native' (additive, like the SDP types).
+// Old servers drop unknown message types on parse, so a server that hasn't been
+// rebuilt simply never relays it -> the sender stays at its fixed launch bitrate
+// (graceful degrade, exactly like 'video-native' SDP needed a server rebuild).
+export const VideoBitrateMessage = z.object({
+  type: z.literal("video-bitrate"),
+  deviceId: z.string(),
+  kbps: z.number(),
+  channel: SignalChannel.optional(),
+});
+
 // Keeps the WebSocket connection alive through proxies/tunnels (e.g. a free
 // Cloudflare quick tunnel) that silently close idle connections after ~1-2
 // minutes of no traffic. Sent by the client on an interval well under that.
@@ -228,6 +243,7 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   SdpOfferMessage,
   SdpAnswerMessage,
   IceCandidateMessage,
+  VideoBitrateMessage,
   PingMessage,
   PongMessage,
   ListDevicesMessage,

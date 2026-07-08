@@ -72,6 +72,10 @@ export type VideoReceiverToMain =
    *  overlay. Cheap signal that avoids guessing from stats. */
   | { evt: 'first-frame' }
   | { evt: 'stats'; stats: NativeVideoStats }
+  /** BWE: a new sender bitrate target (kbps) from the receiver's loss-based AIMD.
+   *  Main relays it over signaling ('video-bitrate') to the agent, which forwards
+   *  it to the capturer stdin ('B<kbps>'). See receiver/bwe.ts + docs/bwe-hevc-plan.md. */
+  | { evt: 'bitrate'; kbps: number }
   | { evt: 'pong' }
   | { evt: 'fatal'; message: string }
 
@@ -99,5 +103,7 @@ export interface VideoReceiverCallbacks {
   onAu: (au: Buffer) => void
   onFirstFrame: () => void
   onStats: (stats: NativeVideoStats) => void
+  /** BWE: a new sender bitrate target (kbps) to relay over signaling to the agent. */
+  onBitrate: (kbps: number) => void
   onDown: () => void
 }

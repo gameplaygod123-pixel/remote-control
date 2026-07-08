@@ -29,6 +29,12 @@ export interface CapturerArgOptions {
   maxBitrateKbps?: number
 }
 
+/** Our VideoCodec ('h264'|'hevc') -> the capturer's --codec token ('h264'|'h265').
+ *  The capturer also accepts 'hevc'/'HEVC' but we normalize to h264/h265. */
+function codecArg(codec: VideoConfig['codec']): 'h264' | 'h265' {
+  return codec === 'hevc' ? 'h265' : 'h264'
+}
+
 /**
  * Full capturer.exe argv (without the binary path). Mirrors the documented 3c CLI
  * contract. `fps` is a CAP (change-detection makes the real rate variable ≤ cap).
@@ -44,6 +50,10 @@ export function buildCapturerArgs(config: VideoConfig, opts: CapturerArgOptions 
     output,
     '--monitor',
     String(outputIdx),
+    // Codec is carried from DEFAULT_VIDEO_CONFIG.codec -> the receiver learns it
+    // from the negotiated config too, so both ends agree (H.264 default; H.265 opt-in).
+    '--codec',
+    codecArg(config.codec),
     '--fps',
     String(config.fps),
     '--bitrate',

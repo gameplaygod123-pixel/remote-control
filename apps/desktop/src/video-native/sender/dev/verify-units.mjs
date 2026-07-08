@@ -205,6 +205,11 @@ bundle()
       const a = buildCapturerArgs(cfg).join(' ')
       check('capturer: stdout output by default', a.includes('--output stdout'))
       check('capturer: monitor 0 default', a.includes('--monitor 0'))
+      check('capturer: h264 codec by default', a.includes('--codec h264'))
+      check(
+        'capturer: hevc config -> --codec h265',
+        buildCapturerArgs({ ...cfg, codec: 'hevc' }).join(' ').includes('--codec h265')
+      )
       check('capturer: fps from config', a.includes('--fps 60'))
       check(
         'capturer: VBR target 25000 + maxrate 40000 from config',

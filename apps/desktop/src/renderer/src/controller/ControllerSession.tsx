@@ -507,6 +507,12 @@ export default function ControllerSession({
             jitterMs: s.jitterMs
           })
         })
+        // BWE: the receiver's loss-based AIMD target -> relay to the agent's sender
+        // on channel:'video-native' (server just forwards it; the agent forwards it
+        // to the capturer stdin as 'B<kbps>'). Dormant unless native is engaged.
+        window.api.videoReceiver.onBitrate((kbps) =>
+          transport.send({ type: 'video-bitrate', deviceId, kbps, channel: 'video-native' })
+        )
         window.api.videoReceiver.onDown(() => setStatus('native video down -- repairing'))
         window.api.window.onFullScreen((v) => setFullscreen(v))
       }

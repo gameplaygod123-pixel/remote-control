@@ -558,6 +558,9 @@ app.whenReady().then(async () => {
       },
       onFirstFrame: () => sendToWindow(controllerWindow, 'video-receiver:first-frame'),
       onStats: (stats) => sendToWindow(controllerWindow, 'video-receiver:stats', stats),
+      // BWE: the receiver's AIMD target -> renderer relays it over signaling as
+      // 'video-bitrate' to the agent (which forwards it to the capturer stdin).
+      onBitrate: (kbps) => sendToWindow(controllerWindow, 'video-receiver:bitrate', kbps),
       onDown: () => {
         detachSurface()
         sendToWindow(controllerWindow, 'video-receiver:down')

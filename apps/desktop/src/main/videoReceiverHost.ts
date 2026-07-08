@@ -122,6 +122,9 @@ export function startVideoReceiverHost(callbacks: VideoReceiverCallbacks): Video
         case 'stats':
           callbacks.onStats(msg.stats)
           break
+        case 'bitrate':
+          callbacks.onBitrate(msg.kbps)
+          break
         case 'fatal':
           log(`fatal from helper: ${msg.message}`)
           console.error('[video-receiver] fatal:', msg.message)
