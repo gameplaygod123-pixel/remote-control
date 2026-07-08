@@ -69,8 +69,14 @@ const LOSS_HIGH = 0.05 // > 5% -> decrease immediately
 // 18ms = "calm enough to probe up again".
 const JITTER_CONGESTION_MS = 30 // > this -> back off (bloat precursor)
 const JITTER_PROBE_OK_MS = 18 // must be under this to probe UP
-const INCREASE_KBPS = 2_000 // additive-increase step per clean window (~gentle probe)
+const INCREASE_KBPS = 1_000 // additive-increase step per clean window (gentle probe)
 const DECREASE_FACTOR = 0.85 // multiplicative-decrease on congestion (~15% cut)
+// After a back-off, HOLD at the lower rate for a few calm windows before probing up
+// again. Without this the ramp bounced straight back into the loss zone: a real video
+// showed loss -> 12.75 -> +2Mbps -> 14.75 in ONE second -> hit the next burst ~15s
+// later, forever. Holding lets AIMD CONVERGE to a sustainable rate just below the burst
+// threshold (classic AIMD, but our old +2Mbps recovery was too fast for the decrease).
+const HOLD_WINDOWS_AFTER_BACKOFF = 3
 /** Hysteresis: don't signal a change smaller than this (avoid thrashing the encoder
  *  / spamming signaling for sub-Mbps wiggles). */
 const EMIT_THRESHOLD_KBPS = 1_000
@@ -189,6 +195,8 @@ class AimdController {
   // would never send the B15000 that actually brings it down. For H.264 (launch ==
   // ceiling) it's a harmless one-time reconfigure to the same value.
   private firstEmit = true
+  // Consecutive calm windows since the last back-off (the hold gate for probing up).
+  private calmStreak = 0
 
   // ceilKbps defaults to the H.264 cap; HEVC passes the lower BWE_HEVC_CEIL_KBPS.
   // Start AT the ceiling so BWE only ever backs off from a known-good point.
@@ -203,11 +211,21 @@ class AimdController {
       lossFraction > LOSS_HIGH || (jitterMs != null && jitterMs > JITTER_CONGESTION_MS)
     const calm = lossFraction < LOSS_LOW && (jitterMs == null || jitterMs < JITTER_PROBE_OK_MS)
     if (congested) {
-      // Back off fast on loss OR a jitter spike (queue building = bloat precursor).
+      // Back off fast on loss OR a jitter spike (queue building = bloat precursor),
+      // and reset the calm streak so we HOLD here before probing back up.
       this.target = Math.max(BWE_FLOOR_KBPS, Math.round(this.target * DECREASE_FACTOR))
-    } else if (calm && this.target < this.ceil) {
-      // Probe back up toward the cap only when both signals are clear.
-      this.target = Math.min(this.ceil, this.target + INCREASE_KBPS)
+      this.calmStreak = 0
+    } else if (calm) {
+      // Probe back up toward the cap only after HOLD_WINDOWS_AFTER_BACKOFF calm windows
+      // (so a recurring burst converges to a stable rate instead of sawtoothing back
+      // into the loss zone every second).
+      this.calmStreak += 1
+      if (this.calmStreak >= HOLD_WINDOWS_AFTER_BACKOFF && this.target < this.ceil) {
+        this.target = Math.min(this.ceil, this.target + INCREASE_KBPS)
+      }
+    } else {
+      // Dead-band (mild loss/jitter): neither congested nor calm -> don't probe up.
+      this.calmStreak = 0
     }
     // In the dead-band (mild loss/jitter): hold — don't oscillate. But always emit
     // the very first window so the sender adopts BWE's (codec-aware) target.
