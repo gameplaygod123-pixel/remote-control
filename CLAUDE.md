@@ -1143,6 +1143,12 @@ Lessons:
            (else it says `vbv 250ms`). Owner drives the stress video → Mac re-runs the analyzer.
            Expected LTR-off: every recovery ~50ms → then the vbv burst-shrink read is clean. Full
            recipe + the RUN-1 recovery table in [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
+         - **RUN-1 root cause (WC, 2026-07-09): `VIDEO_LTR=1` was PERSISTED in the registry
+           (`HKCU\Environment`), and the Track-1 self-relaunch scheduled task reads persisted env, so
+           a shell `set VIDEO_LTR=` got clobbered on the task handoff** (same class as the HKCU Run-key
+           race). Fix = delete the persisted value (User + Machine now empty) → `schtasks /run` fresh.
+           [[agent-env-overrides-must-be-persisted]] — applies to EVERY env-toggle (`VIDEO_CAPTURER`,
+           `VIDEO_CODEC`, `VIDEO_CAPTURER_*`). RUN 2 prepped clean (LTR cleared, vbv=33, 6 procs @12:09).
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a
