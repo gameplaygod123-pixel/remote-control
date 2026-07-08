@@ -1148,7 +1148,27 @@ Lessons:
            a shell `set VIDEO_LTR=` got clobbered on the task handoff** (same class as the HKCU Run-key
            race). Fix = delete the persisted value (User + Machine now empty) → `schtasks /run` fresh.
            [[agent-env-overrides-must-be-persisted]] — applies to EVERY env-toggle (`VIDEO_CAPTURER`,
-           `VIDEO_CODEC`, `VIDEO_CAPTURER_*`). RUN 2 prepped clean (LTR cleared, vbv=33, 6 procs @12:09).
+           `VIDEO_CODEC`, `VIDEO_CAPTURER_*`).
+         - ✅ **RUN 2 (LTR OFF) = Layer 1 CONFIRMED (2026-07-09).** vbv is a monotonic lever → loss is
+           SELF-INDUCED (frame overflow), not external blackout: vbv 250→33→16 gave burst 130-163 →
+           ~90 → **3-46**, loss →1.7→**0.6/min**, verdict FREEZING→**MINOR JUDDER**, recovery ~50ms
+           (LTR-off restored fast IDR). At **vbv=16 fps is locked 60 for 97% of seconds**; dips
+           (56-57, ~1s) hit ONLY on a loss then snap back.
+         - ⭐ **CONFIG OPTION 2 (recorded, owner-requested): `vbv=16 + LTR off`** = near-Parsec, no FEC
+           (60@97%, jitter 4ms, loss 0.6/min@~50ms). Ship path = flip `NVENC_VBV_MS` 250→16 +
+           LTR-off default → prerelease. Kept as a strong FALLBACK while chasing true-0-dip. **WC
+           gating before bake: eyeball vbv=16 motion quality (back off to 24 if blocky) + confirm
+           `vbv 16ms` in the sender log.**
+         - 👉 **ENDGAME (revised, planned 2026-07-09 — see [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md)
+           "THE ENDGAME"):** residual after vbv=16 = 2 loss types → (1) scattered small (FEC/retransmit-
+           able now), (2) external blackout bursts (17:47Z 76-80 consec = link dark ~78ms; only fewer-
+           packets-in-flight helps). Sequenced: **STEP 2 (cheap) lower HEVC BWE cap 15→~8 Mbps** (Mac-
+           only; fewer pkt lost per blackout, Parsec's actual trick) → **STEP 3a (recommended over FEC)
+           NACK/RTX retransmit + shallow ~1-frame receive buffer** — RTT is only 11ms so re-send is
+           near-free, and the sender ALREADY has `RtcpNackResponder` (`sender/index.ts:233`); missing =
+           the receiver actually SENDING NACKs (today it PLI→IDRs every loss) + a small buffer so the
+           11ms-late resend lands. First = a SPIKE: does ndc `RtcpReceivingSession` emit NACKs w/ `nack`
+           fb? → **STEP 3b app-FEC only if 3a insufficient** (heavier, ndc has no raw-RTP/FEC API).
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a

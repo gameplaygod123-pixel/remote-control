@@ -81,6 +81,63 @@ RELAUNCHED without it.**
 4. **Expected with LTR off:** every recovery ~50ms (v1.28 fast-IDR). THEN the vbv read is clean —
    compare lostpkts/event vs the v1.28 baseline (130-163) to see if the shrink scattered the bursts.
 
+**RUN 2 (2026-07-09, LTR OFF) = Layer 1 CONFIRMED. vbv is a monotonic lever → loss is self-induced.**
+Same HEVC stress, LTR cleared (persisted `VIDEO_LTR` deleted, [[agent-env-overrides-must-be-persisted]]),
+swept vbv via the tune-file:
+
+| vbv (ms) | burst / loss event | loss freq | recovery (med) | fps @60 | verdict |
+|---|---|---|---|---|---|
+| 250 (baseline) | 130–163 | — | — | — | FREEZING |
+| 33 | 18–152 (avg ~90) | 1.7/min | 51ms | — | FREEZING |
+| **16 (1 frame)** | **3–46 (avg ~21)** | **0.6/min** | **~50ms** | **59-61 = 97%** | **MINOR JUDDER** |
+
+Smaller vbv → smaller AND fewer bursts, monotonically → the loss is **self-induced frame overflow**,
+not a fixed-duration external blackout (a blackout's packet count wouldn't track frame size). LTR-off
+restored fast ~50ms recovery (median). At vbv=16 the fps is locked 60 for 97% of seconds; the only
+dips (56-57 for ~1s) coincide 1:1 with a loss event, then snap back. **This is the cheap fix working.**
+
+### ⭐ CONFIG OPTION 2 (record + keep as a fallback): `vbv=16 + LTR off`
+A near-Parsec, no-FEC config: 60fps locked 97%, jitter ~4ms, loss 0.6/min recovered in ~50ms,
+verdict MINOR JUDDER. Costs: a possible quality softening on high-motion frames (vbv=1-frame caps
+per-frame bits — WC to eyeball; back off to vbv=24 if blocky). **Ship path if chosen:** flip
+`NVENC_VBV_MS` 250→16 in `capturerArgs.ts` + `LTR off` default → prerelease (golden rule #1). Kept as
+"option 2" per owner: a proven strong fallback while we chase the true-0-dip endgame below.
+
+### Residual after vbv=16 = TWO loss types (each needs a different endgame lever)
+1. **Scattered small (3–46 pkt, calm periods)** — vbv=16 shrank these enough that a silent-repair
+   mechanism can now recover them (the precondition we were after).
+2. **External contention BURSTS (e.g. 17:47Z: 76→80→64 consecutive = link dark ~78ms)** — NOT
+   self-induced (same vbv, same session, only the link changed), and NOT repairable by any
+   frame-size or parity trick during the dark window. Lever = **fewer packets in flight when it
+   goes dark → lower bitrate** (Parsec survives blackouts by running ~3 Mbps H.265 → a 78ms dark
+   window costs it ~20 pkt, not our 76 @ 11 Mbps).
+
+## THE ENDGAME (revised 2026-07-09) — "silent scattered-loss repair", nail 60fps
+
+Goal: eliminate the ~1s fps dip per loss so 60fps is nailed like Parsec. Sequenced cheapest→biggest;
+**retransmit is likely the better tool than FEC here** (see why below).
+
+**STEP 2 (cheap, do next) — lower the bitrate toward Parsec's.** Drop the HEVC BWE ceiling (Mac
+`receiver/bwe.ts`, currently 15 Mbps) toward ~8 Mbps → a link blackout loses ~half the packets →
+smaller/faster-recovering dips AND brings the external bursts down into "scattered" (retransmit/FEC-
+repairable) territory. Mac-only + owner reconnect. Measure the blackout-burst pkt count drop.
+
+**STEP 3a (recommended over FEC) — NACK/RTX retransmit + a shallow receive buffer.** The RTT here is
+only **~11ms**, so re-sending a lost packet is nearly free vs FEC's constant overhead + interleaving
+latency. AND the sender **already has `RtcpNackResponder` in its send chain** (`sender/index.ts:233`)
+— it will retransmit on NACK. What's missing: (a) the receiver actually SENDING NACKs (it uses
+`RtcpReceivingSession` + goes straight to PLI→IDR on every loss today — even a 3-pkt loss), and (b) a
+**shallow ~1-frame (~16ms) receive buffer** so an 11ms-late retransmit lands before the frame is
+needed (today we present immediately, `DisplayImmediately=true`, so a late packet misses its frame).
+Trade: +~16ms latency for silent repair of scattered loss — the guide's "shallow adaptive jitter
+buffer" (§3). **First task = a SPIKE:** does ndc 0.32.3 `RtcpReceivingSession` generate NACKs when the
+SDP negotiates `nack` feedback? (ndc exports no separate NACK-requester; libdatachannel's receiving
+session may do it internally.) If yes → tiny win. If no → we'd need to patch ndc (option 3 territory)
+or fall to FEC. Keep PLI→IDR as the fallback for losses too big for the buffer window (blackouts).
+
+**STEP 3b (only if 3a insufficient) — app-level FEC.** The heavier path, kept below for reference.
+Given 11ms RTT + the existing NackResponder, retransmit should be tried first.
+
 **Layer 2 — FEC (recover the scattered remainder silently).** Systematic block FEC:
 - Sender: for every group of **K** media RTP packets, generate **M** parity packets
   (XOR = recover any 1 lost/group; Reed–Solomon RS(K,M) = recover up to M lost/group —
@@ -98,8 +155,10 @@ Verified in `node-datachannel@0.32.3` `dist/types/lib/index.d.ts`: `Track` expos
 `sendMessage` / `sendMessageBinary` (a whole access unit) + `requestKeyframe`. ndc's
 `H264/H265RtpPacketizer` does the packetization + RTP send **internally** — the sender
 never sees individual RTP packets, and there is **no API to send raw RTP or inject FEC
-parity** (only `addRTXCodec` for NACK retransmission, not FEC). So packet-level FEC can't
-be bolted on through the current ndc surface. Options, cheapest→biggest:
+parity**. NOTE: ndc DOES expose NACK **retransmission** (`RtcpNackResponder`, already in our send
+chain) — which is why "THE ENDGAME (revised)" above recommends trying **NACK/RTX retransmit before
+app-level FEC** (11ms RTT makes re-send cheap). App-level packet FEC can't be bolted on through the
+current ndc surface. Options, cheapest→biggest:
 
 1. **VBV-shrink alone may suffice** — if Layer 1 makes losses small AND the residual hitch
    is acceptable, FEC may not be needed. Measure before building anything.
