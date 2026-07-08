@@ -97,9 +97,9 @@ export async function scrollMouse(deltaY: number): Promise<void> {
 // Real key-hold semantics (press/release as separate events) rather than
 // keyboard.type() -- required for modifier combos (Ctrl+C) and any key held
 // across time, neither of which typeText() can express.
-export async function keyToggle(code: string, down: boolean): Promise<void> {
+export async function keyToggle(code: string, down: boolean, scan = false): Promise<void> {
   if (isWin32) {
-    keyToggleWin32(code, down)
+    keyToggleWin32(code, down, scan)
     return
   }
   const key = CODE_TO_KEY[code]

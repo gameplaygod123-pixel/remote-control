@@ -27,8 +27,8 @@ const api = {
     mouseButton: (button: 'left' | 'right' | 'middle', down: boolean): Promise<void> =>
       ipcRenderer.invoke('input:mouse-button', button, down),
     scroll: (deltaY: number): Promise<void> => ipcRenderer.invoke('input:scroll', deltaY),
-    key: (code: string, down: boolean): Promise<void> =>
-      ipcRenderer.invoke('input:key', code, down),
+    key: (code: string, down: boolean, scan = false): Promise<void> =>
+      ipcRenderer.invoke('input:key', code, down, scan),
     getScreenSize: (): Promise<{ width: number; height: number }> =>
       ipcRenderer.invoke('input:get-screen-size')
   },

@@ -157,8 +157,11 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
       // -- remove once the Win32 SendInput keyboard path is confirmed
       // solid across real hardware rounds, not just this sandboxed dev
       // environment's own oracle.
-      log(currentSession?.session ?? sessionCounter, `${message.t} code=${message.code}`)
-      await keyToggle(message.code, message.t === 'keydown')
+      log(
+        currentSession?.session ?? sessionCounter,
+        `${message.t} code=${message.code}${message.scan ? ' scan' : ''}`
+      )
+      await keyToggle(message.code, message.t === 'keydown', message.scan === true)
       break
     case 'text':
       log(

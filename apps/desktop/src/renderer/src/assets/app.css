@@ -771,6 +771,17 @@
   padding: 4px 7px;
 }
 
+/* Game keyboard mode: a live green so it's obvious every key is now a raw
+   game key press (WASD holds) rather than normal text typing. */
+.session-float__kbmode.is-game {
+  background: rgba(64, 220, 120, 0.22);
+  border-color: rgba(64, 220, 120, 0.5);
+  color: #b6f3cd;
+}
+.session-float__kbmode.is-game:hover {
+  background: rgba(64, 220, 120, 0.3);
+}
+
 .session-float__name {
   flex: 0 1 130px;
   width: 130px;

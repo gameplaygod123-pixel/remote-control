@@ -1254,6 +1254,38 @@ Lessons:
    WC tests with a real game (WASD move/hold, shortcuts, Thai still types in Text mode) via
    a prerelease. CAVEAT: kernel-anticheat games block ALL injected input (unfixable via
    SendInput).
+   - **MAC SIDE DONE + shipped as PRERELEASE v1.30.0-beta.1 (2026-07-09, `feat/native-video`)
+     — awaiting WC real-game verify (golden rule #1: this is native key-injection FFI).**
+     Design: a **Text⇄Game toggle** (button in the in-session floating bar, 🎮 green when
+     Game; default Text; persisted per controller in `localStorage['pr-keyboard-mode']`).
+     New protocol field **`scan?: boolean` on keydown/keyup** (`inputProtocol.ts`) — absent =
+     the byte-identical VK path (normal typing/shortcuts UNCHANGED, zero regression); `true` =
+     GAME injection. Implementation:
+     - **Controller (`ControllerSession.tsx`):** `keyboardMode` state + `keyboardModeRef`
+       (synced via effect so the `[]`-deps key handlers read it live). **Game mode** = every
+       key routes through keydown/keyup with `scan:true` and `e.repeat` is SWALLOWED (a hold =
+       one keydown; the game reads held state). **Text mode** = unchanged Unicode path for
+       printables, PLUS the Backspace-hold fix (non-printable keydown now FORWARDS `e.repeat`
+       so hold-to-delete/arrow-repeat works). `held` is now a `Map<code, scanFlag>` so
+       panic-release (blur/hide) releases each key the same way it was pressed (no stuck key
+       across a mid-hold mode switch).
+     - **Injectors — `scan` → `KEYEVENTF_SCANCODE` (wVk=0, real scancode):** `keyToggleWin32`
+       (`injectorWin32.ts`) + `injectKey` (`rawInject.ts`) both branch on `scan`; DirectInput/
+       RawInput games (which ignore VK-flagged SendInput) now see a real holdable press, and
+       Windows still derives the VK from the scancode so GetAsyncKeyState games work too.
+       Threaded through all 3 agent injection paths: input-helper (`keyToggle`→win32),
+       AgentView IPC (`input.key(code,down,scan)` → preload → `input:key` main → `keyToggle`),
+       and the SYSTEM injector (`injectRaw`→`injectKey`).
+     - Mac verified: typecheck (node+web) clean, lint clean on all touched files (the only
+       remaining lint errors are PRE-EXISTING `react-hooks/refs` in AgentView, untouched).
+       Can't unit-test the koffi SendInput path on macOS (that's the golden-rule-#1 handoff).
+     - **NEXT (WC, real hardware — install v1.30.0-beta.1 over v1.29.0/v1.28.0):** flip to
+       🎮 Game (button in the floating panel) → open a real game →
+       (1) WASD MOVE + HOLD works (walk continuously), (2) game shortcuts/space/shift hold,
+       (3) switch to ⌨ Text → Thai/English still types + Backspace-hold repeat-deletes,
+       (4) no stuck key when Alt-Tabbing out mid-hold. If clean → promote. NB the toggle
+       button is in the floating panel (expand the pill to reach it) — a global hotkey to
+       flip mode mid-game is an easy follow-up if the owner wants it.
 1. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
 2. Computers-page search/sort; per-controller device visibility (family use).

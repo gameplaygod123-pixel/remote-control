@@ -699,7 +699,9 @@ app.whenReady().then(async () => {
     (_event, button: 'left' | 'right' | 'middle', down: boolean) => mouseButtonToggle(button, down)
   )
   ipcMain.handle('input:scroll', (_event, deltaY: number) => scrollMouse(deltaY))
-  ipcMain.handle('input:key', (_event, code: string, down: boolean) => keyToggle(code, down))
+  ipcMain.handle('input:key', (_event, code: string, down: boolean, scan?: boolean) =>
+    keyToggle(code, down, scan === true)
+  )
   ipcMain.handle('input:get-screen-size', () => getScreenSize())
 
   // Low-res preview for the controller's device list -- deliberately using

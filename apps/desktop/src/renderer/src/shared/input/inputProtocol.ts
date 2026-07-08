@@ -11,13 +11,21 @@ export type MouseButton = 'left' | 'right' | 'middle'
 // a newer one -- the agent uses the sequence number to drop it instead of
 // jerking the cursor backwards. Optional so an older controller build
 // (no seq) still works against a newer agent.
+// `scan` on keydown/keyup: GAME-MODE key injection. When true the agent
+// injects the key as a raw HARDWARE SCAN CODE (KEYEVENTF_SCANCODE, wVk=0)
+// instead of a virtual-key event, so DirectInput / RawInput / GetAsyncKeyState
+// games all see it as a real keyboard press that can be HELD -- the plain VK
+// path and, worse, the Unicode `text` path (a character, not a key press) are
+// invisible to most games. Absent/false keeps the byte-identical VK path used
+// for normal typing and shortcuts (no regression). Optional so an older agent
+// (no scan handling) still injects the key via the VK path -- graceful.
 export type RemoteInputMessage =
   | { t: 'move'; x: number; y: number; seq?: number }
   | { t: 'down'; button: MouseButton }
   | { t: 'up'; button: MouseButton }
   | { t: 'wheel'; dy: number }
-  | { t: 'keydown'; code: string }
-  | { t: 'keyup'; code: string }
+  | { t: 'keydown'; code: string; scan?: boolean }
+  | { t: 'keyup'; code: string; scan?: boolean }
   | { t: 'text'; text: string }
 
 // The remote machine's CURRENT cursor SHAPE, reported agent -> controller by

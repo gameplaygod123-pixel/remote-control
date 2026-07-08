@@ -25,6 +25,7 @@ const INPUT_KEYBOARD = 1
 const KEYEVENTF_EXTENDEDKEY = 0x0001
 const KEYEVENTF_KEYUP = 0x0002
 const KEYEVENTF_UNICODE = 0x0004
+const KEYEVENTF_SCANCODE = 0x0008
 
 // MOUSEINPUT dwFlags
 const MOUSEEVENTF_MOVE = 0x0001
@@ -102,12 +103,7 @@ function scanCodeFor(vk: number): number {
   return scan
 }
 
-function sendMouse(mi: {
-  dx: number
-  dy: number
-  mouseData: number
-  dwFlags: number
-}): void {
+function sendMouse(mi: { dx: number; dy: number; mouseData: number; dwFlags: number }): void {
   ensureInit()
   const buf = Buffer.alloc(inputSize)
   koffi.encode(buf, 0, 'INPUT_M', {
@@ -170,14 +166,20 @@ export function injectWheel(dy: number): void {
 
 // Held-key semantics via real VK + scan code (needed for Ctrl+C etc. and any
 // held key). Unmapped codes are ignored, matching keyToggleWin32.
-export function injectKey(code: string, down: boolean): void {
+//
+// `scan` (GAME MODE): pure hardware scan code (KEYEVENTF_SCANCODE, wVk=0) so
+// DirectInput/RawInput games see a real, holdable key press -- mirrors
+// keyToggleWin32. Default (VK) path unchanged.
+export function injectKey(code: string, down: boolean, scan = false): void {
   const entry = CODE_TO_VK[code]
   if (entry === undefined) return
-  sendKey({
-    wVk: entry.vk,
-    wScan: scanCodeFor(entry.vk),
-    dwFlags: (down ? 0 : KEYEVENTF_KEYUP) | (entry.extended ? KEYEVENTF_EXTENDEDKEY : 0)
-  })
+  const extended = entry.extended ? KEYEVENTF_EXTENDEDKEY : 0
+  const up = down ? 0 : KEYEVENTF_KEYUP
+  if (scan) {
+    sendKey({ wVk: 0, wScan: scanCodeFor(entry.vk), dwFlags: KEYEVENTF_SCANCODE | up | extended })
+    return
+  }
+  sendKey({ wVk: entry.vk, wScan: scanCodeFor(entry.vk), dwFlags: up | extended })
 }
 
 // One event pair per UTF-16 code unit (surrogate pairs sent as two), layout-
@@ -206,7 +208,7 @@ export function injectRaw(message: RemoteInputMessage): void {
       break
     case 'keydown':
     case 'keyup':
-      injectKey(message.code, message.t === 'keydown')
+      injectKey(message.code, message.t === 'keydown', message.scan === true)
       break
     case 'text':
       injectText(message.text)

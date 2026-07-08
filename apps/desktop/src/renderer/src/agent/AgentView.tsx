@@ -44,7 +44,7 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
       break
     case 'keydown':
     case 'keyup':
-      await window.api.input.key(message.code, message.t === 'keydown')
+      await window.api.input.key(message.code, message.t === 'keydown', message.scan === true)
       break
     case 'text':
       await window.api.input.type(message.text)
@@ -265,10 +265,7 @@ function AgentView(): React.JSX.Element {
       controllerCapsRef.current.includes(NATIVE_VIDEO_CAP) &&
       (await window.api.videoSender.isReady())
     useNativeVideoRef.current = useNativeVideo
-    return [
-      ...(useHelper ? [INPUT_HELPER_CAP] : []),
-      ...(useNativeVideo ? [NATIVE_VIDEO_CAP] : [])
-    ]
+    return [...(useHelper ? [INPUT_HELPER_CAP] : []), ...(useNativeVideo ? [NATIVE_VIDEO_CAP] : [])]
   }
 
   async function handleAccept(): Promise<void> {

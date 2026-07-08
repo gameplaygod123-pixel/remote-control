@@ -19,6 +19,7 @@ const INPUT_KEYBOARD = 1
 const KEYEVENTF_EXTENDEDKEY = 0x0001
 const KEYEVENTF_KEYUP = 0x0002
 const KEYEVENTF_UNICODE = 0x0004
+const KEYEVENTF_SCANCODE = 0x0008
 
 // Lazily initialized on first actual injection call, NOT at module load:
 // this module is imported unconditionally by injector.ts (whose isWin32
@@ -113,13 +114,21 @@ export function typeTextWin32(text: string): void {
 // combos (Ctrl+C) and any key held across time, neither of which
 // typeTextWin32 can express. Unmapped codes are silently ignored, matching
 // keyToggle()'s existing behavior in injector.ts.
-export function keyToggleWin32(code: string, down: boolean): void {
+//
+// `scan` (GAME MODE): inject as a pure hardware scan code (KEYEVENTF_SCANCODE,
+// wVk=0) so DirectInput/RawInput games -- which ignore VK-flagged SendInput --
+// see a real keyboard press. Windows still derives the VK from the scan code
+// for the foreground layout, so GetAsyncKeyState-based games work too. The
+// default (VK) path is unchanged, keeping normal typing/shortcuts identical.
+export function keyToggleWin32(code: string, down: boolean, scan = false): void {
   const entry = CODE_TO_VK[code]
   if (entry === undefined) return
   ensureInit()
-  sendOne({
-    wVk: entry.vk,
-    wScan: scanCodeFor(entry.vk),
-    dwFlags: (down ? 0 : KEYEVENTF_KEYUP) | (entry.extended ? KEYEVENTF_EXTENDEDKEY : 0)
-  })
+  const extended = entry.extended ? KEYEVENTF_EXTENDEDKEY : 0
+  const up = down ? 0 : KEYEVENTF_KEYUP
+  if (scan) {
+    sendOne({ wVk: 0, wScan: scanCodeFor(entry.vk), dwFlags: KEYEVENTF_SCANCODE | up | extended })
+    return
+  }
+  sendOne({ wVk: entry.vk, wScan: scanCodeFor(entry.vk), dwFlags: up | extended })
 }
