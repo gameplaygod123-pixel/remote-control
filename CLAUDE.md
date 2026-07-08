@@ -1036,10 +1036,30 @@ Lessons:
        sender forces a cheap IDR via the capturer 'I' stdin (no respawn) → recovery in ~1 RTT
        vs ~2s. Rate-limited ≤1/s; reorder/dup ignored. Helps H.264 too. Receiver-only — no
        agent rebuild.
-     - **NEXT: owner relaunches `start-controller.command` (agent stays on beta.1) → WC
-       confirms the ~2s freezes are GONE (sender now gets a PLI on each loss → fast IDR, not
-       0), HEVC quality good at 15.** If clean → promote v1.28.0 (A BWE + B H.265). Optional
-       belt-and-braces if any freeze remains: HEVC gop 120→60 (needs an agent rebuild).
+     - **PLI-on-loss VERIFIED (WC): freeze GONE → PROMOTED full v1.28.0.** PLI 0→29 during
+       losses, recovery ~2s→~10ms, owner confirmed no long freeze; only a tiny ~10ms blip per
+       loss (loss still ~1/min, not eliminated, just recovered fast). enc_ms 9.9 / GPU 44% /
+       emit 60.5, errors 0. v1.28.0 = Latest (H.265 opt-in + PLI-on-loss + HEVC BWE cap 15).
+   - **AUTO-TEST tooling (owner asked "หาระบบที่เทสออโต้ได้ ขี้เกียจนั่งดูเอง ไม่เห็นตัวเลขลึกๆ"):**
+     `scripts/analyze-session.mjs` parses `video-receiver.log` (+ optional Windows
+     `video-sender.log`) into ONE report — fps/jitter/bitrate/BWE + loss rate + **per-hitch
+     recovery ms** + a plain **SMOOTH / MINOR JUDDER / FREEZING** verdict with next-step
+     notes. Run `node scripts/analyze-session.mjs` after a session instead of scrolling logs
+     (`--all` for reconnect-split sessions, `--json`). Backed by new receiver instrumentation:
+     a "hitch" line (loss→recovering-keyframe = the real perceived-freeze duration) + per-sec
+     `loss=/lostpkts=/pli=` in the stats line. Verified on the real 858s HEVC log (SMOOTH,
+     14.9 Mbps @ cap 15, jitter 4.4ms).
+   - **RESIDUAL-JUDDER tuning — reorder-tolerant loss detection (`af96f34`, receiver-only, no
+     rebuild):** WC's clue — the ~1/min loss is HEVC-SPECIFIC (H.264 same link = 0 loss), so
+     it's not plain network contention; a chunk is likely REORDER that the naive "any forward
+     seq gap = loss → PLI now" misread → an unnecessary forced IDR = self-inflicted judder.
+     New `LossDetector` holds a gap PENDING and only declares loss if the missing seq hasn't
+     arrived within a small reorder window (8 packets/~few ms), so reorder cancels the gap (no
+     PLI) while real loss still confirms fast. NO added latency (unlike PacingHandler, which
+     would delay big frames — wrong trade for a mouse-glued pipeline). Unit-tested. **NEXT:
+     owner relaunches `start-controller.command` → run `analyze-session.mjs` → see if loss/PLI/
+     hitch counts drop (reorder was the cause) or hold (real network loss → then FEC/accept the
+     ~10ms blip).** The auto-test now decides instead of eyeballing.
 0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
    + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
    code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
