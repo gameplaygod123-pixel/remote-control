@@ -16,6 +16,14 @@ unset ELECTRON_RUN_AS_NODE
 export VITE_SIGNALING_URL="ws://localhost:8080"
 export APP_MODE=controller
 
+# Silent NACK loss repair (docs/step-nack-retransmit.md): the patched darwin ndc
+# (auto-reapplied by the desktop postinstall -> native/ndc-nack/postinstall.mjs) emits
+# NACKs on a lost packet, and this shallow seq-ordered receive buffer holds the gap ~1
+# RTT so the retransmit fills it before the frame is presented -> scattered losses are
+# repaired with no PLI/IDR/fps-dip. Safe to leave on: with the patched ndc present the
+# retransmit arrives; on the rare chance it isn't, a gap just PLIs after the 30ms hold.
+export VIDEO_NACK_BUFFER=1
+
 # Prep the native render surface so the in-app video toggle (PipelineToggle) can
 # engage Native without a second launcher. We deliberately DON'T set
 # VIDEO_PIPELINE here -- the saved per-machine preference (video-pipeline.txt,
