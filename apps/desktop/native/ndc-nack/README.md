@@ -39,12 +39,14 @@ clang++ -std=c++17 -DRTC_ENABLE_MEDIA=1 -DRTC_STATIC nack-test.cpp \
   -framework Security -framework CoreFoundation -o nack-test && ./nack-test
 ```
 
-## Easy install (committed binary)
-The built binary is committed at `bin/node_datachannel.darwin-arm64.node`. To (re)install it
-into `node_modules` -- **re-run after any `pnpm install`**, which restores the stock prebuilt:
-```sh
-apps/desktop/native/ndc-nack/install.sh
-```
+## Install — AUTOMATIC via postinstall
+`pnpm install` restores the stock prebuilt (disabling silent loss repair), so the desktop
+`postinstall` chains `native/ndc-nack/postinstall.mjs`, which re-applies the committed patched
+binary (`bin/node_datachannel.darwin-arm64.node`) + re-codesigns it. **darwin-arm64 only** — it
+no-ops on the Windows agent / anywhere else and never fails the install. So after any
+`pnpm install` the patch comes back on its own.
+
+Manual (if you ever need it, e.g. after hand-editing node_modules): `apps/desktop/native/ndc-nack/install.sh`.
 Then launch the controller with `VIDEO_NACK_BUFFER=1` to enable silent loss repair. Rebuild the
 binary from source (below) only when the patch changes.
 

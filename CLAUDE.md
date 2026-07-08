@@ -1225,9 +1225,11 @@ Lessons:
            bitrate up to ~60, so we don't trade quality to shrink the rare blackouts (the ~50ms blip
            every ~40-50s is accepted).
          - **FINAL SHIP CONFIG:** stock VBV (default 250 — `capturerArgs.ts` `NVENC_VBV_MS` never changed
-           off 250, no code change) + patched darwin ndc ([`native/ndc-nack/install.sh`](apps/desktop/native/ndc-nack/install.sh),
-           committed binary `bin/node_datachannel.darwin-arm64.node`, **re-run after any `pnpm install`**)
-           + `VIDEO_NACK_BUFFER=1` on the controller launch + LTR off. Windows agent = stock ndc
+           off 250, no code change) + patched darwin ndc (committed `native/ndc-nack/bin/node_datachannel
+           .darwin-arm64.node`, **AUTO-reapplied by the desktop `postinstall` → `native/ndc-nack/
+           postinstall.mjs` after every `pnpm install`**; darwin-arm64-only, no-ops on Windows, never
+           fails install; manual fallback `install.sh`) + `VIDEO_NACK_BUFFER=1` on the controller launch
+           + LTR off. Windows agent = stock ndc
            (RtcpNackResponder retransmits, untouched). Signed-.dmg packaging of the patched ndc deferred
            (owner runs the controller from dev). Whole Parsec-parity streaming arc is now COMPLETE.
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
