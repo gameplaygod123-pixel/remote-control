@@ -24,6 +24,9 @@ struct NvEncConfig {
     bool hevc = false;        // false = H.264, true = H.265/HEVC (Parsec-parity GPU experiment)
     int preset = 1;           // NVENC preset 1..7: P1=fastest/lowest encode-ms .. P7=slow/quality.
                               // Raising it lifts per-frame encode time (quality/latency tradeoff).
+    bool ltr = false;         // Long-Term Reference recovery (Parsec-grade): mark an LTR every ~30
+                              // frames, and on 'L' (PLI) encode a small P referencing an older LTR
+                              // instead of a full IDR. NVENC LTR API (H.264 + HEVC). Off = plain IDR.
 };
 
 // Opaque to callers; the impl holds all NVENC handles.
@@ -62,6 +65,13 @@ public:
     // LOCKED-cadence path use EncodeSkipped() instead, which is near-free.
     bool EncodeRepeatFrame();
 
+    // LTR recovery ('L' from stdin): encode the next frame as a P-frame that references the
+    // OLDER of the kept long-term references — a cheap resync (a fraction of an IDR) that avoids
+    // the IDR-burst loss cascade. Falls back to a forced IDR when no LTR has been marked yet
+    // (stream just started / just after a periodic IDR flushed the DPB). Encode thread only.
+    enum class LtrResult { Ltr, IdrFallback, Fail };
+    LtrResult EncodeLtrRecover();
+
     // Emit a CODED-SKIP frame (NV_ENC_PIC_TYPE_SKIPPED) — the Parsec-parity idle path.
     // NVENC codes a P-frame whose every MB is a "skip" (copy-from-reference) WITHOUT running
     // motion estimation, so on a static screen it costs almost no GPU (~1-2% vs 22% for a
@@ -85,7 +95,10 @@ public:
     double takeAvgEncodeMs();
 
 private:
-    bool encodeMapped(int nvPicType);  // map registered tex -> encode as pictureType -> emit (shared)
+    // map registered tex -> encode as pictureType -> emit (shared). ltrUseBitmap != 0 makes this an
+    // LTR-recovery P (references the given LTR indices); LTR MARKING is decided internally (every
+    // ~kLtrMarkInterval non-IDR frames when cfg_.ltr). IDR resets the LTR bookkeeping (DPB flush).
+    bool encodeMapped(int nvPicType, uint32_t ltrUseBitmap = 0);
     bool writeBitstream();             // lock/emit/unlock the encoded output
 
     void* enc_ = nullptr;              // NVENC session handle
@@ -107,6 +120,16 @@ private:
     uint64_t ptsCounter_ = 0;
     double   encMsSum_ = 0.0;   // accumulated per-frame encode time (ms) for the current log window
     uint64_t encMsCount_ = 0;
+
+    // LTR (long-term reference) per-picture state. We keep a tiny DPB of up to 2 LTRs, marking one
+    // every kLtrMarkInterval non-IDR frames, cycling the mark index 0/1. On recovery we reference
+    // the OLDER kept LTR. A periodic IDR flushes the DPB, so we reset this when we emit an IDR.
+    bool ltrEnabled_ = false;        // set in Init from cfg_.ltr AND the NVENC LTR capability
+    int  framesSinceLtrMark_ = 0;    // non-IDR frames since the last LTR mark
+    int  ltrNextMarkIdx_ = 0;        // next LTR slot to mark (cycles 0,1)
+    int  lastMarkedLtrIdx_ = 0;      // the slot marked most recently (the NEWER of the kept 2)
+    int  ltrMarkCount_ = 0;          // LTRs marked since the last IDR (0=none yet, clamps at 2)
+    uint32_t lastLtrUsedBitmap_ = 0; // [out] which LTR indices NVENC actually referenced (LockBitstream)
     std::chrono::steady_clock::time_point encStart_{};  // set before EncodePicture; measured to
                                                         // just after LockBitstream (excludes fwrite)
 };

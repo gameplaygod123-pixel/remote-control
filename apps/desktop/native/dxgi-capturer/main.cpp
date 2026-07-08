@@ -17,6 +17,8 @@
 //   stdout = Annex-B (4-byte start codes, in-band SPS/PPS before every IDR, flushed
 //            per frame). First frame = IDR. Periodic IDR every --gop frames. I/P only.
 //   stdin  = 'I' (0x49) => force an IDR next frame (cheap PLI recovery, no respawn);
+//            'L' (0x4C) => LTR-P recovery: a small P referencing an older long-term
+//            reference (needs --ltr; falls back to IDR if no LTR marked yet);
 //            'B'<ascii-kbps>'\n' (e.g. "B25000\n") => set the live VBR bitrate (BWE
 //            feedback, no respawn/IDR). Closed stdin / EOF => clean shutdown (exit 0).
 //   stderr = "[capturer] ..." log lines incl. the per-second emitted/skipped counters.
@@ -89,6 +91,9 @@ struct CapturerOptions {
                                     // (Parsec uses HEVC — ~2x cheaper NVENC at 1440p; A/B experiment)
     int preset = 1;                 // NVENC preset 1..7 (P1=fastest/lowest encode-ms, default;
                                     // higher = more per-frame encode time + quality). --preset / tune.
+    bool ltr = false;               // LTR recovery: on 'L' (PLI) send a small P from an older
+                                    // long-term reference instead of a full IDR (Parsec-grade — no
+                                    // IDR-burst loss cascade). --ltr / tune ltr=1 / env VIDEO_CAPTURER_LTR.
     int floorFps = 0;               // min-fps FLOOR during activity (0 = off, DEFAULT); duplicates
                                     // the last frame as a cheap P-frame so low-motion (typing)
                                     // has steady cadence, decaying to idle when truly static.
@@ -196,6 +201,12 @@ public:
                     // receiver needs a fresh keyframe -> re-encode the last frame as IDR.
                     if (idrRequested_.exchange(false)) {
                         if (encoder_.EncodeRepeatIdr()) { lastIdr_ = now; lastEncode_ = now; Log("forced IDR (PLI, static screen)"); }
+                    // LTR-P recovery on a static screen: cheap resync from an older long-term ref
+                    // (IDR fallback inside if none marked yet). Mirrors the PLI-IDR path above.
+                    } else if (ltrRequested_.exchange(false)) {
+                        auto r = encoder_.EncodeLtrRecover();
+                        if (r == NvEncoder::LtrResult::IdrFallback) lastIdr_ = now;
+                        if (r != NvEncoder::LtrResult::Fail) lastEncode_ = now;
                     // min-fps FLOOR: within the activity window, keep a steady cadence by
                     // duplicating the last frame (cheap skip-MB P-frame). Decays to idle
                     // once the screen is truly static (past floorDecayMs) -> GPU back to ~0.
@@ -221,19 +232,31 @@ public:
                         std::chrono::duration_cast<std::chrono::milliseconds>(now - lastIdr_).count()
                             >= (long long)(gopIntervalSec_ * 1000);
                     const bool pli = idrRequested_.exchange(false);
+                    const bool ltr = ltrRequested_.exchange(false);  // 'L' -> LTR-P (not IDR)
                     const bool forceIdr = wallIdr || pli;
                     const bool underCap = haveEncodedFrame_ &&
                         std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEncode_).count()
                             < (long long)(minEncodeIntervalSec_ * 1000);
-                    if (forceIdr || !underCap) {  // else: over the fps cap -> coalesce (skip)
+                    if (forceIdr || ltr || !underCap) {  // else: over the fps cap -> coalesce (skip)
                         ComPtr<ID3D11Texture2D> frameTex;
                         if (SUCCEEDED(desktopResource.As(&frameTex))) {
-                            if (!encoder_.EncodeFrame(frameTex.Get(), forceIdr)) {
+                            bool encOk;
+                            if (ltr && !forceIdr) {
+                                // stage the fresh content, then encode it as a P referencing an older
+                                // LTR (cheap resync). IDR fallback inside if no LTR marked yet.
+                                encoder_.StageFrame(frameTex.Get());
+                                auto r = encoder_.EncodeLtrRecover();
+                                encOk = (r != NvEncoder::LtrResult::Fail);
+                                if (r == NvEncoder::LtrResult::IdrFallback) lastIdr_ = now;
+                            } else {
+                                encOk = encoder_.EncodeFrame(frameTex.Get(), forceIdr);
+                                if (encOk && forceIdr) lastIdr_ = now;
+                            }
+                            if (!encOk) {
                                 Log("encode failed -> recover"); dupl_->ReleaseFrame(); recover(); continue;
                             }
                             lastEncode_ = now;
                             haveEncodedFrame_ = true;
-                            if (forceIdr) lastIdr_ = now;
                         }
                     }
                 }
@@ -287,9 +310,10 @@ private:
     static constexpr UINT kAcquireTimeoutMs = 250;  // idle wakes ~4x/s to still log
 
     // stdin control bytes (from the sender): 'I'/'i' = force IDR next frame (PLI, bare byte);
+    // 'L'/'l' = LTR-P recovery (cheap resync from an older long-term ref, no IDR burst);
     // 'B'<ascii-kbps>'\n' = set the live VBR bitrate (BWE feedback). A tiny state machine
     // handles ReadFile chunking: 'B' opens a digit-accumulate mode ended by any non-digit
-    // (the '\n'); the terminator is re-scanned so a following 'I'/'B' still registers.
+    // (the '\n'); the terminator is re-scanned so a following 'I'/'L'/'B' still registers.
     void stdinLoop() {
         HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
         char buf[64]; DWORD n = 0;
@@ -305,6 +329,7 @@ private:
                     num.clear(); inBitrate = false;  // fall through to re-scan c as a command
                 }
                 if (c == 'I' || c == 'i') idrRequested_.store(true);
+                else if (c == 'L' || c == 'l') ltrRequested_.store(true);
                 else if (c == 'B') { inBitrate = true; num.clear(); }
             }
         }
@@ -324,17 +349,19 @@ private:
     }
 
     void maybeLogLocked(Clock::time_point& intervalStart, uint64_t& sent, uint64_t& real,
-                        uint64_t& skip, uint64_t& idr, uint64_t& coalesced, long cursorX,
-                        long cursorY, bool cursorVisible, UINT shapeType) {
+                        uint64_t& skip, uint64_t& idr, uint64_t& coalesced, uint64_t& ltr,
+                        long cursorX, long cursorY, bool cursorVisible, UINT shapeType) {
         auto now = Clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - intervalStart).count() < 1000) return;
         // emitted = the LOCKED cadence (should read ~fps steady); real/skip = the content split.
-        // enc_ms = avg per-frame HW encode latency this window (the "Encode" time metric).
-        Log("emitted=%llu real=%llu skip=%llu idr=%llu coalesced=%llu enc_ms=%.1f cursor=(%ld,%ld,%s,%s)",
+        // ltr = LTR-P recovery frames this window (cheap resync); enc_ms = avg per-frame HW encode
+        // latency this window (the "Encode" time metric).
+        Log("emitted=%llu real=%llu skip=%llu idr=%llu ltr=%llu coalesced=%llu enc_ms=%.1f cursor=(%ld,%ld,%s,%s)",
             (unsigned long long)sent, (unsigned long long)real, (unsigned long long)skip,
-            (unsigned long long)idr, (unsigned long long)coalesced, encoder_.takeAvgEncodeMs(),
+            (unsigned long long)idr, (unsigned long long)ltr, (unsigned long long)coalesced,
+            encoder_.takeAvgEncodeMs(),
             cursorX, cursorY, cursorVisible ? "visible" : "hidden", PtrTypeName(shapeType));
-        sent = real = skip = idr = coalesced = 0;
+        sent = real = skip = idr = coalesced = ltr = 0;
         intervalStart = now;
     }
 
@@ -352,7 +379,7 @@ private:
         auto nextTick = startT + tickDur;
         auto intervalStart = startT;
 
-        uint64_t sent = 0, realFrames = 0, skipFrames = 0, idrFrames = 0, coalesced = 0;
+        uint64_t sent = 0, realFrames = 0, skipFrames = 0, idrFrames = 0, coalesced = 0, ltrFrames = 0;
         long cursorX = 0, cursorY = 0; bool cursorVisible = false; UINT shapeType = 0;
         uint64_t lastShapeHash = 0; std::vector<uint8_t> shapeBuf;
         bool haveStaged = false;  // a real desktop change is staged in encodeTex_ for this tick
@@ -420,7 +447,7 @@ private:
             if (firstFrame && !haveStaged) {  // no reference yet — don't emit P/SKIP; hold cadence
                 nextTick += tickDur;
                 if (tnow - nextTick > seconds(1)) nextTick = tnow + tickDur;
-                maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, cursorX, cursorY, cursorVisible, shapeType);
+                maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, ltrFrames, cursorX, cursorY, cursorVisible, shapeType);
                 continue;
             }
             // Idle decay: a coded skip still runs motion estimation (~17-20% enc @1440p60), so
@@ -429,12 +456,13 @@ private:
             // has been static past lockedIdleMs, stop emitting (idle GPU -> ~0, like legacy) and
             // just hold the tick clock; the next real change resumes locked 60 within one tick.
             const bool pli = idrRequested_.exchange(false);
+            const bool ltr = ltrRequested_.exchange(false);  // 'L' -> LTR-P recovery (not IDR)
             const bool recentlyActive =
                 duration_cast<milliseconds>(tnow - lastRealChange_).count() < lockedIdleMs_;
-            if (!haveStaged && !recentlyActive && !pli) {
+            if (!haveStaged && !recentlyActive && !pli && !ltr) {
                 nextTick += tickDur;
                 if (tnow - nextTick > seconds(1)) nextTick = tnow + tickDur;
-                maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, cursorX, cursorY, cursorVisible, shapeType);
+                maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, ltrFrames, cursorX, cursorY, cursorVisible, shapeType);
                 continue;
             }
             const bool wallIdr = firstFrame ||
@@ -443,6 +471,13 @@ private:
             if (wallIdr || pli) {
                 ok = encoder_.EncodeRepeatIdr();  // encode whatever is staged in encodeTex_ as IDR
                 if (ok) { lastIdr_ = tnow; ++idrFrames; }
+            } else if (ltr) {
+                // LTR-P recovery: a small P from an older long-term ref (falls back to IDR if no LTR
+                // has been marked yet). Cheap resync — avoids the IDR-burst loss cascade.
+                auto r = encoder_.EncodeLtrRecover();
+                if (r == NvEncoder::LtrResult::Fail) ok = false;
+                else if (r == NvEncoder::LtrResult::IdrFallback) { lastIdr_ = tnow; ++idrFrames; }
+                else ++ltrFrames;
             } else if (haveStaged) {
                 ok = encoder_.EncodeRepeatFrame();  // staged new content -> real P-frame
                 if (ok) ++realFrames;
@@ -455,7 +490,7 @@ private:
 
             nextTick += tickDur;
             if (Clock::now() - nextTick > seconds(1)) nextTick = Clock::now() + tickDur;  // resync if far behind
-            maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, cursorX, cursorY, cursorVisible, shapeType);
+            maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, ltrFrames, cursorX, cursorY, cursorVisible, shapeType);
         }
 
         encoder_.Shutdown();
@@ -473,6 +508,7 @@ private:
         cfg.fps = opt_.fps; cfg.targetKbps = opt_.bitrateKbps; cfg.maxKbps = opt_.maxrateKbps;
         cfg.vbvMs = 250; cfg.idrIntervalSec = gopIntervalSec_; cfg.hevc = opt_.hevc;
         cfg.preset = (opt_.preset < 1) ? 1 : (opt_.preset > 7 ? 7 : opt_.preset);  // clamp P1..P7
+        cfg.ltr = opt_.ltr;
         haveEncodedFrame_ = false;  // first frame after (re)init = IDR
         if (!encoder_.Init(device_.Get(), context_.Get(), cfg, encFile_)) { Log("fatal: NVENC init failed"); return false; }
         return true;
@@ -566,6 +602,7 @@ private:
 
     // control channel (set from the stdin thread)
     std::atomic<bool> idrRequested_{false};
+    std::atomic<bool> ltrRequested_{false};  // 'L' from stdin -> LTR-P recovery (cheap resync)
     std::atomic<bool> shutdownRequested_{false};
     std::atomic<int>  pendingBitrateKbps_{-1};  // 'B<kbps>' from stdin -> apply on encode thread
     double bitrateMaxRatio_ = 1.6;              // maxrate/target, preserved across BWE retunes
@@ -595,6 +632,7 @@ static void applyTuneFile(CapturerOptions& o) {
         else if (k == "floor-decay") o.floorDecayMs = std::atoi(v.c_str());
         else if (k == "codec") o.hevc = (v == "h265" || v == "hevc" || v == "HEVC");
         else if (k == "preset") o.preset = std::atoi(v.c_str());
+        else if (k == "ltr") o.ltr = (v == "1" || v == "true" || v == "on");
         else if (k == "legacy") o.lockedCadence = !(v == "1" || v == "true" || v == "on");
         else if (k == "locked-cadence") o.lockedCadence = (v == "1" || v == "true" || v == "on");
         else if (k == "locked-idle-ms") o.lockedIdleMs = std::atoi(v.c_str());
@@ -618,6 +656,7 @@ int main(int argc, char** argv) {
         else if (a == "--gop") next(o.gopFrames);
         else if (a == "--codec" && i + 1 < argc) { std::string c = argv[++i]; o.hevc = (c == "h265" || c == "hevc" || c == "HEVC"); }
         else if (a == "--preset") next(o.preset);
+        else if (a == "--ltr") o.ltr = true;  // LTR-P recovery on 'L' (else plain IDR)
         else if (a == "--floor-fps") next(o.floorFps);
         else if (a == "--floor-decay") next(o.floorDecayMs);
         else if (a == "--legacy-emit") o.lockedCadence = false;  // revert to emit-on-change
@@ -635,6 +674,8 @@ int main(int argc, char** argv) {
                    "  --codec h264|h265        H.264 (default) or H.265/HEVC (Parsec-parity GPU test)\n"
                    "  --preset <1..7>          NVENC preset P1..P7 (default 1=fastest/lowest encode-ms;\n"
                    "                           higher = more per-frame encode time + quality). tune: preset=N\n"
+                   "  --ltr                    LTR recovery: on 'L' send a small P from an older long-term\n"
+                   "                           reference instead of a full IDR (tune ltr=1 / env VIDEO_CAPTURER_LTR)\n"
                    "  --floor-fps <n>          min-fps floor during activity (default 0=off;\n"
                    "                           env VIDEO_CAPTURER_FLOOR_FPS overrides for live tuning)\n"
                    "  --floor-decay <ms>       floor stays alive this long after a change (default 350)\n"
@@ -644,7 +685,7 @@ int main(int argc, char** argv) {
                    "                           always-locked but ~17-20%% enc on a static 1440p screen)\n"
                    "  --selftest               3a change-detection log loop only (no encode)\n"
                    "  --duration <sec>         stop after N seconds (offline testing)\n"
-                   "  stdin: 'I' -> force IDR;  'B'<kbps>'\\n' -> live VBR bitrate;  EOF -> shutdown\n");
+                   "  stdin: 'I' -> force IDR;  'L' -> LTR-P recovery;  'B'<kbps>'\\n' -> live VBR bitrate;  EOF -> shutdown\n");
             return 0;
         } else Log("ignoring unknown arg: %s", a.c_str());
     }
@@ -657,6 +698,13 @@ int main(int argc, char** argv) {
     if (const char* benv = std::getenv("VIDEO_CAPTURER_BITRATE_KBPS")) o.bitrateKbps = std::atoi(benv);
     if (const char* menv = std::getenv("VIDEO_CAPTURER_MAXRATE_KBPS")) o.maxrateKbps = std::atoi(menv);
     if (const char* cenv = std::getenv("VIDEO_CAPTURER_CODEC")) { std::string c = cenv; o.hevc = (c == "h265" || c == "hevc" || c == "HEVC"); }
+    // LTR enable is OR across --ltr / VIDEO_CAPTURER_LTR / VIDEO_LTR (never cleared by a falsy env
+    // so an explicit --ltr wins). VIDEO_LTR is the SENDER's own gate (index.ts): the agent sets it
+    // to make the sender answer PLIs with 'L', and we (forked with its env) auto-arm LTR marking to
+    // match — so the joint prerelease needs no extra capturer arg. Mac's buildCapturerArgs is unchanged.
+    auto truthy = [](const char* s) { std::string v = s ? s : ""; return v == "1" || v == "true" || v == "on"; };
+    if (const char* e = std::getenv("VIDEO_CAPTURER_LTR")) o.ltr = o.ltr || truthy(e);
+    if (const char* e = std::getenv("VIDEO_LTR"))          o.ltr = o.ltr || truthy(e);
     if (const char* lenv = std::getenv("VIDEO_CAPTURER_LEGACY_EMIT")) { std::string l = lenv; o.lockedCadence = !(l == "1" || l == "true" || l == "on"); }
     applyTuneFile(o);  // highest priority: a live tune file overrides CLI + env (no relaunch)
 

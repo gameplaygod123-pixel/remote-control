@@ -15,6 +15,11 @@
 
 using CreateInstanceFn = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
 
+// Mark a long-term reference roughly every this many non-IDR frames (~0.5s @60). With a 2-slot
+// LTR DPB, the two kept LTRs are ~1 interval apart, so recovery references a frame ~0.5s old —
+// older than any plausible transient loss, so the receiver is sure to still hold it.
+static constexpr int kLtrMarkInterval = 30;
+
 // Map an int preset (1..7, clamped) to the NVENC P1..P7 preset GUID. P1 = fastest /
 // lowest per-frame encode time (our default); higher = more encode time + quality.
 static GUID presetGuidFor(int p) {
@@ -75,6 +80,22 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     const GUID codecGuid = cfg_.hevc ? NV_ENC_CODEC_HEVC_GUID : NV_ENC_CODEC_H264_GUID;
     const GUID presetGuid = presetGuidFor(cfg_.preset);
 
+    // LTR capability gate: only enable long-term-reference recovery if this GPU/codec advertises
+    // >=2 long-term reference frames (per-picture mode). If not, we silently keep plain IDR
+    // recovery so init never fails on an LTR-less encoder. Reset the per-session LTR bookkeeping.
+    ltrEnabled_ = false;
+    framesSinceLtrMark_ = 0; ltrNextMarkIdx_ = 0; lastMarkedLtrIdx_ = 0; ltrMarkCount_ = 0;
+    if (cfg_.ltr) {
+        NV_ENC_CAPS_PARAM cp = {}; cp.version = NV_ENC_CAPS_PARAM_VER;
+        cp.capsToQuery = NV_ENC_CAPS_NUM_MAX_LTR_FRAMES;
+        int maxLtr = 0;
+        if (FL->nvEncGetEncodeCaps(enc_, codecGuid, &cp, &maxLtr) == NV_ENC_SUCCESS && maxLtr >= 2) {
+            ltrEnabled_ = true;
+        } else {
+            NvLog("LTR requested but caps NUM_MAX_LTR_FRAMES=%d (<2) -> LTR off, plain IDR recovery", maxLtr);
+        }
+    }
+
     // --- start from the chosen preset (default P1) + ultra-low-latency, then pin our config ---
     NV_ENC_PRESET_CONFIG pc = {};
     pc.version = NV_ENC_PRESET_CONFIG_VER;
@@ -108,6 +129,12 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
         hevc.sliceMode = 0;                          // single slice
         hevc.sliceModeData = 0;
         hevc.outputAUD = 0;
+        if (ltrEnabled_) {
+            hevc.enableLTR = 1;
+            hevc.ltrNumFrames = 2;                   // keep the last 2 LTRs (tiny DPB)
+            hevc.ltrTrustMode = 0;                   // per-picture mode: we mark explicitly
+            hevc.maxNumRefFramesInDPB = 3;           // 1 short-term + 2 LTR must fit
+        }
     } else {
         NV_ENC_CONFIG_H264& h264 = encCfg.encodeCodecConfig.h264Config;
         h264.idrPeriod = NVENC_INFINITE_GOPLENGTH;  // no auto-IDR; we force by wall clock
@@ -116,6 +143,12 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
         h264.sliceMode = 0;                           // single slice (Step 2 multi-slice skipped)
         h264.sliceModeData = 0;
         h264.outputAUD = 0;
+        if (ltrEnabled_) {
+            h264.enableLTR = 1;
+            h264.ltrNumFrames = 2;                    // keep the last 2 LTRs (tiny DPB)
+            h264.ltrTrustMode = 0;                    // per-picture mode: we mark explicitly
+            h264.maxNumRefFrames = 3;                 // 1 short-term + 2 LTR must fit in the DPB
+        }
     }
 
     auto* ipPtr = new NV_ENC_INITIALIZE_PARAMS{};
@@ -163,9 +196,9 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     NVCK(FL->nvEncCreateBitstreamBuffer(enc_, &bb), "nvEncCreateBitstreamBuffer");
     bitstream_ = bb.bitstreamBuffer;
 
-    NvLog("nvenc %s P%d/ULL VBR %d/%d kbps, VBV %dms, IDR ~%.1fs, %dx%d@%d, no-B no-intra-refresh",
+    NvLog("nvenc %s P%d/ULL VBR %d/%d kbps, VBV %dms, IDR ~%.1fs, %dx%d@%d, no-B no-intra-refresh, LTR %s",
           cfg_.hevc ? "HEVC" : "H264", cfg_.preset, cfg_.targetKbps, cfg_.maxKbps, cfg_.vbvMs,
-          cfg_.idrIntervalSec, cfg_.width, cfg_.height, cfg_.fps);
+          cfg_.idrIntervalSec, cfg_.width, cfg_.height, cfg_.fps, ltrEnabled_ ? "on(2)" : "off");
     return true;
 }
 
@@ -203,6 +236,25 @@ bool NvEncoder::EncodeSkipped() {
     return encodeMapped(NV_ENC_PIC_TYPE_P);
 }
 
+NvEncoder::LtrResult NvEncoder::EncodeLtrRecover() {
+    if (!enc_) return LtrResult::Fail;
+    // No usable LTR yet (LTR off, or the DPB was just flushed by a periodic IDR and no LTR has been
+    // re-marked in this GOP) -> guarantee recovery with a real IDR. EncodeRepeatIdr resets LTR state.
+    if (!ltrEnabled_ || ltrMarkCount_ == 0)
+        return EncodeRepeatIdr() ? LtrResult::IdrFallback : LtrResult::Fail;
+
+    // Reference the OLDER kept LTR when we have 2 (safer — surely already at the receiver); with
+    // only one marked so far, reference that. Bitmap is 1<<slot.
+    const int olderIdx = (ltrMarkCount_ >= 2) ? (1 - lastMarkedLtrIdx_) : lastMarkedLtrIdx_;
+    const uint32_t reqBitmap = 1u << olderIdx;
+    if (!encodeMapped(NV_ENC_PIC_TYPE_P, reqBitmap)) return LtrResult::Fail;
+    // Proof/telemetry: what NVENC ACTUALLY referenced. lastLtrUsedBitmap_==reqBitmap confirms the
+    // recovery P is anchored to the older LTR (not a short-term ref) — the whole point of LTR.
+    NvLog("LTR-P recovery: requested LTR bitmap=0x%X, used=0x%X%s", reqBitmap, lastLtrUsedBitmap_,
+          lastLtrUsedBitmap_ == 0 ? " (WARNING: encoder used no LTR!)" : "");
+    return LtrResult::Ltr;
+}
+
 bool NvEncoder::SetBitrate(int targetKbps, int maxKbps) {
     if (!enc_ || !initParamsMem_ || !encCfgMem_) return false;
     if (targetKbps <= 0) return false;
@@ -233,7 +285,7 @@ bool NvEncoder::SetBitrate(int targetKbps, int maxKbps) {
     return true;
 }
 
-bool NvEncoder::encodeMapped(int nvPicType) {
+bool NvEncoder::encodeMapped(int nvPicType, uint32_t ltrUseBitmap) {
     NV_ENC_MAP_INPUT_RESOURCE map = {};
     map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
     map.registeredResource = registered_;
@@ -254,6 +306,29 @@ bool NvEncoder::encodeMapped(int nvPicType) {
     if (nvPicType == NV_ENC_PIC_TYPE_IDR)
         pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
 
+    // --- LTR (long-term reference) per-picture: mark every ~kLtrMarkInterval non-IDR frames, and
+    // when asked (ltrUseBitmap != 0, the 'L' recovery path) reference an older kept LTR. An IDR
+    // flushes the DPB, so it also resets the mark bookkeeping. Marking is skipped on the recovery
+    // frame itself (ltrUseBitmap != 0) — one job per frame. Fields live in the codec pic-params.
+    int markIdx = -1;
+    if (ltrEnabled_ && nvPicType == NV_ENC_PIC_TYPE_IDR) {
+        ltrMarkCount_ = 0; framesSinceLtrMark_ = 0; ltrNextMarkIdx_ = 0;
+    } else if (ltrEnabled_ && ltrUseBitmap == 0 && ++framesSinceLtrMark_ >= kLtrMarkInterval) {
+        markIdx = ltrNextMarkIdx_;
+        framesSinceLtrMark_ = 0;
+    }
+    if (ltrEnabled_ && (markIdx >= 0 || ltrUseBitmap != 0)) {
+        if (cfg_.hevc) {
+            NV_ENC_PIC_PARAMS_HEVC& cp = pic.codecPicParams.hevcPicParams;
+            if (markIdx >= 0)     { cp.ltrMarkFrame = 1; cp.ltrMarkFrameIdx = (uint32_t)markIdx; }
+            if (ltrUseBitmap != 0) { cp.ltrUseFrames = 1; cp.ltrUseFrameBitmap = ltrUseBitmap; }
+        } else {
+            NV_ENC_PIC_PARAMS_H264& cp = pic.codecPicParams.h264PicParams;
+            if (markIdx >= 0)     { cp.ltrMarkFrame = 1; cp.ltrMarkFrameIdx = (uint32_t)markIdx; }
+            if (ltrUseBitmap != 0) { cp.ltrUseFrames = 1; cp.ltrUseFrameBitmap = ltrUseBitmap; }
+        }
+    }
+
     // Time the HW encode ONLY: submit -> the synchronous LockBitstream that blocks until the
     // frame is encoded. writeBitstream() stops the clock right after LockBitstream, BEFORE the
     // fwrite/fflush to stdout (which can block on pipe/network backpressure and would otherwise
@@ -264,6 +339,11 @@ bool NvEncoder::encodeMapped(int nvPicType) {
     if (st == NV_ENC_SUCCESS) {
         ok = writeBitstream();
         ++framesEncoded_;
+        if (markIdx >= 0) {  // this frame is now a kept LTR: advance the 2-slot cycle
+            lastMarkedLtrIdx_ = markIdx;
+            ltrNextMarkIdx_ ^= 1;
+            if (ltrMarkCount_ < 2) ++ltrMarkCount_;
+        }
     } else if (st == NV_ENC_ERR_NEED_MORE_INPUT) {
         // shouldn't happen with no B-frames / no lookahead, but tolerate it
     } else {
@@ -288,6 +368,7 @@ bool NvEncoder::writeBitstream() {
     lb.version = NV_ENC_LOCK_BITSTREAM_VER;
     lb.outputBitstream = bitstream_;
     NVCK(FL->nvEncLockBitstream(enc_, &lb), "nvEncLockBitstream");
+    lastLtrUsedBitmap_ = lb.ltrFrameBitmap;  // [out] which LTRs this frame referenced (0 = none)
 
     // Encode is done here (LockBitstream returned). Record PURE encode latency now, BEFORE the
     // fwrite/fflush below — that write goes to a pipe in the sender path and blocks under
