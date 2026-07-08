@@ -388,6 +388,28 @@ to push FPS.
     not the drop-judder); revisit after BWE. WC's experiment infra (env override +
     `%LOCALAPPDATA%\pr-capturer-tune.txt` live tune-file + `--codec h264|h265`) is worth
     committing (gated, no default change).
+  - **3c e2e ROUND 2 (WC) — the fps-swing reframe + BWE stdin ready + goal correction:**
+    band-aid alone (25/35 Mbps) did NOT stop the swing → the earlier "no BWE" story was
+    INCOMPLETE. WC found **3 separate causes** of the fps swing (from `video-sender.log`
+    the capturer's own `emitted/s` already swings 41-60 on a video with the cursor still):
+    (1) **Capture-side variable rate** — inherent to change-detection: DXGI/DWM delivers
+    frames at the CONTENT's real cadence, not a locked 60 (a 30fps video → ~30 emit =
+    CORRECT, not a drop). Un-fixable by bitrate. (2) **No receiver pacing** — the Mac
+    shows every AU immediately (`DisplayImmediately=true`) so uneven arrival = uneven
+    display = judder; a small present/jitter buffer (~1 frame latency) smooths it. (3)
+    **Bitrate overflow** — only at high bitrate (the old 50/60); at 25/35 it's no longer
+    the bottleneck (hence "same as before"). **GOAL CORRECTION:** "lock a steady 60" is
+    NOT achievable/correct with change-detection when the source is <60fps — the right
+    pass criterion is **"received fps ≈ sender emitted (no NET loss)" + smooth perceived
+    motion**, not "steady 60". **BWE live-bitrate is DONE on the capturer** (WC, verified
+    RTX): stdin **`'B'<ascii-kbps>'\n'`** (e.g. `B25000\n`) → `nvEncReconfigureEncoder`
+    live (no respawn, no forced IDR, maxrate keeps target:max ratio); tested 25→12→45
+    Mbps mid-stream, decode clean. Committed w/ the tooling as `d73834c` (new
+    `bin/capturer.exe` — next prerelease packs it). **DIRECTION (Mac):** the real judder
+    fix = **receiver-side pacing on the Mac** (WC + earlier Mac analysis agree; NB Parsec's
+    own metric showed `queued_frames=0` so verify empirically, toggleable, ~1 frame
+    latency) — BWE fixes overflow/robustness but does NOT make motion smooth. PENDING:
+    WC compares HUD received-fps vs emitted (41-60) at 25/35 to confirm net-drop=0.
   - 3d cursor from DXGI over the dormant `'cursor'` channel (un-gate
     `PR_CURSOR_OVERLAY`) → Mac CSS overlay (reuse beta.4's plumbing).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
@@ -787,6 +809,21 @@ Lessons:
    a no-op without a send-path rewrite) → 🔨 **Step 3 custom DXGI capturer** (the real
    GPU 40→6% + cursor fix; standalone `capturer.exe` subprocess, WC-led, phased
    3a-3d) → Step 4 FEC (deferred).
+0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
+   + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
+   code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
+   (`ControllerSession.tsx:340`) — `KEYEVENTF_UNICODE` sends a CHARACTER, not a key
+   press, so games (DirectInput/scancode/GetAsyncKeyState) never see it, AND the text
+   path can't express a HOLD (always instant down+up). (2) `keyToggleWin32`
+   (`injectorWin32.ts:120`) sends VK, not `KEYEVENTF_SCANCODE` — many games read
+   scancodes. (3) `if(e.repeat) return` (`ControllerSession.tsx:344`) drops held-key
+   auto-repeat (Backspace-hold deletes once). FIX = a **Text⇄Game keyboard-mode toggle**
+   (Parsec-style, default Text): Game mode routes ALL keys through scancode keydown/keyup
+   (holds work, no Unicode → no Thai in-game, fine); Text mode keeps Unicode (Thai) +
+   forwards repeat for Backspace-hold; injectorWin32 → scancode-driven. Mac writes it all;
+   WC tests with a real game (WASD move/hold, shortcuts, Thai still types in Text mode) via
+   a prerelease. CAVEAT: kernel-anticheat games block ALL injected input (unfixable via
+   SendInput).
 1. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
 2. Computers-page search/sort; per-controller device visibility (family use).
