@@ -850,14 +850,19 @@ Lessons:
 
 ## Backlog (rough priority)
 
-0. **Parsec-parity streaming roadmap** — active, now ON STEP 3. Full plan in
+0. **Parsec-parity streaming roadmap** — Step 3 SHIPPED (v1.26.0). Full plan in
    [`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md);
    Step 3 detail in [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md).
-   ✅ Step 0 (v1.25.0 baseline) → ✅ Step 1 (v1.25.1: plain `-g 120`, intra-refresh
-   dropped — VT-incompatible) → ⏭️ Step 2 SKIPPED (present already optimal, `-slices 4`
-   a no-op without a send-path rewrite) → 🔨 **Step 3 custom DXGI capturer** (the real
-   GPU 40→6% + cursor fix; standalone `capturer.exe` subprocess, WC-led, phased
-   3a-3d) → Step 4 FEC (deferred).
+   ✅ Step 0 (v1.25.0) → ✅ Step 1 (v1.25.1: `-g 120`, intra-refresh dropped) → ⏭️ Step 2
+   SKIPPED (no-op) → ✅ **Step 3 custom DXGI capturer (v1.26.0: change-detection +
+   locked-60 = "smooth like Parsec", owner-verified)** → Step 4 FEC (deferred).
+   **NEXT TWO (owner-requested 2026-07-08, spec in
+   [`docs/bwe-hevc-plan.md`](docs/bwe-hevc-plan.md)):** **(A) BWE auto-bitrate ≤60 Mbps**
+   — Mac receiver measures seq-gap loss → AIMD → target over signaling → agent forwards
+   `B<kbps>` to the capturer stdin (capturer half DONE). **(B) H.265** — the real
+   remaining Parsec gap (1.6× efficiency, ~half bitrate); capturer `--codec h265` DONE,
+   needs codec-aware `nalSplitter.ts` + HEVC `decoder.swift` (VideoToolbox HW-decodes HEVC
+   on the M4 Pro). Do A first (higher impact), then B; each its own prerelease.
 0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
    + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
    code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
