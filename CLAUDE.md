@@ -1133,6 +1133,16 @@ Lessons:
            130-163 → single/low-double digits (scattered = self-induced confirmed) + hitches drop.**
            Stays ~130 → real external contention → Layer 2 FEC. Shrinks → cheap fix closed it (then
            judge if residual needs FEC). Detail: [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
+         - ❌ **RUN 1 (2026-07-08) CONTAMINATED — LTR was ON, discard.** Analyzer said FREEZING
+           (hitch avg 1115ms) but the cause was `VIDEO_LTR=1` still set on the agent, not vbv:
+           recovery was BIMODAL & size-uncorrelated (1-pkt loss→1019ms vs 226-pkt loss→51ms = the
+           LTR escalation signature, [[ltr-worse-than-idr-on-blackout-loss]]). vbv effect unreadable.
+         - 👉 **WC NEXT (clean re-run):** RELAUNCH the agent with NO `VIDEO_LTR` (`ltrEnabled()` reads
+           it at launch → a reconnect won't clear it), only `VIDEO_CAPTURER=1 VIDEO_CODEC=hevc`; keep
+           `vbv=33` in the tune-file; **grep the sender log for `vbv 33ms`** to confirm the tune took
+           (else it says `vbv 250ms`). Owner drives the stress video → Mac re-runs the analyzer.
+           Expected LTR-off: every recovery ~50ms → then the vbv burst-shrink read is clean. Full
+           recipe + the RUN-1 recovery table in [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a

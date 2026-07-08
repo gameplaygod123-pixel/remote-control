@@ -55,6 +55,32 @@ loss. **Do this first + measure** (`analyze-session.mjs`: lostpkts/event should 
   cheap fix closed most of it; then decide if the residual still needs FEC. Watch for a quality
   regression on complex frames (VBV too small); if so sweep `vbv=` up (1-frame..3-frame) to taste.
 
+**RUN 1 (2026-07-08) = CONTAMINATED, DISCARD — LTR was ON.** The Mac analyzer on the 96s HEVC
+session read FREEZING (hitch avg 1115ms) but the root cause was `VIDEO_LTR=1` still set on the
+agent, NOT the vbv. Proof — recovery-ms is BIMODAL and UNCORRELATED with loss size:
+
+| loss pkts | 8 | 14 | 67 | 226 | 39 | 110 | 138 | 1 |
+|---|---|---|---|---|---|---|---|---|
+| recovery ms | 48 | 54 | 56 | **51** | 1087 | 1320 | 1166 | **1019** |
+
+A 1-packet loss froze 1019ms while a 226-packet loss recovered in 51ms — impossible for a
+size-driven cause. It's the exact LTR signature: LTR-P referencing a still-valid ref → ~50ms;
+LTR-P referencing a blackout-wiped ref → wait `LTR_ESCALATE_MS`=1200 → escalate to IDR →
+~1000-1300ms ([[ltr-worse-than-idr-on-blackout-loss]]). So the vbv effect was unreadable
+(recovery dominated by LTR; bursts a muddy 1–226 spread). **`VIDEO_LTR` is read at process
+launch (`sender/index.ts` `ltrEnabled()`), so a reconnect does NOT clear it — the agent must be
+RELAUNCHED without it.**
+
+**WC NEXT — clean re-run (LTR OFF):**
+1. Relaunch the agent in a shell with **NO `VIDEO_LTR`** (`set VIDEO_LTR=` to clear), only
+   `VIDEO_CAPTURER=1` + `VIDEO_CODEC=hevc`. Keep `vbv=33` in `%LOCALAPPDATA%\pr-capturer-tune.txt`.
+2. **Confirm the tune applied:** the capturer logs its config to stderr → the sender log; grep for
+   `vbv 33ms` (WC added the ms to the Init/encode log in `95177e1`). If it says `vbv 250ms`, the
+   tune-file didn't take → fix before testing.
+3. Owner drives the same stress video → Mac re-runs `node scripts/analyze-session.mjs`.
+4. **Expected with LTR off:** every recovery ~50ms (v1.28 fast-IDR). THEN the vbv read is clean —
+   compare lostpkts/event vs the v1.28 baseline (130-163) to see if the shrink scattered the bursts.
+
 **Layer 2 — FEC (recover the scattered remainder silently).** Systematic block FEC:
 - Sender: for every group of **K** media RTP packets, generate **M** parity packets
   (XOR = recover any 1 lost/group; Reed–Solomon RS(K,M) = recover up to M lost/group —
