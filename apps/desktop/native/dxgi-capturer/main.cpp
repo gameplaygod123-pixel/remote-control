@@ -1,10 +1,16 @@
 // dxgi-capturer — custom DXGI Desktop Duplication capturer (Step 3).
 //
 // Standalone C++ .exe that replaces ffmpeg/ddagrab in the native video sender. It
-// does DXGI Desktop Duplication with change-detection (skips unchanged AND
-// pointer-only frames — the case ddagrab can't skip), NVENC-encodes ONLY the real
-// changes zero-copy, and writes raw H.264 Annex-B to stdout exactly like
-// `ffmpeg -f h264 pipe:1`. Drop-in for ffmpeg; the Mac receiver is untouched.
+// does DXGI Desktop Duplication with change-detection, NVENC-encodes zero-copy, and writes
+// raw H.264 Annex-B to stdout exactly like `ffmpeg -f h264 pipe:1`. Drop-in for ffmpeg; the
+// Mac receiver is untouched.
+//
+// CADENCE (default, Parsec-parity): a LOCKED 1/fps emit clock — exactly one frame every 16.66ms
+// (@60). Real P/IDR when the desktop changed during the tick, else a near-free coded-SKIP frame
+// (NV_ENC_PIC_TYPE_SKIPPED: no motion estimation, ~1-2% GPU, a few bytes). The receiver sees a
+// steady 60fps regardless of content rate — fixing the 41-60fps jitter (=judder) of the old
+// emit-on-change path. `--legacy-emit` reverts to the change-triggered path (still skips
+// unchanged/pointer-only frames — the case ddagrab can't skip — but at a variable rate).
 // NOT koffi-COM, NOT a node addon — crash isolation (golden rule #1).
 //
 // CLI + behavioural contract: docs/step3-dxgi-capturer.md "3c CLI contract".
@@ -90,6 +96,17 @@ struct CapturerOptions {
     int floorDecayMs = 350;         // keep the floor alive this long after the last real change
     bool selftest = false;          // 3a change-detection log loop only (no encode)
     int durationSec = 0;            // 0 = run until stdin EOF / killed (offline testing aid)
+    bool lockedCadence = true;      // Parsec-parity: emit EXACTLY one frame every 1/fps (locked
+                                    // 60fps cadence) — real P/IDR when the desktop changed this
+                                    // tick, else a near-free coded-SKIP frame. Replaces the old
+                                    // "emit only on change" (variable 41-60fps -> receiver judder).
+                                    // Disable with --legacy-emit / tune legacy=1 to revert to the
+                                    // change-triggered path without a rebuild.
+    int lockedIdleMs = 350;         // locked-cadence idle decay: keep the 60fps skip cadence only
+                                    // while the desktop changed within this window; once static
+                                    // longer, stop emitting (idle GPU -> ~0). 0 = never decay
+                                    // (Parsec-style always-locked, but ~17-20% enc on a static
+                                    // 1440p screen since NVENC coded-skip needs PTD=0 = all-intra).
 };
 
 class DuplCapturer {
@@ -103,6 +120,8 @@ public:
         floorIntervalMs_ = (floorFps_ > 0) ? 1000.0 / floorFps_ : 0.0;
         floorDecayMs_ = o.floorDecayMs;
         bitrateMaxRatio_ = (o.bitrateKbps > 0) ? (double)o.maxrateKbps / o.bitrateKbps : 1.6;
+        lockedCadence_ = o.lockedCadence;
+        lockedIdleMs_ = o.lockedIdleMs;
     }
     ~DuplCapturer() { Release(); }
 
@@ -126,6 +145,9 @@ public:
                 streamStdout_ ? "stdout" : opt_.output.c_str(), width_, height_, opt_.fps,
                 opt_.bitrateKbps, opt_.maxrateKbps, opt_.gopFrames, gopIntervalSec_, floorDesc.c_str());
         }
+
+        // Parsec-parity path: a locked 1/fps emit clock instead of emit-on-change.
+        if (lockedCadence_ && encoding_) return lockedLoop();
 
         const auto startT = Clock::now();
         auto intervalStart = startT;
@@ -299,6 +321,148 @@ private:
         intervalStart = now;
     }
 
+    void maybeLogLocked(Clock::time_point& intervalStart, uint64_t& sent, uint64_t& real,
+                        uint64_t& skip, uint64_t& idr, uint64_t& coalesced, long cursorX,
+                        long cursorY, bool cursorVisible, UINT shapeType) {
+        auto now = Clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - intervalStart).count() < 1000) return;
+        // emitted = the LOCKED cadence (should read ~fps steady); real/skip = the content split.
+        Log("emitted=%llu real=%llu skip=%llu idr=%llu coalesced=%llu cursor=(%ld,%ld,%s,%s)",
+            (unsigned long long)sent, (unsigned long long)real, (unsigned long long)skip,
+            (unsigned long long)idr, (unsigned long long)coalesced, cursorX, cursorY,
+            cursorVisible ? "visible" : "hidden", PtrTypeName(shapeType));
+        sent = real = skip = idr = coalesced = 0;
+        intervalStart = now;
+    }
+
+    // Locked-cadence emit loop (Parsec-parity). Keep a steady 1/fps emit clock and emit EXACTLY
+    // one frame per tick: an IDR (first frame / wall-clock GOP / PLI), a real P-frame when the
+    // desktop changed during the tick window, or a near-free coded-SKIP frame when it didn't.
+    // Cadence stays at fps regardless of content rate, so the receiver never sees the 41-60fps
+    // jitter the change-triggered path produced. Change-detection still runs — to pick P vs SKIP
+    // and to coalesce multiple sub-tick changes down to the latest frame.
+    int lockedLoop() {
+        using namespace std::chrono;
+        const auto tickDur = duration_cast<Clock::duration>(
+            duration<double>(minEncodeIntervalSec_ > 0 ? minEncodeIntervalSec_ : 1.0 / 60));
+        const auto startT = Clock::now();
+        auto nextTick = startT + tickDur;
+        auto intervalStart = startT;
+
+        uint64_t sent = 0, realFrames = 0, skipFrames = 0, idrFrames = 0, coalesced = 0;
+        long cursorX = 0, cursorY = 0; bool cursorVisible = false; UINT shapeType = 0;
+        uint64_t lastShapeHash = 0; std::vector<uint8_t> shapeBuf;
+        bool haveStaged = false;  // a real desktop change is staged in encodeTex_ for this tick
+
+        for (;;) {
+            if (shutdownRequested_.load()) { Log("stdin closed -> shutdown"); break; }
+            if (opt_.durationSec > 0 &&
+                duration_cast<seconds>(Clock::now() - startT).count() >= opt_.durationSec) break;
+
+            // BWE: apply a pending live bitrate change on THIS (encode) thread.
+            { int pb = pendingBitrateKbps_.exchange(-1);
+              if (pb > 0) { int newMax = (int)(pb * bitrateMaxRatio_ + 0.5); encoder_.SetBitrate(pb, newMax); } }
+
+            // ---- drain desktop changes until the tick, coalescing to the latest frame ----
+            long long budgetMs = duration_cast<milliseconds>(nextTick - Clock::now()).count();
+            UINT timeout = budgetMs <= 0 ? 0 : (budgetMs > 250 ? 250 : (UINT)budgetMs);
+            DXGI_OUTDUPL_FRAME_INFO fi = {};
+            ComPtr<IDXGIResource> desktopResource;
+            HRESULT hr = dupl_->AcquireNextFrame(timeout, &fi, &desktopResource);
+
+            if (hr == DXGI_ERROR_ACCESS_LOST) {
+                Log("access-lost: duplication lost -> re-init");
+                recover(); haveStaged = false; nextTick = Clock::now() + tickDur; continue;
+            }
+            if (hr != DXGI_ERROR_WAIT_TIMEOUT && FAILED(hr)) {
+                LogHr("AcquireNextFrame", hr);
+                recover(); haveStaged = false; nextTick = Clock::now() + tickDur; continue;
+            }
+            if (hr != DXGI_ERROR_WAIT_TIMEOUT) {  // we HOLD a frame; must ReleaseFrame
+                const auto now = Clock::now();
+                if (fi.LastPresentTime.QuadPart != 0) {  // real desktop change
+                    ComPtr<ID3D11Texture2D> frameTex;
+                    if (SUCCEEDED(desktopResource.As(&frameTex)) && encoder_.StageFrame(frameTex.Get())) {
+                        if (haveStaged) ++coalesced;  // an earlier change this tick is superseded
+                        haveStaged = true; lastRealChange_ = now;
+                    }
+                }
+                if (fi.LastMouseUpdateTime.QuadPart != 0) {
+                    cursorX = fi.PointerPosition.Position.x; cursorY = fi.PointerPosition.Position.y;
+                    cursorVisible = (fi.PointerPosition.Visible != FALSE);
+                }
+                if (fi.PointerShapeBufferSize > 0) {
+                    if (shapeBuf.size() < fi.PointerShapeBufferSize) shapeBuf.resize(fi.PointerShapeBufferSize);
+                    UINT required = 0; DXGI_OUTDUPL_POINTER_SHAPE_INFO si = {};
+                    if (SUCCEEDED(dupl_->GetFramePointerShape((UINT)shapeBuf.size(), shapeBuf.data(), &required, &si))) {
+                        uint64_t h = HashShape(shapeBuf.data(), required ? required : fi.PointerShapeBufferSize, si);
+                        if (h != lastShapeHash) {
+                            Log("cursor-shape type=%s(%u) %ux%u hotspot=(%d,%d) bytes=%u",
+                                PtrTypeName(si.Type), si.Type, si.Width, si.Height,
+                                si.HotSpot.x, si.HotSpot.y, fi.PointerShapeBufferSize);
+                            lastShapeHash = h;
+                        }
+                        shapeType = si.Type;
+                    }
+                }
+                HRESULT rr = dupl_->ReleaseFrame();
+                if (FAILED(rr)) { LogHr("ReleaseFrame", rr); recover(); haveStaged = false; nextTick = Clock::now() + tickDur; continue; }
+            }
+
+            if (Clock::now() < nextTick) continue;  // not yet time to emit -> keep draining
+
+            // ---- TICK: emit exactly one frame ----
+            const auto tnow = Clock::now();
+            const bool firstFrame = !haveEncodedFrame_;
+            if (firstFrame && !haveStaged) {  // no reference yet — don't emit P/SKIP; hold cadence
+                nextTick += tickDur;
+                if (tnow - nextTick > seconds(1)) nextTick = tnow + tickDur;
+                maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, cursorX, cursorY, cursorVisible, shapeType);
+                continue;
+            }
+            // Idle decay: a coded skip still runs motion estimation (~17-20% enc @1440p60), so
+            // emitting 60 skips/s on a STATIC screen wastes GPU for no benefit (nothing is moving
+            // to judder). Keep the locked 60 cadence only while recently active — once the desktop
+            // has been static past lockedIdleMs, stop emitting (idle GPU -> ~0, like legacy) and
+            // just hold the tick clock; the next real change resumes locked 60 within one tick.
+            const bool pli = idrRequested_.exchange(false);
+            const bool recentlyActive =
+                duration_cast<milliseconds>(tnow - lastRealChange_).count() < lockedIdleMs_;
+            if (!haveStaged && !recentlyActive && !pli) {
+                nextTick += tickDur;
+                if (tnow - nextTick > seconds(1)) nextTick = tnow + tickDur;
+                maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, cursorX, cursorY, cursorVisible, shapeType);
+                continue;
+            }
+            const bool wallIdr = firstFrame ||
+                duration_cast<milliseconds>(tnow - lastIdr_).count() >= (long long)(gopIntervalSec_ * 1000);
+            bool ok = true;
+            if (wallIdr || pli) {
+                ok = encoder_.EncodeRepeatIdr();  // encode whatever is staged in encodeTex_ as IDR
+                if (ok) { lastIdr_ = tnow; ++idrFrames; }
+            } else if (haveStaged) {
+                ok = encoder_.EncodeRepeatFrame();  // staged new content -> real P-frame
+                if (ok) ++realFrames;
+            } else {
+                ok = encoder_.EncodeSkipped();       // gap during an active window -> keepalive skip
+                if (ok) ++skipFrames;
+            }
+            if (!ok) { Log("encode failed -> recover"); recover(); haveStaged = false; nextTick = Clock::now() + tickDur; continue; }
+            haveEncodedFrame_ = true; lastEncode_ = tnow; haveStaged = false; ++sent;
+
+            nextTick += tickDur;
+            if (Clock::now() - nextTick > seconds(1)) nextTick = Clock::now() + tickDur;  // resync if far behind
+            maybeLogLocked(intervalStart, sent, realFrames, skipFrames, idrFrames, coalesced, cursorX, cursorY, cursorVisible, shapeType);
+        }
+
+        encoder_.Shutdown();
+        if (encFile_ && encFile_ != stdout) fclose(encFile_);
+        encFile_ = nullptr;
+        Log("done: %llu frames encoded, %llu bytes",
+            (unsigned long long)encoder_.framesEncoded(), (unsigned long long)encoder_.bytesOut());
+        return 0;
+    }
+
     bool setupEncoder() {
         encoder_.Shutdown();
         NvEncConfig cfg;
@@ -393,6 +557,8 @@ private:
     int floorFps_ = 0;               // min-fps floor during activity (0 = off)
     double floorIntervalMs_ = 0.0;   // 1000/floorFps
     long floorDecayMs_ = 0;          // floor stays alive this long after the last real change
+    bool lockedCadence_ = true;      // locked 1/fps emit clock (Parsec-parity) vs emit-on-change
+    long lockedIdleMs_ = 350;        // locked-cadence idle decay window (0 = never decay)
 
     // control channel (set from the stdin thread)
     std::atomic<bool> idrRequested_{false};
@@ -424,6 +590,9 @@ static void applyTuneFile(CapturerOptions& o) {
         else if (k == "floor-fps") o.floorFps = std::atoi(v.c_str());
         else if (k == "floor-decay") o.floorDecayMs = std::atoi(v.c_str());
         else if (k == "codec") o.hevc = (v == "h265" || v == "hevc" || v == "HEVC");
+        else if (k == "legacy") o.lockedCadence = !(v == "1" || v == "true" || v == "on");
+        else if (k == "locked-cadence") o.lockedCadence = (v == "1" || v == "true" || v == "on");
+        else if (k == "locked-idle-ms") o.lockedIdleMs = std::atoi(v.c_str());
     }
     fclose(f);
     Log("tune-file applied: %s", path.c_str());
@@ -445,6 +614,9 @@ int main(int argc, char** argv) {
         else if (a == "--codec" && i + 1 < argc) { std::string c = argv[++i]; o.hevc = (c == "h265" || c == "hevc" || c == "HEVC"); }
         else if (a == "--floor-fps") next(o.floorFps);
         else if (a == "--floor-decay") next(o.floorDecayMs);
+        else if (a == "--legacy-emit") o.lockedCadence = false;  // revert to emit-on-change
+        else if (a == "--locked-cadence") o.lockedCadence = true;
+        else if (a == "--locked-idle-ms") next(o.lockedIdleMs);
         else if (a == "--duration") next(o.durationSec);
         else if (a == "--help" || a == "-h") {
             printf("dxgi-capturer (Step 3 custom DXGI capturer)\n"
@@ -458,6 +630,10 @@ int main(int argc, char** argv) {
                    "  --floor-fps <n>          min-fps floor during activity (default 0=off;\n"
                    "                           env VIDEO_CAPTURER_FLOOR_FPS overrides for live tuning)\n"
                    "  --floor-decay <ms>       floor stays alive this long after a change (default 350)\n"
+                   "  --legacy-emit            revert to emit-on-change (default is locked 1/fps cadence;\n"
+                   "                           tune legacy=1 / env VIDEO_CAPTURER_LEGACY_EMIT=1 also revert)\n"
+                   "  --locked-idle-ms <ms>    locked-cadence idle decay (default 350; 0 = never decay,\n"
+                   "                           always-locked but ~17-20%% enc on a static 1440p screen)\n"
                    "  --selftest               3a change-detection log loop only (no encode)\n"
                    "  --duration <sec>         stop after N seconds (offline testing)\n"
                    "  stdin: 'I' -> force IDR;  'B'<kbps>'\\n' -> live VBR bitrate;  EOF -> shutdown\n");
@@ -473,6 +649,7 @@ int main(int argc, char** argv) {
     if (const char* benv = std::getenv("VIDEO_CAPTURER_BITRATE_KBPS")) o.bitrateKbps = std::atoi(benv);
     if (const char* menv = std::getenv("VIDEO_CAPTURER_MAXRATE_KBPS")) o.maxrateKbps = std::atoi(menv);
     if (const char* cenv = std::getenv("VIDEO_CAPTURER_CODEC")) { std::string c = cenv; o.hevc = (c == "h265" || c == "hevc" || c == "HEVC"); }
+    if (const char* lenv = std::getenv("VIDEO_CAPTURER_LEGACY_EMIT")) { std::string l = lenv; o.lockedCadence = !(l == "1" || l == "true" || l == "on"); }
     applyTuneFile(o);  // highest priority: a live tune file overrides CLI + env (no relaunch)
 
     SetProcessDPIAware();  // physical pixels for width/height + cursor coords

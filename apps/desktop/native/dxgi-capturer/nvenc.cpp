@@ -113,7 +113,10 @@ bool NvEncoder::Init(ID3D11Device* device, ID3D11DeviceContext* context,
     ip.darWidth = cfg_.width;      ip.darHeight = cfg_.height;
     ip.maxEncodeWidth = cfg_.width; ip.maxEncodeHeight = cfg_.height;
     ip.frameRateNum = cfg_.fps;    ip.frameRateDen = 1;
-    ip.enablePTD = 1;              // encoder picks frame types; FORCEIDR still honored
+    ip.enablePTD = 1;              // encoder picks frame types; FORCEIDR honored. NOTE: PTD=0 was
+                                   // tried (to request NV_ENC_PIC_TYPE_SKIPPED for a near-free idle
+                                   // frame) but with the ULTRA_LOW_LATENCY preset it fell back to
+                                   // ALL-INTRA — so we keep PTD=1 and skip = re-encode-identical P.
     ip.enableEncodeAsync = 0;      // synchronous — LockBitstream blocks until ready
     ip.encodeConfig = encCfgPtr;
     NVCK(FL->nvEncInitializeEncoder(enc_, &ip), "nvEncInitializeEncoder");
@@ -155,17 +158,33 @@ bool NvEncoder::EncodeFrame(ID3D11Texture2D* srcTex, bool forceIdr) {
     // GPU->GPU copy of the still-held desktop frame into our registered texture
     // (no CPU download = zero-copy in the host sense). Caller ReleaseFrames after.
     context_->CopyResource(encodeTex_, srcTex);
-    return encodeMapped(forceIdr);
+    return encodeMapped(forceIdr ? NV_ENC_PIC_TYPE_IDR : NV_ENC_PIC_TYPE_P);
+}
+
+bool NvEncoder::StageFrame(ID3D11Texture2D* srcTex) {
+    if (!enc_) return false;
+    // GPU->GPU copy only; no encode. The tick emits the staged frame via EncodeRepeat*.
+    context_->CopyResource(encodeTex_, srcTex);
+    return true;
 }
 
 bool NvEncoder::EncodeRepeatIdr() {
     if (!enc_) return false;
-    return encodeMapped(/*forceIdr=*/true);  // re-encode the last frame already in encodeTex_
+    return encodeMapped(NV_ENC_PIC_TYPE_IDR);  // re-encode the last frame already in encodeTex_
 }
 
 bool NvEncoder::EncodeRepeatFrame() {
     if (!enc_) return false;
-    return encodeMapped(/*forceIdr=*/false);  // duplicate last frame as a cheap P-frame (floor)
+    return encodeMapped(NV_ENC_PIC_TYPE_P);  // duplicate last frame as a real P-frame (floor; runs ME)
+}
+
+bool NvEncoder::EncodeSkipped() {
+    if (!enc_) return false;
+    // NV_ENC_PIC_TYPE_SKIPPED needs enablePTD=0, which breaks frame types (all-intra) with our
+    // ULL preset — so under PTD=1 the "skip" is a re-encoded auto-P of the unchanged frame. The
+    // content is identical to the reference, so it codes to all-skip MBs (small on the wire);
+    // its GPU cost is the motion-estimation pass (the number we measure for the idle screen).
+    return encodeMapped(NV_ENC_PIC_TYPE_P);
 }
 
 bool NvEncoder::SetBitrate(int targetKbps, int maxKbps) {
@@ -198,7 +217,7 @@ bool NvEncoder::SetBitrate(int targetKbps, int maxKbps) {
     return true;
 }
 
-bool NvEncoder::encodeMapped(bool forceIdr) {
+bool NvEncoder::encodeMapped(int nvPicType) {
     NV_ENC_MAP_INPUT_RESOURCE map = {};
     map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
     map.registeredResource = registered_;
@@ -213,7 +232,10 @@ bool NvEncoder::encodeMapped(bool forceIdr) {
     pic.outputBitstream = bitstream_;
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     pic.inputTimeStamp = ptsCounter_++;
-    if (forceIdr)
+    // enablePTD=0 => the client owns the picture type. IDR also needs SPS/PPS in-band so a
+    // late/recovering receiver can decode; repeatSPSPPS=1 covers it but we ask explicitly too.
+    pic.pictureType = static_cast<NV_ENC_PIC_TYPE>(nvPicType);
+    if (nvPicType == NV_ENC_PIC_TYPE_IDR)
         pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
 
     NVENCSTATUS st = FL->nvEncEncodePicture(enc_, &pic);

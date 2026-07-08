@@ -40,6 +40,12 @@ public:
     // (first frame / wall-clock 2s elapsed / PLI). Returns false on a fatal encode error.
     bool EncodeFrame(ID3D11Texture2D* srcTex, bool forceIdr);
 
+    // Stage (GPU-copy) a desktop frame into the registered encode texture WITHOUT encoding it.
+    // The locked-cadence loop copies the latest change during the tick window, then emits it at
+    // the tick via EncodeRepeatFrame()/EncodeRepeatIdr(). MUST be called while srcTex is held
+    // (before ReleaseFrame). No NVENC call, so it's cheap; the encode happens once, at the tick.
+    bool StageFrame(ID3D11Texture2D* srcTex);
+
     // Re-encode the LAST frame (already in the registered texture) as a forced IDR —
     // for a PLI on a static screen, where no new desktop change is coming but the
     // receiver needs a fresh keyframe. No CopyResource.
@@ -49,7 +55,17 @@ public:
     // an activity window we keep a steady cadence by duplicating the last frame when no
     // new desktop change arrives. Content is unchanged, so it encodes to a near-empty
     // skip-MB P-frame (cheap on GPU + wire) yet regularizes receiver pacing. No CopyResource.
+    // NOTE: this still runs full motion estimation (~22% enc on a static screen) — for the
+    // LOCKED-cadence path use EncodeSkipped() instead, which is near-free.
     bool EncodeRepeatFrame();
+
+    // Emit a CODED-SKIP frame (NV_ENC_PIC_TYPE_SKIPPED) — the Parsec-parity idle path.
+    // NVENC codes a P-frame whose every MB is a "skip" (copy-from-reference) WITHOUT running
+    // motion estimation, so on a static screen it costs almost no GPU (~1-2% vs 22% for a
+    // re-encoded P-frame) and only a few bytes on the wire, yet advances the stream one frame
+    // to hold a locked 60fps cadence at the receiver. No CopyResource. Requires enablePTD=0
+    // (we drive picture types explicitly). Must be called from the encode thread.
+    bool EncodeSkipped();
 
     // Change the VBR target/max bitrate LIVE (nvEncReconfigureEncoder, resetEncoder=0,
     // no forced IDR) — the sender's BWE feedback path: receiver measures the link, sends
@@ -63,7 +79,7 @@ public:
     uint64_t bytesOut()      const { return bytesOut_; }
 
 private:
-    bool encodeMapped(bool forceIdr);  // map registered tex -> encode -> emit (shared)
+    bool encodeMapped(int nvPicType);  // map registered tex -> encode as pictureType -> emit (shared)
     bool writeBitstream();             // lock/emit/unlock the encoded output
 
     void* enc_ = nullptr;              // NVENC session handle
