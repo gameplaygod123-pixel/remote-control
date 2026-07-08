@@ -9,7 +9,8 @@ import {
   BWE_FLOOR_KBPS,
   BWE_START_KBPS,
   bweCeilingForCodec,
-  seqForwardDistance
+  seqForwardDistance,
+  LossDetector
 } from '../bwe'
 
 let failures = 0
@@ -259,6 +260,42 @@ console.log('seqForwardDistance')
   check('seq: wrap 65535->0 -> 1 (no false gap)', seqForwardDistance(65535, 0) === 1)
   check('seq: wrap gap 65534->1 -> 3', seqForwardDistance(65534, 1) === 3)
   check('seq: reorder across wrap 0->65535 -> -1', seqForwardDistance(0, 65535) === -1)
+}
+
+// LossDetector (reorder-tolerant PLI-on-loss)
+console.log('LossDetector')
+{
+  // in-order run -> never reports loss
+  const d = new LossDetector(8)
+  let total = 0
+  for (let s = 0; s < 100; s++) total += d.observe(s)
+  check('loss: in-order -> 0 confirmed', total === 0)
+}
+{
+  // a real gap (seq 5 skipped) -> confirmed lost after `reorderWindow` newer packets
+  const d = new LossDetector(4)
+  let confirmedAt = -1
+  let feeds = 0
+  for (const s of [0, 1, 2, 3, 4, /*5 lost*/ 6, 7, 8, 9, 10, 11]) {
+    const lost = d.observe(s)
+    if (lost > 0 && confirmedAt < 0) confirmedAt = feeds
+    feeds++
+  }
+  check('loss: real gap eventually confirmed (1 pkt)', confirmedAt >= 0)
+}
+{
+  // reorder WITHIN the window (6 arrives late, before the deadline) -> NOT a loss
+  const d = new LossDetector(8)
+  let total = 0
+  for (const s of [0, 1, 2, 3, 4, /*gap*/ 7, 8, 6, /*6 arrives*/ 5, 9, 10]) total += d.observe(s)
+  check('loss: reorder within window -> 0 confirmed (no spurious PLI)', total === 0)
+}
+{
+  // reorder ACROSS a wrap must not read as loss
+  const d = new LossDetector(8)
+  let total = 0
+  for (const s of [65533, 65534, 65535, 0, 1, 2, 3, 4]) total += d.observe(s & 0xffff)
+  check('loss: wrap in-order -> 0 confirmed', total === 0)
 }
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILED ❌`)

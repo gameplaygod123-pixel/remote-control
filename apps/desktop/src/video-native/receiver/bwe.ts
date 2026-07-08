@@ -96,6 +96,62 @@ export function seqForwardDistance(prev16: number, cur16: number): number {
   return d
 }
 
+/**
+ * Real-time packet-LOSS detector with reorder tolerance, for PLI-on-loss.
+ *
+ * The naive "any forward seq gap = loss -> PLI now" over-fires on a UDP link that
+ * merely REORDERS packets (a later seq arrives before an earlier one): it would force
+ * an unnecessary IDR for a packet that was about to arrive 1-2ms later = a self-
+ * inflicted judder. So a gap is held PENDING and only declared lost if the missing
+ * seq hasn't shown up within `reorderWindow` newer packets (small, so real loss is
+ * still confirmed in a few ms). Reordered arrivals cancel the pending gap = no PLI.
+ * Returns the count of packets newly CONFIRMED lost on each observe (0 = in order or
+ * still-tolerating reorder); the caller PLIs when it's > 0.
+ */
+export class LossDetector {
+  private extender = new SeqExtender()
+  private highest = -1
+  private pktCount = 0
+  // extendedSeq -> the pktCount by which it must arrive or it's declared lost.
+  private pending = new Map<number, number>()
+
+  constructor(private readonly reorderWindow: number = 8) {}
+
+  observe(seq16: number): number {
+    const ext = this.extender.extend(seq16)
+    this.pktCount += 1
+    // A pending (previously-missing) seq just arrived out of order -> not a loss.
+    if (this.pending.delete(ext)) {
+      // fallthrough to the sweep (other gaps may still time out)
+    } else if (this.highest < 0) {
+      this.highest = ext
+    } else if (ext > this.highest + 1) {
+      // New forward gap: everything between highest+1..ext-1 is missing (pending).
+      for (let s = this.highest + 1; s < ext; s++)
+        this.pending.set(s, this.pktCount + this.reorderWindow)
+      this.highest = ext
+    } else if (ext > this.highest) {
+      this.highest = ext
+    }
+    // Sweep: any pending seq whose reorder deadline passed is confirmed lost.
+    let confirmed = 0
+    for (const [s, deadline] of this.pending) {
+      if (this.pktCount >= deadline) {
+        this.pending.delete(s)
+        confirmed += 1
+      }
+    }
+    return confirmed
+  }
+
+  reset(): void {
+    this.extender = new SeqExtender()
+    this.highest = -1
+    this.pktCount = 0
+    this.pending.clear()
+  }
+}
+
 // Extends a 16-bit RTP sequence number to a monotonic value, wrap-aware, so loss
 // math survives the 65535->0 rollover. Tracks the highest extended seq; each new
 // packet's extension = highest + shortest signed distance from the current low 16.
