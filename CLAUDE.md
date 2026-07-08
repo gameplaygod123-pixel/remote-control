@@ -584,7 +584,25 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.27.0** — **BWE auto-bitrate + HUD encode telemetry** (off
+Latest release: **v1.30.0-beta.1 (PRERELEASE, off `feat/native-video @ 099ded5`)** —
+**game-mode keyboard + NACK silent loss repair.** Rolls up everything since v1.28.0.
+- **Game-mode keyboard (NEW, the reason it's a prerelease — native key-injection FFI,
+  golden rule #1):** Text⇄Game toggle; Game mode routes keys as raw scancodes
+  (`KEYEVENTF_SCANCODE`) so DirectInput/RawInput games see holdable WASD; Text mode keeps
+  Unicode (Thai) + Backspace-repeat. Protocol `scan?` flag, all 3 inject paths.
+  **WC to verify on real hardware with a real game before promotion** (WASD move/hold,
+  shortcuts, Thai in Text mode, no stuck keys).
+- **NACK silent loss repair (v1.29.0 work, controller-side):** patched darwin ndc emits
+  NACK + `receiver/reorderBuffer.ts` (`VIDEO_NACK_BUFFER=1`) holds a gap ~1 RTT for the
+  retransmit → scattered losses repaired silently (~66%, no PLI/hitch); blackouts >64 →
+  fast PLI. Windows agent unchanged (stock ndc retransmits). See
+  [`docs/step-nack-retransmit.md`](docs/step-nack-retransmit.md) + `native/ndc-nack/`.
+- Built via `build-win.sh` (all 4 packed checks pass), published as PRERELEASE (owner's
+  parallel session). Also carries v1.28.0 (H.265 opt-in + PLI-on-loss) + v1.29.0
+  (NACK/vbv-ms/LTR-off). **NEXT: WC installs the prerelease → verifies game-mode → promote
+  full v1.30.0.**
+
+Prior release: **v1.27.0** — **BWE auto-bitrate + HUD encode telemetry** (off
 `feat/native-video`). The native capturer path (`VIDEO_CAPTURER=1`) now adapts its
 VBR bitrate to the link: the Mac receiver runs a loss+jitter AIMD estimator
 (`receiver/bwe.ts`, **cap 25 / floor 5 Mbps**, +2 additive / ×0.85 backoff), rides
