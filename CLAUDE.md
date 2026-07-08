@@ -1022,10 +1022,24 @@ Lessons:
        actually gets driven down to 15 (else the dead-band never sends B15000). Receiver-only
        (BWE target rides signaling to the capturer live) → **owner just relaunches
        `start-controller.command`**, agent stays on beta.1. Units cover the HEVC cap + first-emit.
-     - **NEXT: owner relaunches controller (HEVC now caps 15) → WC confirms the BWE drops
-       (25→21 ×6/10min) STOP and the ~2s freezes are GONE, HEVC quality still good at ~15.**
-       If clean → promote v1.28.0 (rolls A BWE + B H.265). ndc win32 H265 packetizer is
-       already proven, so no more prerelease needed for the codec itself.
+     - **cap-15 retest (WC): freeze STILL there → cap was NOT the cause.** loss stayed
+       ~1/min at 15 just like at 25 (BWE sent B15000, backoffs 12750=15000×0.85) → **loss is
+       bitrate-INDEPENDENT** (15 Mbps is well under the link). Kept the 15 cap anyway (it's
+       HEVC's correct quality/bitrate point) but it's not the freeze fix.
+     - **REAL ROOT CAUSE + FIX (`43fdd8b`, receiver-side): PLI-on-loss.** WC's clincher —
+       during every freeze the sender got **PLI=0** (only 1/connect). A lost packet breaks an
+       HEVC frame; inter frames reference it, so VideoToolbox stalls until the next decodable
+       entry = the periodic IDR (~2s @ gop 120) → the exact ~2s freeze. HEVC is more
+       loss-sensitive than H.264 (bigger frames), so H.264 on the same link never showed it.
+       Fix (the deferred Step 2/3 receiver work): the receiver detects a forward RTP seq gap
+       in REAL TIME (`seqForwardDistance`, wrap-aware, unit-tested) → `requestKeyframe` →
+       sender forces a cheap IDR via the capturer 'I' stdin (no respawn) → recovery in ~1 RTT
+       vs ~2s. Rate-limited ≤1/s; reorder/dup ignored. Helps H.264 too. Receiver-only — no
+       agent rebuild.
+     - **NEXT: owner relaunches `start-controller.command` (agent stays on beta.1) → WC
+       confirms the ~2s freezes are GONE (sender now gets a PLI on each loss → fast IDR, not
+       0), HEVC quality good at 15.** If clean → promote v1.28.0 (A BWE + B H.265). Optional
+       belt-and-braces if any freeze remains: HEVC gop 120→60 (needs an agent rebuild).
 0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
    + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
    code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
