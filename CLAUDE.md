@@ -584,15 +584,40 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.25.1** — Parsec-parity roadmap Step 1 (off `feat/native-video`,
+Latest release: **v1.27.0** — **BWE auto-bitrate + HUD encode telemetry** (off
+`feat/native-video`). The native capturer path (`VIDEO_CAPTURER=1`) now adapts its
+VBR bitrate to the link: the Mac receiver runs a loss+jitter AIMD estimator
+(`receiver/bwe.ts`, **cap 25 / floor 5 Mbps**, +2 additive / ×0.85 backoff), rides
+the target over signaling (`video-bitrate`), and the agent forwards `B<kbps>` to the
+capturer stdin (`nvEncReconfigureEncoder`, no respawn). **cap 25 is deliberate** —
+beta.1's cap-60 caused bufferbloat on the owner's ~40 Mbps link (delay, not loss →
+loss-only AIMD never backed off → double-cursor/freeze); beta.2 fixed it by starting
+AT the proven-good 25 and adding a jitter (delay) backoff signal
+([[loss-only-bwe-misses-bufferbloat]]). Also: **HUD `Encode X.Xms`** — the capturer
+measures pure HW encode time (`enc_ms`, nvEncEncodePicture→LockBitstream) → relayed
+agent→controller via `video-sender-stats` → shown in the HUD; **fullscreen HUD
+expands** to a full-width telemetry strip; **BWE target** shown as `actual → target
+Mbps`. WC-verified on real hardware (baseline
+[`docs/streaming-baseline-v1.27.0-beta.3.md`](docs/streaming-baseline-v1.27.0-beta.3.md):
+enc_ms avg 5.6ms < Parsec 8.72ms, locked-60, BWE cap 25 confirmed, error 0; owner
+confirmed HUD Encode 5.5ms live), shipped via prereleases beta.1–beta.3 before this
+full release (golden rules #1/#7). Prior full releases rolled up below.
+
+Prior release: **v1.26.0** — **custom DXGI capturer, locked-60 (smooth like Parsec).**
+Standalone `capturer.exe` (DXGI Desktop Duplication + change-detection + locked-60
+cadence + idle-decay + NVENC → Annex-B on stdout), opt-in `VIDEO_CAPTURER=1`, ffmpeg
+fallback. Change-detection idles the GPU on a static screen (mouse-only = skip);
+locked-60 emit fixed the judder ("ลื่นเหมือน Parsec" — owner-verified). Also has the
+BWE stdin primitive (`B<kbps>`) + `--codec h265` that v1.27.0/H.265 build on.
+
+Prior release: **v1.25.1** — Parsec-parity roadmap Step 1 (off `feat/native-video`,
 same as v1.25.0). Native-video keyframe tuning: **plain periodic IDR every 2s
 (`-g 120`)** instead of v1.25.0's 1s (`-g 60`), halving the keyframe-spike
 frequency. Step 1 originally tried NVENC `-intra-refresh` for a fully flat bitrate
 but it is **permanently dropped** — the Mac VideoToolbox decoder can't handle the
 rolling-intra P-frame structure (froze mid-session at every GOP length; verified via
 prereleases beta.1–beta.4 before this clean full release, golden rules #1/#7). See
-the Current status block + [[pure-intra-refresh-freezes-videotoolbox]]. Prior full
-release rolled up below.
+[[pure-intra-refresh-freezes-videotoolbox]]. Prior full release rolled up below.
 
 Prior release: **v1.25.0** — native video 60fps + VBR≤40, ddagrab crash-recovery,
 dup_frames on-change capture, HUD latency telemetry, stuck-key panic-release. (Step 0
