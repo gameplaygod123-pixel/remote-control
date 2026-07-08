@@ -1005,14 +1005,27 @@ Lessons:
        exact production `Decoder`; `videoDimensions()` parsed **1920×1080** from that real
        VideoToolbox HEVC SPS. Sender + depacketizer unit tests cover BOTH codecs (all pass);
        typecheck + source lint clean; `librvr.dylib` rebuilt with `rvr_set_codec`.
-     - **NEXT (joint e2e, golden rule #1 — the SENDER/Windows half is unverified):** WC
-       installs **v1.28.0-beta.1**, runs the agent with **`VIDEO_CAPTURER=1` + `VIDEO_CODEC=hevc`**;
-       owner relaunches `start-controller.command` (rebuilds librvr.dylib + runs the updated
-       receiver from dev). DECIDER: HUD shows **`CODEC h265`**, video decodes clean (no
-       green/artefacts/freeze — proves ndc's win32 H265RtpPacketizer + the HEVC FU/AP path),
-       and HEVC delivers Parsec-like quality at a lower bitrate than H.264 at the same scene.
-       If clean → promote (rolls A+B into v1.28.0). If ndc win32 lacks a working H265
-       packetizer → fall back to H.264 (the env just isn't set).
+     - **beta.1 e2e RESULT (WC, real hardware): DECODE PROVEN, one tuning bug fixed.**
+       ✅ A/B/E PASS — `startSession codec=hevc`, H265 offer (547B vs h264 629B),
+       `addH265Codec`+`H265RtpPacketizer` work on **ndc win32** (the never-verified risk),
+       `CODEC h265` in the HUD, image clean (no green/artefacts) = **HEVC FU-49/AP-48
+       depacketize + VideoToolbox decode PROVEN e2e — golden-rule-1 risk CLEARED.** enc_ms
+       10.1ms + GPU 45% (vs H.264 5.6ms/29%) = HEVC encode ~2× heavier (expected). ❌ D:
+       **~2s freezes** — ROOT CAUSE (WC from log): HEVC was capped at H.264's 25 Mbps, so a
+       VBR burst to maxrate at an IDR/scene-change overflowed the owner's Parsec-shared
+       ~35-45 Mbps link → seq-gap loss → VideoToolbox stalls on the broken reference until
+       the next periodic IDR (gop 2s). Tuning, not a code fault.
+     - **FIX (Mac-side, `c99e047`/`5e96d5d`, NO new agent build): codec-aware BWE ceiling
+       — HEVC caps at 15 Mbps (vs H.264 25).** HEVC@15 ≈ H.264@25 quality (its whole point),
+       and 15's maxrate burst stays under the link → no overflow → no loss → no stall. Plus
+       BWE now **emits its target on the first window** so the capturer (which launches at 25)
+       actually gets driven down to 15 (else the dead-band never sends B15000). Receiver-only
+       (BWE target rides signaling to the capturer live) → **owner just relaunches
+       `start-controller.command`**, agent stays on beta.1. Units cover the HEVC cap + first-emit.
+     - **NEXT: owner relaunches controller (HEVC now caps 15) → WC confirms the BWE drops
+       (25→21 ×6/10min) STOP and the ~2s freezes are GONE, HEVC quality still good at ~15.**
+       If clean → promote v1.28.0 (rolls A BWE + B H.265). ndc win32 H265 packetizer is
+       already proven, so no more prerelease needed for the codec itself.
 0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
    + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
    code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
