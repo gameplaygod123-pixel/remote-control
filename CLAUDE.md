@@ -1192,7 +1192,20 @@ Lessons:
            emit Generic NACK on a tracked gap (reorder-tolerant, rate-limited) + rebuild → C Mac-receiver
            shallow ~1-frame buffer + delay PLI ~1 RTT so the ~11ms retransmit lands → D prerelease +
            real-hw verify (golden rule #1). Pair with STEP 2 (lower bitrate) for the blackout losses
-           NACK can't beat. **IN PROGRESS: Phase A build running** (cmake 4.3.4, ndc v0.32.3 in scratchpad).
+           NACK can't beat.
+         - ✅ **Phase A + B DONE (2026-07-09).** A: ndc v0.32.3 builds from source on Mac (cmake 4.3.4
+           + cmake-js + brew openssl@3 static); self-built `node_datachannel.node` (darwin-arm64, N-API
+           8) loads + spike passes. **Install gotcha:** `cp` over a validated signed mach-o →
+           `SIGKILL (Code Signature Invalid)` on dlopen → fix = `rm`+`cp`+`codesign --force --sign -`.
+           B: the patch (`apps/desktop/native/ndc-nack/rtcpreceivingsession-nack.patch`) adds `pushNACK`
+           + a gap-detector in `incoming()` (forward gap 2..64; bigger=blackout→PLI). Compiles clean;
+           **`nack-test.cpp` PASS** (emits exactly one Generic NACK for the missing seqs); patched
+           binary drop-in (regression spike clean). Artifacts + full build/apply/verify/install recipe:
+           [`apps/desktop/native/ndc-nack/README.md`](apps/desktop/native/ndc-nack/README.md). The
+           risky unknowns (can we build+patch ndc? does NACK emission work?) are now CLEARED. **NEXT:
+           Phase C** — Mac receiver TS: shallow ~1-frame receive buffer + delay PLI ~1 RTT so the ~11ms
+           retransmit lands (NACK alone fires but the resend arrives after the AU is dropped) → Phase D
+           package + real-hw e2e (golden rule #1).
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a

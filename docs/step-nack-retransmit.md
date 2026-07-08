@@ -33,6 +33,21 @@ channels, not `RtcpReceivingSession`, so the media-only patch can't affect them.
   same seq (~1 per RTT) so we don't storm on a real blackout.
 - Keep it MINIMAL + behind the existing behavior (still send RR/PLI); NACK is additive.
 
+## Progress (2026-07-09)
+- ✅ **Phase A DONE** — ndc v0.32.3 builds from source on the Mac (cmake 4.3.4 + cmake-js +
+  brew openssl@3, OpenSSL statically linked). Self-built `node_datachannel.node` (darwin-arm64,
+  N-API 8) loads + `dev/spike-nack.mjs` passes. **Install gotcha found:** copying a signed
+  mach-o over one macOS already validated at that path → `SIGKILL (Code Signature Invalid)` on
+  dlopen; fix = `rm` + `cp` + `codesign --force --sign -` (proven).
+- ✅ **Phase B DONE** — the patch (`apps/desktop/native/ndc-nack/rtcpreceivingsession-nack.patch`)
+  adds `pushNACK()` + a gap-detector in `incoming()` (forward gap 2..`RTC_NACK_MAX_GAP=64`; bigger
+  = blackout → existing PLI path). Compiles clean; **`nack-test.cpp` PASS** (feeds in-order RTP
+  then a gap → the patched `RtcpReceivingSession` emits exactly one Generic NACK listing the
+  missing seqs). Patched binary is drop-in (regression spike clean). Full recipe +
+  build/apply/verify/install steps in [`apps/desktop/native/ndc-nack/README.md`](../apps/desktop/native/ndc-nack/README.md).
+- ⏳ **Phase C** (next) — Mac receiver TS: shallow ~1-frame receive buffer + delay PLI ~1 RTT.
+- ⏳ **Phase D** — package + real-hardware e2e (golden rule #1).
+
 ## Build approach (the hard part)
 ndc builds via `cmake-js` + cmake FetchContent(libdatachannel v0.24.2) + OpenSSL. Mac lacks
 `cmake` (install via brew). Plan:
