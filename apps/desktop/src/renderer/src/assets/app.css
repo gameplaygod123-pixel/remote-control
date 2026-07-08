@@ -580,10 +580,58 @@
   font-size: 15px;
 }
 
-/* Live telemetry reads as data: tabular figures so the digits don't jitter as they
-   update, and it's the row that grows most in fullscreen. */
+/* Live telemetry, as a row of labeled chips (dim uppercase label + bright value)
+   inside one pill -- reads at a glance instead of a run-on "·" string, and the
+   chips space out cleanly as the pill grows in fullscreen. The pill is always dark
+   (it sits on the dark float panel), so colors are fixed light, not themed. */
 .stats-badge {
-  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 0;
+  padding: 3px 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-variant-numeric: tabular-nums; /* digits don't jitter as they update */
+}
+.stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 10px;
+}
+.stat + .stat {
+  border-left: 1px solid rgba(255, 255, 255, 0.12); /* thin divider between chips */
+}
+.stat__k {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+.stat__v {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: nowrap;
+}
+
+/* Fullscreen: the row is the star of the readout -- give the chips more room and
+   step the type up so encode/network/bitrate read from across the screen. */
+.session-float.is-fullscreen .stats-badge {
+  gap: 5px 0;
+  padding: 5px 6px;
+}
+.session-float.is-fullscreen .stat {
+  padding: 2px 16px;
+  gap: 7px;
+}
+.session-float.is-fullscreen .stat__k {
+  font-size: 11px;
+}
+.session-float.is-fullscreen .stat__v {
+  font-size: 17px;
 }
 
 /* Input-dead alarm: video is connected but the input channel never opened

@@ -824,22 +824,68 @@ export default function ControllerSession({
             </span>
             {displayStats && displayStats.fps > 0 && (
               <span
-                className="connection-type-badge stats-badge"
+                className="stats-badge"
                 title="What's actually being received -- not just what was requested"
               >
-                {/* Encode (agent, relayed) + Decode (receiver). Native decode is not
-                    exposed by AVSampleBufferDisplayLayer, so it only shows on the
-                    WebRTC path; encode shows once the agent's capturer reports it. */}
-                {senderEncodeMs != null ? `Encode ${senderEncodeMs.toFixed(1)}ms · ` : ''}
-                {displayStats.processingMs > 0 ? `Decode ${displayStats.processingMs}ms · ` : ''}
-                Network {displayStats.rttMs ?? '?'}ms ·{' '}
-                {displayStats.jitterMs != null ? `Jitter ${displayStats.jitterMs}ms · ` : ''}
-                {displayStats.lossPct != null ? `Loss ${displayStats.lossPct.toFixed(1)}% · ` : ''}
-                {displayStats.fps}fps · {displayStats.width}×{displayStats.height} ·{' '}
-                {(displayStats.kbps / 1000).toFixed(1)}
-                {/* actual → BWE target: watch auto-bitrate adapt to the link. */}
-                {bweTargetKbps != null ? ` → ${(bweTargetKbps / 1000).toFixed(0)}` : ''} Mbps
-                {displayStats.codec ? ` · ${displayStats.codec}` : ''}
+                {/* Each metric is a labeled chip (dim label + bright value) so the row
+                    reads at a glance and can space out cleanly when it grows in
+                    fullscreen. Encode (agent, relayed) shows once the capturer reports
+                    it; Decode is receiver-side and only exists on the WebRTC path
+                    (AVSampleBufferDisplayLayer exposes no native decode time). */}
+                {nativeActive && (
+                  <span className="stat">
+                    <span className="stat__k">Encode</span>
+                    <span className="stat__v">
+                      {senderEncodeMs != null ? `${senderEncodeMs.toFixed(1)}ms` : '—'}
+                    </span>
+                  </span>
+                )}
+                {displayStats.processingMs > 0 && (
+                  <span className="stat">
+                    <span className="stat__k">Decode</span>
+                    <span className="stat__v">{displayStats.processingMs}ms</span>
+                  </span>
+                )}
+                <span className="stat">
+                  <span className="stat__k">Network</span>
+                  <span className="stat__v">{displayStats.rttMs ?? '?'}ms</span>
+                </span>
+                {displayStats.jitterMs != null && (
+                  <span className="stat">
+                    <span className="stat__k">Jitter</span>
+                    <span className="stat__v">{displayStats.jitterMs}ms</span>
+                  </span>
+                )}
+                {displayStats.lossPct != null && (
+                  <span className="stat">
+                    <span className="stat__k">Loss</span>
+                    <span className="stat__v">{displayStats.lossPct.toFixed(1)}%</span>
+                  </span>
+                )}
+                <span className="stat">
+                  <span className="stat__k">FPS</span>
+                  <span className="stat__v">{displayStats.fps}</span>
+                </span>
+                <span className="stat">
+                  <span className="stat__k">Res</span>
+                  <span className="stat__v">
+                    {displayStats.width}×{displayStats.height}
+                  </span>
+                </span>
+                <span className="stat">
+                  <span className="stat__k">Bitrate</span>
+                  {/* actual → BWE target: watch auto-bitrate adapt to the link. */}
+                  <span className="stat__v">
+                    {(displayStats.kbps / 1000).toFixed(1)}
+                    {bweTargetKbps != null ? ` → ${(bweTargetKbps / 1000).toFixed(0)}` : ''} Mbps
+                  </span>
+                </span>
+                {displayStats.codec && (
+                  <span className="stat">
+                    <span className="stat__k">Codec</span>
+                    <span className="stat__v">{displayStats.codec}</span>
+                  </span>
+                )}
               </span>
             )}
             {connectionType && (
