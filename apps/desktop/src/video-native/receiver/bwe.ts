@@ -115,6 +115,13 @@ class AimdController {
   private readonly ceil: number
   private target: number
   private lastEmitted: number
+  // Emit the target on the FIRST closed window regardless of the dead-band, so the
+  // capturer syncs to BWE's ceiling even if it launched at a DIFFERENT bitrate. This
+  // matters for HEVC: the capturer launches at config.startBitrateKbps (25 Mbps) but
+  // BWE's HEVC ceiling is 15, and without this the |target-lastEmitted|==0 dead-band
+  // would never send the B15000 that actually brings it down. For H.264 (launch ==
+  // ceiling) it's a harmless one-time reconfigure to the same value.
+  private firstEmit = true
 
   // ceilKbps defaults to the H.264 cap; HEVC passes the lower BWE_HEVC_CEIL_KBPS.
   // Start AT the ceiling so BWE only ever backs off from a known-good point.
@@ -135,9 +142,12 @@ class AimdController {
       // Probe back up toward the cap only when both signals are clear.
       this.target = Math.min(this.ceil, this.target + INCREASE_KBPS)
     }
-    // In the dead-band (mild loss/jitter): hold — don't oscillate.
-    const changed = Math.abs(this.target - this.lastEmitted) >= EMIT_THRESHOLD_KBPS
+    // In the dead-band (mild loss/jitter): hold — don't oscillate. But always emit
+    // the very first window so the sender adopts BWE's (codec-aware) target.
+    const changed =
+      this.firstEmit || Math.abs(this.target - this.lastEmitted) >= EMIT_THRESHOLD_KBPS
     if (changed) this.lastEmitted = this.target
+    this.firstEmit = false
     return { targetKbps: this.target, lossFraction, changed }
   }
 }

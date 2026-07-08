@@ -161,12 +161,16 @@ function feedRun(est: BandwidthEstimator, start: number, n: number): void {
   check('bwe: no packets -> tick() null (idle hold)', est.tick(CALM_JITTER) === null)
 }
 {
-  // 2. clean+calm at the start (= cap) -> stays pinned at the cap, changed=false
+  // 2. clean+calm at the start (= cap): FIRST window emits (syncs the capturer to
+  //    BWE's target), then subsequent clean windows hold at the cap with changed=false.
   const est = new BandwidthEstimator()
   feedRun(est, 0, 100)
   const u = est.tick(CALM_JITTER)
   check('bwe: clean at cap -> holds at cap (no overshoot)', u?.targetKbps === BWE_CEIL_KBPS)
-  check('bwe: clean at cap -> changed=false', u?.changed === false)
+  check('bwe: first window emits to sync the sender (changed=true)', u?.changed === true)
+  feedRun(est, 100, 100)
+  const u2 = est.tick(CALM_JITTER)
+  check('bwe: second clean window at cap -> changed=false (no re-emit)', u2?.changed === false)
   check('bwe: start == cap (25 Mbps, v1.26.0 proven target)', BWE_START_KBPS === BWE_CEIL_KBPS)
 }
 {
