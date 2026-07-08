@@ -862,11 +862,23 @@ Lessons:
    `B<kbps>` to the capturer stdin. **(B) H.265** — the real remaining Parsec gap
    (1.6× efficiency, ~half bitrate); needs codec-aware `nalSplitter.ts` + HEVC
    `decoder.swift` (VideoToolbox HW-decodes HEVC on the M4 Pro). Do A first, then B.
-   - **(A) BWE — ✅ PRERELEASE v1.27.0-beta.3 (BWE bufferbloat fix + HUD telemetry,
-     awaiting owner e2e).** BWE both halves landed (Mac AIMD `20e05bf`, agent forward
+   - **(A) BWE — ✅ PRERELEASE v1.27.0-beta.3 (BWE bufferbloat fix + HUD telemetry),
+     WC-VERIFIED on real hardware, baseline captured — PROMOTABLE to full v1.27.0.**
+     BWE both halves landed (Mac AIMD `20e05bf`, agent forward
      `3790ad2`). **ENABLE: launch the agent with `VIDEO_CAPTURER=1`** (default OFF =
      ffmpeg = no BWE). Signaling server restarted (PID 39111 now relays BOTH
      `video-bitrate` AND `video-sender-stats`).
+     - **BASELINE (WC, 2026-07-08, 330s continuous, Parsec running — full dataset in
+       [`docs/streaming-baseline-v1.27.0-beta.3.md`](docs/streaming-baseline-v1.27.0-beta.3.md)):**
+       `spawn capturer` (not ffmpeg), 2560×1440 H.264 VBR 25/35, gop 120 no-intra-refresh,
+       **locked-60 emit (avg 60.6/s)**, change-detection working (mouse-only = skip),
+       **enc_ms 3.4–6.6 (avg 5.6ms) — BELOW Parsec's 8.72ms**, GPU no longer downclocks to
+       210MHz under real use, **BWE ramps 21250→23250→25000 and stops at cap 25** (beta.2
+       fix confirmed, 0 bufferbloat backoffs on the good link), **error 0** across the
+       session, no double-cursor/freeze like beta.1. Owner: "ใช้งานได้ปกติ". The enc_ms
+       chain (capturer enc_ms → getEncodeMs → reportStats → AgentView relay → HUD) is
+       complete; only open item = owner reads the exact `Encode` number on the HUD
+       (~5–6ms) to close C 100%, then promote full v1.27.0.
      - **beta.3 adds the HUD telemetry the owner asked for ("เพิ่มตัวดู Encode/Decode +
        ขยายแถบตอน fullscreen"):** (1) **Encode ms** — the capturer measures pure HW
        encode (nvEncEncodePicture→nvEncLockBitstream, excludes the fwrite/pipe-
