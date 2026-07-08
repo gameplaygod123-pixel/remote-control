@@ -1090,12 +1090,37 @@ Lessons:
        mid-stream; the production `Decoder` decodes it clean). So **LTR is VT-compatible** (unlike
        intra-refresh, which failed to decode). Receiver needs NO change. (NB `EnableLTR` needs the
        low-latency rate-control encoder spec first — was `-12900` without it.)
-     - **NEXT — WC L1 (capturer NVENC LTR):** per the contract in step-ltr-recovery.md — mark an
-       LTR every ~30 frames (keep 2), on stdin `L` encode a P from the OLDER safe LTR (else IDR),
-       standalone-verify the `.h264` decodes + the recovery frame is a small P (not I). Then joint
-       prerelease `VIDEO_LTR=1` (+`VIDEO_CAPTURER=1`) → `analyze-session.mjs` should show hitch
-       recovery-ms DROP + the loss cascade vanish. **Optional cheap pre-step:** shrink the capturer
-       VBV (~250ms→~33ms) to cap IDR/burst size (guide §4.1) — measure the cascade drop first.
+     - **WC L1 DONE (`8e4f502`) → joint PRERELEASE v1.29.0-beta.1 (LTR) → e2e RESULT: LTR is
+       WORSE, left OFF.** capturer marks LTR every ~30f, on `L` encodes a P from the older LTR
+       (WC bitstream-verified: NVENC uses the LTR, requested=used=0x1; LTR-P 5-7× smaller than
+       IDR). But the Mac `analyze-session.mjs` on the stress video = **FREEZING, hitch avg 654ms
+       / max 1870ms** vs v1.28 fast-IDR's ~53ms. ROOT CAUSE: our loss is BLACKOUT (wipes the LTR
+       the LTR-P references) and, with **no per-frame ACK**, the sender guesses a "safe" LTR wrong
+       → the LTR-P is undecodable → the receiver's 1s PLI cooldown means the escalation-to-IDR
+       takes ~1-2s. **LTR fits SCATTERED loss, not our blackouts.** Verdict: `VIDEO_LTR` stays
+       **OFF by default** (= v1.28 fast-IDR, 53ms) — LTR code kept as a building block (WC's 2
+       polish fixes — mark sooner, `used=0x1` only — parked). Proper LTR needs ACK feedback (big).
+   - **THE PARSEC-FEC INSIGHT (WC measured Parsec on the SAME link) → the real gap + plan.**
+     Parsec during a high-motion video: **FPS locked 60, 0 dips, no spikes — yet it ALSO loses
+     packets** (its loss counter moves). A true external blackout would dip Parsec too; it doesn't
+     → **our 130-163-packet loss BURSTS are SELF-INDUCED** (we emit big frames; when one coincides
+     with link contention the whole burst drops). Parsec's small/paced/VBV≈1-frame frames + **FEC**
+     mean the same contention costs it only a few SCATTERED packets, which FEC repairs SILENTLY (no
+     round-trip, no hitch). Ours is REACTIVE (PLI→recovery = a hitch per loss). **So the last gap =
+     (1) our frames are too bursty + (2) no FEC.** Two-layer plan (full spec:
+     [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md)):
+     - **⭐ LAYER 1 (do FIRST, cheap — WC): shrink the NVENC VBV** ~250ms→~2 frames (guide §4.1) so
+       every frame is small → the 130-packet bursts become **scattered single-digit losses like
+       Parsec**. `analyze-session.mjs` DECIDER: lostpkts/event 130→<10 (proves self-induced) +
+       hitches drop. May fix enough on its own; is ALSO the precondition for FEC (FEC can't recover
+       a 150-packet blackout — parity is in the same dark window).
+     - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
+       exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
+       only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a
+       DataChannel-side redundancy scheme on the media pc (least-invasive); (c) extend the ndc
+       native binding for FEC/raw-RTP (big C++); (d) own the transport (biggest). Sequence:
+       Layer 1 → measure → prototype (b) if needed. Adaptive RS/XOR block FEC design + the full
+       feasibility breakdown are in `docs/step-fec-recovery.md`.
 0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
    + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
    code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
