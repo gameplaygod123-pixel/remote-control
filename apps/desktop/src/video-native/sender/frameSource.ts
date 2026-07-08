@@ -28,6 +28,9 @@ export interface FrameSource {
   start(): void
   /** Force a fresh IDR as soon as possible (answer to an RTCP PLI). */
   forceKeyframe(): void
+  /** BWE: set a new VBR target (kbps) live. The capturer retunes NVENC in place
+   *  (no respawn); other sources that can't retune live no-op. */
+  setBitrate(kbps: number): void
   stop(): void
 }
 
@@ -81,6 +84,13 @@ export class FfmpegFrameSource implements FrameSource {
     if (this.stopped) return
     this.cb.onLog?.('forceKeyframe -> respawning ffmpeg for a fresh IDR')
     this.respawn()
+  }
+
+  setBitrate(kbps: number): void {
+    // ffmpeg/ddagrab can't be reconfigured live (a bitrate change = a respawn, too
+    // disruptive for BWE's ~1s cadence). BWE is a capturer-path feature; on the
+    // ffmpeg fallback we log and hold the fixed rate rather than churn the encoder.
+    this.cb.onLog?.(`setBitrate(${kbps}) ignored -- ffmpeg source can't retune live`)
   }
 
   stop(): void {
@@ -259,6 +269,25 @@ export class CapturerFrameSource implements FrameSource {
     this.respawn()
   }
 
+  setBitrate(kbps: number): void {
+    if (this.stopped) return
+    // BWE live retune: 'B'<ascii-kbps>'\n' -> capturer runs nvEncReconfigureEncoder
+    // in place (no respawn, no forced IDR). Same stdin control channel as 'I'.
+    const rounded = Math.round(kbps)
+    if (!Number.isFinite(rounded) || rounded <= 0) return
+    const proc = this.proc
+    if (proc?.stdin?.writable) {
+      try {
+        proc.stdin.write(`B${rounded}\n`)
+        this.cb.onLog?.(`setBitrate -> sent B${rounded} to capturer stdin`)
+        return
+      } catch {
+        /* pipe wedged; drop this update -- the next one will retry */
+      }
+    }
+    this.cb.onLog?.(`setBitrate(${rounded}) skipped -- capturer stdin unavailable`)
+  }
+
   stop(): void {
     this.stopped = true
     if (this.restartTimer) {
@@ -400,6 +429,10 @@ export class SyntheticFrameSource implements FrameSource {
 
   forceKeyframe(): void {
     this.forceIdr = true
+  }
+
+  setBitrate(): void {
+    /* synthetic source emits fixed-size frames; nothing to retune */
   }
 
   stop(): void {

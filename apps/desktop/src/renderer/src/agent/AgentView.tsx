@@ -690,6 +690,10 @@ function AgentView(): React.JSX.Element {
             message.sdpMid,
             message.sdpMLineIndex
           )
+        } else if (message.type === 'video-bitrate' && message.channel === 'video-native') {
+          // BWE: the Mac receiver's AIMD target -> forward to the sender helper,
+          // which writes 'B<kbps>' to the capturer stdin for a live NVENC retune.
+          void window.api.videoSender.setBitrate(message.kbps)
         } else if (message.type === 'ice-candidate' && message.channel === 'input') {
           void window.api.inputHelper.remoteIce(
             message.candidate,

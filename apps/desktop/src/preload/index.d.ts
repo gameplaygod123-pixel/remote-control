@@ -114,6 +114,7 @@ declare global {
         onIce: (
           handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
         ) => void
+        setBitrate: (kbps: number) => Promise<void>
         onStats: (
           handler: (stats: import('../video-native/shared/contract').NativeVideoStats) => void
         ) => void

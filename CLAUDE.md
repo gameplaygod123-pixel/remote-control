@@ -874,10 +874,25 @@ Lessons:
      `packages/protocol`; server relays it in the sdp/ice `resolveRelayTarget`
      group — **the live signaling server must be rebuilt/restarted to relay it**,
      like `video-native` SDP needed; old servers just drop it → sender holds
-     launch bitrate = graceful). **WC's remaining half = the 7 agent-side forward
-     points** (signaling `video-bitrate` → agent main → IPC → video-sender helper
-     → capturer stdin `B<kbps>`; capturer `B<kbps>` retune already verified
-     25→12→45). WC was blocked ONLY on the protocol type — now landed.
+     launch bitrate = graceful).
+     - **AGENT SIDE DONE (WC) — the 7 forward points wired, typecheck+lint+units
+       clean, awaiting joint prerelease.** Signaling `video-bitrate` (channel
+       `video-native`) → `AgentView.tsx` handler → `videoSender.setBitrate` (preload
+       + `preload/index.d.ts`) → `ipcMain 'video-sender:set-bitrate'` (`main/index.ts`)
+       → `videoSenderHost.setBitrate` → IPC `{cmd:'set-bitrate', kbps}`
+       (`shared/ipc.ts` MainToVideoSender + VideoSenderHost) → `sender/index.ts`
+       switch → `FrameSource.setBitrate`. `CapturerFrameSource.setBitrate` writes
+       **`B<kbps>\n`** to the capturer stdin (mirrors `forceKeyframe`→`'I'`, rounds +
+       writable-guards, drops on wedged pipe); `FfmpegFrameSource`/`Synthetic` no-op
+       (ffmpeg can't retune live — BWE is a capturer-path feature). Capturer
+       `B<kbps>\n` live retune RE-VERIFIED locally on the RTX this session (drove
+       25→12→45→20 Mbps mid-stream via stdin: one process, exit 0, no respawn, output
+       decodes 100% clean). ⚠️ capturer prints NO retune log → judge e2e by the
+       bitrate that actually goes out, not a `[capturer]` log line. **NEXT = Mac
+       rebuild/restart the live signaling server (to relay `video-bitrate`) + build
+       the joint prerelease `VIDEO_CAPTURER=1` (golden rule #1), then owner e2e:
+       static→target holds, narrow net→loss→bitrate drops, open→ramps to 60 & holds;
+       pass = received fps ≈ emitted (net-drop 0) + smooth, NOT "locked 60".**
    - **(B) H.265 — capturer `--codec` now passed (`20e05bf`, `capturerArgs.ts`:
      config.codec 'hevc'→`--codec h265`, unit-tested).** WC verified `--codec h265`
      emits valid HEVC Annex-B (VPS+SPS+PPS in-band, decodes clean). REMAINING = Mac:

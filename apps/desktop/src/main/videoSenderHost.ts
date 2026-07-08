@@ -131,6 +131,10 @@ export function startVideoSenderHost(callbacks: VideoSenderCallbacks): VideoSend
     remoteIce: (candidate, sdpMid, sdpMLineIndex) => {
       sendToChild({ cmd: 'remote-ice', candidate, sdpMid, sdpMLineIndex })
     },
+    setBitrate: (kbps) => {
+      log(`setBitrate() ${kbps}kbps`)
+      sendToChild({ cmd: 'set-bitrate', kbps })
+    },
     stopSession: () => {
       log('stopSession()')
       activeConfig = null

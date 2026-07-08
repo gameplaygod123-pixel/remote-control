@@ -400,6 +400,14 @@ process.on('message', (raw: MainToVideoSender) => {
         log(`addRemoteCandidate threw: ${(e as Error).message}`)
       }
       break
+    case 'set-bitrate':
+      if (!current) {
+        log('set-bitrate with no active session -- ignored')
+        break
+      }
+      log(`set-bitrate ${raw.kbps}kbps -> forwarding to frame source`)
+      current.source?.setBitrate(raw.kbps)
+      break
     case 'stop-session':
       log('stop-session')
       closeSession()

@@ -629,6 +629,11 @@ app.whenReady().then(async () => {
     (_event, candidate: string, sdpMid: string | null, sdpMLineIndex: number | null): void =>
       videoSenderHost?.remoteIce(candidate, sdpMid, sdpMLineIndex)
   )
+  // BWE: a 'video-bitrate' signaling msg from the Mac receiver's AIMD arrives at
+  // the agent renderer and is forwarded here -> helper -> capturer stdin 'B<kbps>'.
+  ipcMain.handle('video-sender:set-bitrate', (_event, kbps: number): void =>
+    videoSenderHost?.setBitrate(kbps)
+  )
 
   // Bridges the controller renderer to the native video-receiver process (see
   // videoReceiverHost.ts). Reports ready only when the host spawned AND the

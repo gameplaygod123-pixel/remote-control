@@ -30,6 +30,10 @@ export type MainToVideoSender =
   | { cmd: 'remote-answer'; sdp: string }
   | { cmd: 'remote-ice'; candidate: string; sdpMid: string | null; sdpMLineIndex: number | null }
   | { cmd: 'stop-session' }
+  /** BWE: a new VBR target (kbps) from the Mac receiver's AIMD, relayed here over
+   *  signaling. The helper forwards it to the capturer stdin ('B<kbps>') for a live
+   *  NVENC reconfigure (no respawn). See receiver/bwe.ts + docs/bwe-hevc-plan.md. */
+  | { cmd: 'set-bitrate'; kbps: number }
   | { cmd: 'ping' }
 
 /** Main-side handle over the sender helper (mirror of InputHelperHost). */
@@ -38,6 +42,8 @@ export interface VideoSenderHost {
   startSession(config: VideoConfig): void
   remoteAnswer(sdp: string): void
   remoteIce(candidate: string, sdpMid: string | null, sdpMLineIndex: number | null): void
+  /** BWE: forward a new VBR target (kbps) to the capturer for a live retune. */
+  setBitrate(kbps: number): void
   stopSession(): void
   destroy(): void
 }

@@ -152,6 +152,8 @@ const api = {
       sdpMLineIndex: number | null
     ): Promise<void> =>
       ipcRenderer.invoke('video-sender:remote-ice', candidate, sdpMid, sdpMLineIndex),
+    setBitrate: (kbps: number): Promise<void> =>
+      ipcRenderer.invoke('video-sender:set-bitrate', kbps),
     onOffer: (handler: (sdp: string) => void): void => {
       ipcRenderer.on('video-sender:offer', (_event, sdp) => handler(sdp))
     },
