@@ -1181,6 +1181,18 @@ Lessons:
            MINOR JUDDER/60@97%, done cheap; (B) all-the-way → the libdatachannel NACK-emit patch (most
            contained native option, > app-FEC given RTT 11ms) + a shallow receive buffer. Detail +
            spike in [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
+         - ✅ **OWNER PICKED (B) — native NACK patch, "ไปให้สุดทาง" (2026-07-09). Full plan:
+           [`docs/step-nack-retransmit.md`](docs/step-nack-retransmit.md).** ⭐ KEY SIMPLIFICATION: the
+           RECEIVER (needs the NACK-emit patch) runs on the **Mac**; the SENDER (`RtcpNackResponder`,
+           retransmits) runs on the **Windows agent** and already works in stock v0.24.2 → **rebuild ndc
+           for darwin-arm64 ONLY; the Windows agent binary stays untouched** (halves the work, native
+           risk on one platform). Master libdatachannel ALSO doesn't emit NACK (checked) → no upgrade
+           shortcut. Phases: A baseline source build on Mac (de-risk toolchain FIRST — cmake+cmake-js+
+           OpenSSL; N-API 8 = ABI-stable across node/electron) → B patch `rtcpreceivingsession.cpp` to
+           emit Generic NACK on a tracked gap (reorder-tolerant, rate-limited) + rebuild → C Mac-receiver
+           shallow ~1-frame buffer + delay PLI ~1 RTT so the ~11ms retransmit lands → D prerelease +
+           real-hw verify (golden rule #1). Pair with STEP 2 (lower bitrate) for the blackout losses
+           NACK can't beat. **IN PROGRESS: Phase A build running** (cmake 4.3.4, ndc v0.32.3 in scratchpad).
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a
