@@ -224,6 +224,11 @@ capturer.exe [options]
   --bitrate <kbps>                NVENC VBR target average. default: 25000.
   --maxrate <kbps>                NVENC VBR hard cap (-maxrate). default: 40000.
   --gop <frames>                  IDR interval. default: 120 (≈2s@60). NO intra-refresh, EVER.
+  --vbv-ms <ms>                   NVENC VBV buffer size in ms. Default 250 (byte-identical);
+                                  FEC Layer 1 drives ~33 (2 frames@60) via tune-file `vbv=`
+                                  / env VIDEO_CAPTURER_VBV_MS for the A/B (both override the
+                                  CLI). DONE (WC 95177e1) → cfg.vbvMs, Init + BWE reconfigure.
+                                  Layer 1 of the FEC plan — see docs/step-fec-recovery.md.
   --selftest                      3a change-detection log loop only (no encode).
 ```
 

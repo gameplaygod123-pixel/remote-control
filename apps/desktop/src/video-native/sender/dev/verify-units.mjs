@@ -269,20 +269,26 @@ bundle()
         'capturer: -g 120 default (NVENC_KEYFRAME_GOP, NO intra-refresh flag)',
         a.includes('--gop 120') && !a.includes('intra-refresh')
       )
+      check(
+        'capturer: --vbv-ms 250 default (byte-identical; Layer-1 A/B drives 33 via tune-file)',
+        a.includes('--vbv-ms 250')
+      )
       const b = buildCapturerArgs(cfg, {
         output: '/tmp/out.h264',
         outputIdx: 1,
         gop: 60,
         bitrateKbps: 30000,
-        maxBitrateKbps: 50000
+        maxBitrateKbps: 50000,
+        vbvMs: 33
       }).join(' ')
       check(
-        'capturer: overrides (output path, monitor, gop, bitrate, maxrate)',
+        'capturer: overrides (output path, monitor, gop, bitrate, maxrate, vbv-ms)',
         b.includes('--output /tmp/out.h264') &&
           b.includes('--monitor 1') &&
           b.includes('--gop 60') &&
           b.includes('--bitrate 30000') &&
-          b.includes('--maxrate 50000')
+          b.includes('--maxrate 50000') &&
+          b.includes('--vbv-ms 33')
       )
     }
 

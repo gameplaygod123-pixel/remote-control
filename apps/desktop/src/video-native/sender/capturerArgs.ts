@@ -15,6 +15,25 @@
 import type { VideoConfig } from '../shared/contract'
 import { NVENC_KEYFRAME_GOP } from './ffmpegArgs'
 
+/**
+ * NVENC VBV (bitrate buffer) size in milliseconds. 250ms (`maxrate/4`) is the
+ * historical byte-identical default: it lets a single IDR / high-motion / recovery
+ * frame balloon into a 130–160-packet burst, and when one coincides with link
+ * contention the WHOLE burst is dropped (the self-induced blackout the analyzer
+ * measured — see docs/step-fec-recovery.md Layer 1). Parsec's VBV is ≈1 frame, so
+ * the same contention costs it only a few SCATTERED packets.
+ *
+ * FEC Layer 1 shrinks this to ~2 frames (~33ms @ 60fps) to cap per-frame size →
+ * bursts become small/scattered (analyzer decider: lostpkts/event 130→single
+ * digits), which is also the PRECONDITION for FEC. **We keep the default at 250
+ * (byte-identical) until the A/B on real hardware validates the shrink** — the
+ * experiment is driven WITHOUT a Mac build via the capturer tune-file (`vbv=33` in
+ * %LOCALAPPDATA%\pr-capturer-tune.txt) or env VIDEO_CAPTURER_VBV_MS (both override
+ * this CLI value in the capturer). Once the analyzer confirms 33 (or whatever wins)
+ * cuts the bursts without a quality hit, flip this constant + ship a prerelease.
+ */
+export const NVENC_VBV_MS = 250
+
 export interface CapturerArgOptions {
   /** `stdout` (default, the sender path) or a file path (offline .h264 testing). */
   output?: string
@@ -27,6 +46,11 @@ export interface CapturerArgOptions {
   bitrateKbps?: number
   /** NVENC VBR hard cap (kbps). Default = config.maxBitrateKbps. */
   maxBitrateKbps?: number
+  /** NVENC VBV buffer size in milliseconds. Default = NVENC_VBV_MS (250, byte-
+   *  identical). FEC Layer 1 drives this to ~33 (2 frames @ 60fps) once the A/B
+   *  validates it — smaller = smaller per-frame bursts = scattered loss instead of
+   *  blackout bursts (see NVENC_VBV_MS). */
+  vbvMs?: number
 }
 
 /** Our VideoCodec ('h264'|'hevc') -> the capturer's --codec token ('h264'|'h265').
@@ -45,6 +69,7 @@ export function buildCapturerArgs(config: VideoConfig, opts: CapturerArgOptions 
   const gop = opts.gop ?? NVENC_KEYFRAME_GOP
   const bitrateKbps = opts.bitrateKbps ?? config.startBitrateKbps
   const maxBitrateKbps = opts.maxBitrateKbps ?? config.maxBitrateKbps
+  const vbvMs = opts.vbvMs ?? NVENC_VBV_MS
   return [
     '--output',
     output,
@@ -61,6 +86,11 @@ export function buildCapturerArgs(config: VideoConfig, opts: CapturerArgOptions 
     '--maxrate',
     String(maxBitrateKbps),
     '--gop',
-    String(gop)
+    String(gop),
+    // VBV buffer (default 250ms = byte-identical). FEC Layer 1 will shrink to ~2
+    // frames so per-frame bursts stay small (scattered loss vs 130-packet blackout
+    // bursts) once the tune-file A/B validates it — see NVENC_VBV_MS.
+    '--vbv-ms',
+    String(vbvMs)
   ]
 }

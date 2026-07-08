@@ -1109,11 +1109,30 @@ Lessons:
      round-trip, no hitch). Ours is REACTIVE (PLI→recovery = a hitch per loss). **So the last gap =
      (1) our frames are too bursty + (2) no FEC.** Two-layer plan (full spec:
      [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md)):
-     - **⭐ LAYER 1 (do FIRST, cheap — WC): shrink the NVENC VBV** ~250ms→~2 frames (guide §4.1) so
+     - **⭐ LAYER 1 (do FIRST, cheap): shrink the NVENC VBV** ~250ms→~2 frames (guide §4.1) so
        every frame is small → the 130-packet bursts become **scattered single-digit losses like
        Parsec**. `analyze-session.mjs` DECIDER: lostpkts/event 130→<10 (proves self-induced) +
        hitches drop. May fix enough on its own; is ALSO the precondition for FEC (FEC can't recover
        a 150-packet blackout — parity is in the same dark window).
+       - **BUILT BOTH ENDS + A/B ARMED (2026-07-08) — awaiting the run.** Root cause pinned:
+         Parsec on the SAME link doesn't drop → our 130-163-pkt bursts are self-induced = a single
+         ~290KB IDR (VBR under a 250ms VBV = maxrate/4) overflows the ~40 Mbps link in one shot.
+         - ✅ **WC (`95177e1`, pushed):** capturer `--vbv-ms <ms>` → `NvEncConfig.vbvMs` (Init +
+           BWE live-reconfigure both). Precedence: **CLI default 250 (byte-identical) → `--vbv-ms`
+           → tune-file `vbv=` / env `VIDEO_CAPTURER_VBV_MS`.** Standalone proof (1440p, gop 120,
+           VBR 25/35) max single frame: H.264 291→122KB (**2.4×**), HEVC 223→121KB (**1.85×**);
+           frame count identical (360, 3 IDR/357 P) = no structural change, valid Annex-B.
+         - ✅ **Mac (`capturerArgs.ts`):** `--vbv-ms` in the CLI contract + `NVENC_VBV_MS = 250`.
+           **Default stays 250 — the unvalidated 33 is NOT baked into a build** (golden rule #1);
+           the A/B runs on the CURRENT build (agent TS doesn't pass `--vbv-ms` yet → capturer's 250
+           default) via the tune-file, no rebuild. Flip after the analyzer validates → prerelease.
+           Unit-tested + typecheck clean.
+         - 🎯 **THE A/B (owner, no reinstall):** add `vbv=33` to `%LOCALAPPDATA%\pr-capturer-tune.txt`
+           → reconnect → same HEVC stress video (`VIDEO_CAPTURER=1 VIDEO_CODEC=hevc`, LTR OFF) → Mac
+           `node scripts/analyze-session.mjs`. Remove line = back to 250. **PASS if lostpkts/event
+           130-163 → single/low-double digits (scattered = self-induced confirmed) + hitches drop.**
+           Stays ~130 → real external contention → Layer 2 FEC. Shrinks → cheap fix closed it (then
+           judge if residual needs FEC). Detail: [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a

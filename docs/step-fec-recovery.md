@@ -30,6 +30,31 @@ capturer one-liner (WC) and the **precondition for FEC** — FEC cannot recover 
 loss. **Do this first + measure** (`analyze-session.mjs`: lostpkts/event should fall from
 130-160 to single digits). It may cut the judder enough on its own.
 
+**Layer 1 — implementation status (2026-07-08): BUILT both ends, A/B armed, awaiting the run.**
+- ✅ **WC done + pushed (commit `95177e1`)** — capturer C++ `--vbv-ms <ms>` wired to
+  `NvEncConfig.vbvMs` (used by BOTH Init and the live BWE `SetBitrate` reconfigure → a
+  bitrate retune keeps the small buffer). Precedence: **CLI default `250` (byte-identical)
+  → `--vbv-ms` → tune-file `vbv=` / env `VIDEO_CAPTURER_VBV_MS`** (the last two override, so
+  the owner A/Bs without a rebuild). Init/encode log now prints the vbv ms.
+  **Standalone proof (2560×1440, gop 120, VBR 25/35), max single frame:** H.264 291KB→122KB
+  (**2.4×** smaller burst @ vbv 33), HEVC 223KB→121KB (**1.85×**); frame counts identical
+  (360 = 3 IDR / 357 P) at both = no structural change, still valid Annex-B.
+- ✅ **Mac done** (`capturerArgs.ts`, this commit): `--vbv-ms` in the reviewable CLI contract
+  + `NVENC_VBV_MS = 250`. **Default stays 250 (byte-identical) — we do NOT bake the unvalidated
+  33 into a build.** The A/B runs on the CURRENT build (agent TS doesn't pass `--vbv-ms` yet →
+  capturer uses its 250 default) via the tune-file, so nothing needs rebuilding to test. Once
+  the analyzer validates the shrink, flip `NVENC_VBV_MS` (or pass `vbvMs` per-tuning) → build a
+  prerelease. Unit-tested (default 250 + override) + typecheck clean.
+- 🎯 **THE A/B (owner, on the current build — no reinstall):** add `vbv=33` to
+  `%LOCALAPPDATA%\pr-capturer-tune.txt` → reconnect (no agent relaunch) → drive the SAME HEVC
+  stress video (`VIDEO_CAPTURER=1 VIDEO_CODEC=hevc`, LTR OFF) → Mac runs
+  `node scripts/analyze-session.mjs`. Remove the line to fall back to 250.
+- 🎯 **PASS if:** lostpkts per loss event **130-163 → single/low-double digits** (scattered, not
+  one wire-filling burst = confirms self-induced) **and** hitches / recovery-ms drop. If the
+  bursts stay ~130 → it's real EXTERNAL contention → go to Layer 2 FEC. If they shrink → the
+  cheap fix closed most of it; then decide if the residual still needs FEC. Watch for a quality
+  regression on complex frames (VBV too small); if so sweep `vbv=` up (1-frame..3-frame) to taste.
+
 **Layer 2 — FEC (recover the scattered remainder silently).** Systematic block FEC:
 - Sender: for every group of **K** media RTP packets, generate **M** parity packets
   (XOR = recover any 1 lost/group; Reed–Solomon RS(K,M) = recover up to M lost/group —
