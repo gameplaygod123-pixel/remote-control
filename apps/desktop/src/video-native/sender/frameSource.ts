@@ -28,6 +28,13 @@ export interface FrameSource {
   start(): void
   /** Force a fresh IDR as soon as possible (answer to an RTCP PLI). */
   forceKeyframe(): void
+  /** LTR recovery: encode a small P-frame referencing the last SAFE long-term
+   *  reference (a frame old enough the receiver is sure to have) instead of a full
+   *  IDR -- cheap, no keyframe burst, no cascade. The Parsec/Moonlight loss-recovery
+   *  technique (docs/parsec-parity-research.md). Only the capturer implements it;
+   *  others fall back to forceKeyframe(). If LTR recovery doesn't resync (receiver
+   *  keeps PLIing), the caller escalates to forceKeyframe(). */
+  ltrRecover(): void
   /** BWE: set a new VBR target (kbps) live. The capturer retunes NVENC in place
    *  (no respawn); other sources that can't retune live no-op. */
   setBitrate(kbps: number): void
@@ -90,6 +97,11 @@ export class FfmpegFrameSource implements FrameSource {
     if (this.stopped) return
     this.cb.onLog?.('forceKeyframe -> respawning ffmpeg for a fresh IDR')
     this.respawn()
+  }
+
+  ltrRecover(): void {
+    // ffmpeg has no LTR-on-command path; recover with a full IDR (respawn) as before.
+    this.forceKeyframe()
   }
 
   setBitrate(kbps: number): void {
@@ -287,6 +299,26 @@ export class CapturerFrameSource implements FrameSource {
     this.respawn()
   }
 
+  ltrRecover(): void {
+    if (this.stopped) return
+    // LTR recovery: 'L' on stdin -> the capturer encodes a P-frame from the last SAFE
+    // long-term reference (no IDR burst). Same stdin control channel as 'I'/'B'. A
+    // capturer that predates LTR ignores the unknown byte; the caller escalates to a
+    // real IDR (forceKeyframe) if the receiver keeps PLIing, so recovery is guaranteed.
+    const proc = this.proc
+    if (proc?.stdin?.writable) {
+      try {
+        proc.stdin.write('L')
+        this.cb.onLog?.('ltrRecover -> sent L to capturer stdin')
+        return
+      } catch {
+        /* fall through to a full IDR if the pipe is wedged */
+      }
+    }
+    this.cb.onLog?.('ltrRecover -> capturer stdin unavailable; forcing IDR')
+    this.forceKeyframe()
+  }
+
   setBitrate(kbps: number): void {
     if (this.stopped) return
     // BWE live retune: 'B'<ascii-kbps>'\n' -> capturer runs nvEncReconfigureEncoder
@@ -457,6 +489,11 @@ export class SyntheticFrameSource implements FrameSource {
   }
 
   forceKeyframe(): void {
+    this.forceIdr = true
+  }
+
+  ltrRecover(): void {
+    // no real encoder -> just emit an IDR like forceKeyframe
     this.forceIdr = true
   }
 

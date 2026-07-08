@@ -133,6 +133,22 @@ function capturerEnabled(): boolean {
 function resolveCodec(config: VideoConfig): VideoCodec {
   return process.env.VIDEO_CODEC === 'hevc' ? 'hevc' : config.codec
 }
+
+// ── LTR (Long-Term Reference) recovery opt-in ─────────────────────────────────
+// On a PLI, recover with a small LTR-P frame (from the last safe long-term reference)
+// instead of a full IDR burst -- the Parsec/Moonlight technique (no keyframe spike, no
+// cascade). OPT-IN via VIDEO_LTR=1 and default OFF (current IDR path, byte-identical +
+// safe with a capturer that predates the 'L' stdin command). Requires the LTR-capable
+// capturer. If an LTR-P doesn't resync the receiver (a repeat PLI arrives soon after),
+// we escalate to a real IDR -- so recovery is always guaranteed. See
+// docs/parsec-parity-research.md + docs/step-ltr-recovery.md.
+function ltrEnabled(): boolean {
+  return process.env.VIDEO_LTR === '1'
+}
+// A repeat PLI within this window of an LTR attempt means the LTR-P didn't resync the
+// decoder (e.g. the receiver never had that reference) -> escalate to a full IDR. Above
+// the 400ms cooldown (so a genuine repeat is honoured) and below a fresh-loss interval.
+const LTR_ESCALATE_MS = 1_200
 function resolveCapturerPath(): string | null {
   const fromEnv = process.env.CAPTURER_PATH
   if (fromEnv && existsSync(fromEnv)) return fromEnv
@@ -152,8 +168,11 @@ interface Session {
   rtpConfig: InstanceType<typeof RtpPacketizationConfig>
   source: FrameSource | null
   config: VideoConfig
-  /** performance.now() of the last honoured forceKeyframe -- PLI debounce (item A). */
+  /** performance.now() of the last honoured recovery (LTR or IDR) -- PLI debounce. */
   lastKeyframeAt: number
+  /** Whether the last recovery was an LTR-P (vs a full IDR). A repeat PLI soon after
+   *  an LTR attempt means the LTR didn't resync -> escalate to a real IDR. */
+  lastRecoverWasLtr: boolean
   firstCaptureMs: number
   framesInWindow: number
   bytesInWindow: number
@@ -222,6 +241,7 @@ function startSession(rawConfig: VideoConfig): void {
     source: null,
     config,
     lastKeyframeAt: 0,
+    lastRecoverWasLtr: false,
     firstCaptureMs: 0,
     framesInWindow: 0,
     bytesInWindow: 0,
@@ -276,9 +296,22 @@ function startSession(rawConfig: VideoConfig): void {
       )
       return
     }
-    session.lastKeyframeAt = now
-    log(`RTCP keyframe request (pli=${fb.pli} fir=${fb.fir}) -> forcing IDR`)
-    session.source?.forceKeyframe()
+    // LTR-first recovery (opt-in): answer a PLI with a cheap LTR-P frame instead of a
+    // full IDR. If a PLI arrives again within LTR_ESCALATE_MS of the last LTR attempt,
+    // the LTR-P didn't resync the decoder -> escalate to a real IDR. Default (LTR off)
+    // = the proven IDR path.
+    if (ltrEnabled() && !(session.lastRecoverWasLtr && since < LTR_ESCALATE_MS)) {
+      session.lastKeyframeAt = now
+      session.lastRecoverWasLtr = true
+      log(`RTCP keyframe request (pli=${fb.pli} fir=${fb.fir}) -> LTR recovery`)
+      session.source?.ltrRecover()
+    } else {
+      session.lastKeyframeAt = now
+      session.lastRecoverWasLtr = false
+      const why = ltrEnabled() ? 'LTR did not resync -> forcing IDR' : 'forcing IDR'
+      log(`RTCP keyframe request (pli=${fb.pli} fir=${fb.fir}) -> ${why}`)
+      session.source?.forceKeyframe()
+    }
   })
   track.onError((err) => {
     if (current === session) log(`track error: ${err}`)
