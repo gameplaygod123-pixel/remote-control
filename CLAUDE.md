@@ -1060,6 +1060,42 @@ Lessons:
      owner relaunches `start-controller.command` → run `analyze-session.mjs` → see if loss/PLI/
      hitch counts drop (reorder was the cause) or hold (real network loss → then FEC/accept the
      ~10ms blip).** The auto-test now decides instead of eyeballing.
+   - **JUDDER DIAGNOSED via the live analyzer (owner ran a stress video) → tuning FLOOR hit,
+     then PIVOT to LTR.** The analyzer on the live HEVC session showed the residual = **total
+     link BLACKOUTS** (each loss = 130–163 CONSECUTIVE packets = the link goes dark ~90ms;
+     `loss=1 lostpkts=137` per 1s window = one gap, not scattered), **isolated ~every 20-60s**,
+     and **bitrate-INDEPENDENT** (62 pkts lost at 12.5 Mbps, 17 at 16.8) = EXTERNAL contention
+     (Parsec grabbing the shared ~40 Mbps link / Wi-Fi), not our encoder. So BWE/bitrate tuning
+     is proven futile (cap-15 + `HOLD_WINDOWS_AFTER_BACKOFF`=3 hold-after-backoff converge landed
+     but can't stop isolated external bursts). Recovery is already ~53ms; normal desktop use =
+     loss 0. **FEC REJECTED after the analysis:** it can't recover a total blackout (parity is in
+     the same dark window) without ~200ms interleaving latency = kills the mouse-glued feel.
+   - **PARSEC-PARITY RESEARCH (owner asked to research how to match Parsec) →
+     [`docs/parsec-parity-research.md`](docs/parsec-parity-research.md):** gap-analysis vs the
+     low-latency playbook (the owner's guide + NVENC/VideoToolbox docs + Moonlight LTR issue #120)
+     = **we already do ~90%** (zero-copy, HW codecs, low-latency present, BWE, reorder-tolerant
+     loss, H.265). **The ONE remaining Parsec technique = LTR (Long-Term Reference) recovery**:
+     on loss, encode a small P-frame from the last SAFE long-term reference instead of a full IDR
+     burst (no keyframe spike, no self-congesting cascade, faster). Owner picked "ลุย LTR เลย".
+   - **LTR recovery IN PROGRESS ([`docs/step-ltr-recovery.md`](docs/step-ltr-recovery.md)):**
+     - **Mac sender wiring DONE (`7cbe3b3`):** `FrameSource.ltrRecover()` (CapturerFrameSource
+       writes **`L`** to stdin; ffmpeg/synthetic fall back to `forceKeyframe`); `sender/index.ts`
+       PLI handler — `VIDEO_LTR=1` → answer a PLI with `ltrRecover()` (LTR-P), and a repeat PLI
+       within `LTR_ESCALATE_MS`=1200ms → escalate to a real IDR (guaranteed recovery). **No
+       per-frame ACK / no receiver protocol change** — reuses the existing PLI; only the sender's
+       response changes. Default (LTR off) = proven IDR path, byte-identical + safe with a
+       pre-LTR capturer. typecheck/units/lint clean.
+     - **Mac decode DE-RISKED (`299b0f8`, golden rule #1): VideoToolbox decodes an LTR stream
+       119/120** (`--selftest-ltr` — a VT low-latency encoder marks LTRs + forces an LTR-refresh
+       mid-stream; the production `Decoder` decodes it clean). So **LTR is VT-compatible** (unlike
+       intra-refresh, which failed to decode). Receiver needs NO change. (NB `EnableLTR` needs the
+       low-latency rate-control encoder spec first — was `-12900` without it.)
+     - **NEXT — WC L1 (capturer NVENC LTR):** per the contract in step-ltr-recovery.md — mark an
+       LTR every ~30 frames (keep 2), on stdin `L` encode a P from the OLDER safe LTR (else IDR),
+       standalone-verify the `.h264` decodes + the recovery frame is a small P (not I). Then joint
+       prerelease `VIDEO_LTR=1` (+`VIDEO_CAPTURER=1`) → `analyze-session.mjs` should show hitch
+       recovery-ms DROP + the loss cascade vanish. **Optional cheap pre-step:** shrink the capturer
+       VBV (~250ms→~33ms) to cap IDR/burst size (guide §4.1) — measure the cascade drop first.
 0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
    + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
    code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
