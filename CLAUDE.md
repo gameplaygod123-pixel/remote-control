@@ -1216,13 +1216,20 @@ Lessons:
            SILENTLY, no PLI/hitch)**. Raw pattern = the design exactly: loss ≤64 pkt (4/7/8/17/24/34/37)
            = pli=0 silent; blackout >64 (93/101/106) = pli=1 fallback (~42ms). jitter 1.3ms (↓3.8),
            MINOR JUDDER (only blackout hitches left). The silent-repair endgame is PROVEN.
-         - ⚠️ **FLICKER PIVOT (owner, 2026-07-09): the image FLICKERS at `vbv=16` (and 33)** — VBR
-           bit-starvation, a quality regression → **vbv=16 is NOT shippable** ([[small-vbv-flickers]]).
-           But NACK repairs loss WITHOUT a tiny VBV. **NEXT: raise VBV back toward 250 (kills flicker) +
-           keep the NACK buffer, re-measure the silent-repair rate at the larger VBV.** If losses there
-           are mostly >64-pkt bursts, bump `maxGap`/`holdMs` (`receiver/reorderBuffer.ts`) or find a
-           middle VBV; then STEP 2 (lower bitrate) for residual blackouts. Config option 2 (vbv=16) is
-           RETIRED — the real config = larger VBV (no flicker) + NACK retransmit + LTR off.
+         - ✅ **NACK ENDGAME DONE + ACCEPTED (owner, 2026-07-09: "เท่านี้ใช้ได้แล้ว").** The flicker at
+           `vbv=16/33` (VBR bit-starvation, [[small-vbv-flickers]]) retired the tiny-VBV idea — but the
+           key finding: **losses stay small/scattered at the DEFAULT VBV too** (network drops, not
+           frame-overflow), so the VBV shrink fixed a non-problem. Re-ran at no-flicker VBV + buffer ON:
+           scattered losses (5/7/8 pkt) repaired SILENTLY (`pli=0`); only blackouts >64 (83/131) → PLI
+           (~50ms); fps 60 locked, jitter ~5ms. **STEP 2 (lower bitrate) REJECTED** — Parsec runs
+           bitrate up to ~60, so we don't trade quality to shrink the rare blackouts (the ~50ms blip
+           every ~40-50s is accepted).
+         - **FINAL SHIP CONFIG:** stock VBV (default 250 — `capturerArgs.ts` `NVENC_VBV_MS` never changed
+           off 250, no code change) + patched darwin ndc ([`native/ndc-nack/install.sh`](apps/desktop/native/ndc-nack/install.sh),
+           committed binary `bin/node_datachannel.darwin-arm64.node`, **re-run after any `pnpm install`**)
+           + `VIDEO_NACK_BUFFER=1` on the controller launch + LTR off. Windows agent = stock ndc
+           (RtcpNackResponder retransmits, untouched). Signed-.dmg packaging of the patched ndc deferred
+           (owner runs the controller from dev). Whole Parsec-parity streaming arc is now COMPLETE.
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a

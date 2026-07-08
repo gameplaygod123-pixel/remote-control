@@ -60,13 +60,20 @@ channels, not `RtcpReceivingSession`, so the media-only patch can't affect them.
   ≤64 pkt (4/7/8/17/24/34/**37**) = `pli=0` silent repair; blackouts >64 (93/101/106) = `pli=1`
   PLI fallback (~42ms). jitter 1.3ms (↓ from 3.8), verdict MINOR JUDDER (only the blackout hitches
   remain). The silent-repair endgame is proven.
-- ⚠️ **BUT flicker finding pivots the plan:** the owner reported the image FLICKERS at `vbv=16`
-  (and 33) — a VBR bit-starvation regression ([[small-vbv-flickers]]), so vbv=16 is NOT shippable.
-  Good news: NACK repairs loss WITHOUT needing a tiny VBV. **NEXT: raise VBV back toward 250 (kills
-  flicker), keep the NACK buffer, re-measure the silent-repair rate at the larger VBV** (if losses
-  there become mostly >64-pkt bursts, bump `maxGap`/`holdMs` or find a middle VBV). Then STEP 2
-  (lower bitrate) for the residual blackouts. Packaging the patched darwin ndc into a signed .dmg
-  is deferred (owner runs the controller from dev; the swap+codesign install is the "release").
+- ✅ **DONE + ACCEPTED BY OWNER (2026-07-09).** The flicker at `vbv=16/33` (VBR bit-starvation,
+  [[small-vbv-flickers]]) meant a tiny VBV isn't shippable — but the key finding: **losses stay
+  small/scattered at the DEFAULT VBV too** (they're network drops, not frame-overflow), so the VBV
+  shrink was addressing a non-problem. Re-ran at the no-flicker VBV with the buffer ON: scattered
+  losses (5/7/8 pkt) repaired SILENTLY (`pli=0`), only blackouts >64 (83/131) → PLI (~50ms), fps 60
+  locked, jitter ~5ms. **Owner: "เท่านี้ใช้ได้แล้ว".**
+- **STEP 2 (lower bitrate) REJECTED by the owner** — Parsec itself runs bitrate up to ~60 Mbps, so
+  we won't trade quality/bitrate to shrink the rare blackout bursts; the ~50ms blip every ~40-50s is
+  accepted.
+- **Final ship config:** stock VBV (default 250, no flicker — `capturerArgs.ts` `NVENC_VBV_MS` was
+  never changed off 250, so no code change) + patched darwin ndc (`native/ndc-nack/install.sh`,
+  committed binary, re-run after any `pnpm install`) + `VIDEO_NACK_BUFFER=1` on the controller +
+  LTR off. Windows agent = stock ndc (its RtcpNackResponder retransmits). Signed-.dmg packaging of
+  the patched ndc deferred (owner runs the controller from `electron-vite dev`).
 
 ## Build approach (the hard part)
 ndc builds via `cmake-js` + cmake FetchContent(libdatachannel v0.24.2) + OpenSSL. Mac lacks

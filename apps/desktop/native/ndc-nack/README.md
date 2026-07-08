@@ -39,6 +39,15 @@ clang++ -std=c++17 -DRTC_ENABLE_MEDIA=1 -DRTC_STATIC nack-test.cpp \
   -framework Security -framework CoreFoundation -o nack-test && ./nack-test
 ```
 
+## Easy install (committed binary)
+The built binary is committed at `bin/node_datachannel.darwin-arm64.node`. To (re)install it
+into `node_modules` -- **re-run after any `pnpm install`**, which restores the stock prebuilt:
+```sh
+apps/desktop/native/ndc-nack/install.sh
+```
+Then launch the controller with `VIDEO_NACK_BUFFER=1` to enable silent loss repair. Rebuild the
+binary from source (below) only when the patch changes.
+
 ## Install into the app (⚠️ must re-codesign)
 Copying a signed mach-o over one macOS already validated at that path triggers
 `SIGKILL (Code Signature Invalid)` on dlopen. Always re-sign after copying:
@@ -51,11 +60,14 @@ codesign --force --sign - "$APP/node_datachannel.node"
 (For a packaged Mac .dmg this becomes part of the build + notarization; the owner runs
 the controller from `electron-vite dev` today, so the swap+codesign above is enough.)
 
-## Status
-- ✅ Phase A: baseline source build on Mac works; self-built binary loads + spike passes.
-- ✅ Phase B: patch compiles + `nack-test.cpp` PASS (emits NACK on a gap); patched binary
-  is drop-in (regression spike clean).
-- ⏳ Phase C: Mac receiver TS — shallow ~1-frame receive buffer + delay PLI ~1 RTT so the
-  retransmit lands (else NACK fires but the resend arrives after the AU was dropped).
-- ⏳ Phase D: package + real-hardware e2e (golden rule #1) — analyzer shows per-loss dips
-  gone. Pair with STEP 2 (lower bitrate) for blackout losses NACK can't beat.
+## Status — DONE + accepted by owner (2026-07-09)
+- ✅ Phase A: baseline source build on Mac; self-built binary loads + spike passes.
+- ✅ Phase B: patch compiles + `nack-test.cpp` PASS (emits NACK on a gap); drop-in.
+- ✅ Phase C: `receiver/reorderBuffer.ts` (`VIDEO_NACK_BUFFER=1`) — holds a small gap for the
+  retransmit; 11 unit tests pass.
+- ✅ Phase D: real-hardware e2e — scattered losses (5/7/8 pkt) repaired SILENTLY (pli=0), only
+  blackouts >64 (83/131) fall through to PLI (~50ms). Works at the default (no-flicker) VBV, so
+  the flickering small-VBV idea was dropped ([[small-vbv-flickers]]). STEP 2 (lower bitrate)
+  REJECTED by the owner (keep bitrate high like Parsec); the rare blackout blips are accepted.
+- **Ship config:** stock VBV (default 250, no flicker) + patched ndc (`install.sh`) +
+  `VIDEO_NACK_BUFFER=1` + LTR off. Packaging into a signed .dmg is deferred (owner runs from dev).
