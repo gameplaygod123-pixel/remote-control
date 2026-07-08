@@ -26,7 +26,7 @@ import type { MainToVideoReceiver, VideoReceiverToMain } from '../shared/ipc'
 import type { NativeVideoStats, VideoCodec } from '../shared/contract'
 import { RtpDepacketizer, createDepacketizer, isRtcp } from './rtpDepacketizer'
 import { videoDimensions } from './spsDimensions'
-import { BandwidthEstimator } from './bwe'
+import { BandwidthEstimator, bweCeilingForCodec } from './bwe'
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 
 // Must match the sender (sender/index.ts): same STUN pair (golden rule #4), same
@@ -289,7 +289,11 @@ process.on('message', (raw: MainToVideoReceiver) => {
         if (offered !== current.codec) {
           current.codec = offered
           current.depacketizer = createDepacketizer(offered)
-          log(`codec detected from offer: ${offered}`)
+          // HEVC gets a LOWER BWE ceiling (15 vs 25 Mbps): HEVC@15 ≈ H.264@25 quality,
+          // and capping it at 25 overflowed the Parsec-shared link -> loss -> ~2s
+          // decode stalls (v1.28.0-beta.1). Re-seed the estimator before any packets.
+          current.bwe = new BandwidthEstimator(bweCeilingForCodec(offered))
+          log(`codec detected from offer: ${offered} (bwe cap ${bweCeilingForCodec(offered)}kbps)`)
           send({ evt: 'codec', codec: offered })
         }
       }

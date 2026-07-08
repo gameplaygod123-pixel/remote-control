@@ -2,7 +2,14 @@
 // -- the piece the joint e2e can't isolate. Mirrors sender/dev/verify-units.mjs.
 // Run from apps/desktop:  node_modules/.bin/tsx src/video-native/receiver/dev/verify-depacketizer.ts
 import { H264Depacketizer, createDepacketizer, isRtcp } from '../rtpDepacketizer'
-import { BandwidthEstimator, BWE_CEIL_KBPS, BWE_FLOOR_KBPS, BWE_START_KBPS } from '../bwe'
+import {
+  BandwidthEstimator,
+  BWE_CEIL_KBPS,
+  BWE_HEVC_CEIL_KBPS,
+  BWE_FLOOR_KBPS,
+  BWE_START_KBPS,
+  bweCeilingForCodec
+} from '../bwe'
 
 let failures = 0
 function check(name: string, cond: boolean): void {
@@ -161,6 +168,23 @@ function feedRun(est: BandwidthEstimator, start: number, n: number): void {
   check('bwe: clean at cap -> holds at cap (no overshoot)', u?.targetKbps === BWE_CEIL_KBPS)
   check('bwe: clean at cap -> changed=false', u?.changed === false)
   check('bwe: start == cap (25 Mbps, v1.26.0 proven target)', BWE_START_KBPS === BWE_CEIL_KBPS)
+}
+{
+  // 2b. HEVC ceiling (15 Mbps) -> starts + caps at 15, never probes above it
+  check('bwe: hevc ceiling helper = 15 Mbps', bweCeilingForCodec('hevc') === BWE_HEVC_CEIL_KBPS)
+  check('bwe: h264 ceiling helper = 25 Mbps', bweCeilingForCodec('h264') === BWE_CEIL_KBPS)
+  const est = new BandwidthEstimator(BWE_HEVC_CEIL_KBPS)
+  feedRun(est, 0, 100)
+  const u = est.tick(CALM_JITTER)
+  check('bwe hevc: clean -> holds at 15 Mbps cap (not 25)', u?.targetKbps === BWE_HEVC_CEIL_KBPS)
+  // even after many calm windows it must NOT climb above the HEVC cap
+  for (let w = 0; w < 10; w++) {
+    feedRun(est, 100 + w * 100, 100)
+    est.tick(CALM_JITTER)
+  }
+  feedRun(est, 2000, 100)
+  const u2 = est.tick(CALM_JITTER)
+  check('bwe hevc: never probes above the 15 Mbps cap', (u2?.targetKbps ?? 0) <= BWE_HEVC_CEIL_KBPS)
 }
 {
   // 3. ~19% loss (skip every 5th of 100) -> multiplicative decrease below cap

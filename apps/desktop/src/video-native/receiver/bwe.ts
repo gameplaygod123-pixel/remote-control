@@ -35,10 +35,29 @@ export const BWE_FLOOR_KBPS = 5_000
  * H.264 higher. See docs/bwe-hevc-plan.md + the WC bufferbloat diagnosis.
  */
 export const BWE_CEIL_KBPS = 25_000
-/** Start AT the ceiling (= the proven-good v1.26.0 point + the capturer's launch
- *  bitrate) so there's no cold-start ramp; BWE only ever backs OFF from here when
- *  the link is congested, then probes back up toward the cap when it clears. */
+/**
+ * HEVC ceiling — **15 Mbps**, LOWER than H.264's 25 on purpose. HEVC is ~1.6×
+ * more efficient, so HEVC@15 ≈ H.264@25 in quality; capping HEVC at 25 wastes its
+ * whole advantage AND caused v1.28.0-beta.1's ~2s freezes: on the owner's
+ * Parsec-shared ~35-45 Mbps link, an HEVC VBR burst to maxrate (target×~1.4) at an
+ * IDR/scene-change overflowed the queue → seq-gap loss → VideoToolbox stalls on the
+ * broken reference until the next periodic IDR (gop 2s) = the "freeze ~2s" WC saw.
+ * At 15 the burst stays under the link, so no overflow, no loss, no stall — and it
+ * showcases HEVC's low-bitrate win (the reason we added it). WC real-hardware e2e:
+ * decode itself is clean (ndc win32 H265 + VideoToolbox proven); only the bitrate
+ * was too high for HEVC on this link. Codec-aware because the same 25 stays right
+ * for H.264. See docs/bwe-hevc-plan.md + the beta.1 WC diagnosis.
+ */
+export const BWE_HEVC_CEIL_KBPS = 15_000
+/** Start AT the ceiling (= the proven-good point + the capturer's launch bitrate)
+ *  so there's no cold-start ramp; BWE only ever backs OFF from here when the link
+ *  is congested, then probes back up toward the cap when it clears. */
 export const BWE_START_KBPS = 25_000
+
+/** The AIMD ceiling for a codec: HEVC gets the lower 15 Mbps cap (see above). */
+export function bweCeilingForCodec(codec: 'h264' | 'hevc'): number {
+  return codec === 'hevc' ? BWE_HEVC_CEIL_KBPS : BWE_CEIL_KBPS
+}
 
 // Loss thresholds (fraction of a 1s window's expected packets that went missing).
 const LOSS_LOW = 0.02 // < 2% sustained -> increase
@@ -93,8 +112,17 @@ class SeqExtender {
 // only when BOTH are calm). Congestion = loss OR high jitter (bufferbloat), which
 // is the v1.27.0-beta.1 fix: loss alone missed the delay-only bloat on a full link.
 class AimdController {
-  private target = BWE_START_KBPS
-  private lastEmitted = BWE_START_KBPS
+  private readonly ceil: number
+  private target: number
+  private lastEmitted: number
+
+  // ceilKbps defaults to the H.264 cap; HEVC passes the lower BWE_HEVC_CEIL_KBPS.
+  // Start AT the ceiling so BWE only ever backs off from a known-good point.
+  constructor(ceilKbps: number = BWE_CEIL_KBPS) {
+    this.ceil = ceilKbps
+    this.target = Math.min(BWE_START_KBPS, ceilKbps)
+    this.lastEmitted = this.target
+  }
 
   update(lossFraction: number, jitterMs: number | null): BweUpdate {
     const congested =
@@ -103,9 +131,9 @@ class AimdController {
     if (congested) {
       // Back off fast on loss OR a jitter spike (queue building = bloat precursor).
       this.target = Math.max(BWE_FLOOR_KBPS, Math.round(this.target * DECREASE_FACTOR))
-    } else if (calm && this.target < BWE_CEIL_KBPS) {
+    } else if (calm && this.target < this.ceil) {
       // Probe back up toward the cap only when both signals are clear.
-      this.target = Math.min(BWE_CEIL_KBPS, this.target + INCREASE_KBPS)
+      this.target = Math.min(this.ceil, this.target + INCREASE_KBPS)
     }
     // In the dead-band (mild loss/jitter): hold — don't oscillate.
     const changed = Math.abs(this.target - this.lastEmitted) >= EMIT_THRESHOLD_KBPS
@@ -124,10 +152,16 @@ class AimdController {
  */
 export class BandwidthEstimator {
   private extender = new SeqExtender()
-  private controller = new AimdController()
+  private controller: AimdController
   private windowMin = Infinity
   private windowMax = -Infinity
   private count = 0
+
+  // ceilKbps: the AIMD ceiling (H.264 default 25 Mbps; HEVC passes 15). The receiver
+  // re-creates the estimator with the codec's ceiling once it detects the codec.
+  constructor(ceilKbps: number = BWE_CEIL_KBPS) {
+    this.controller = new AimdController(ceilKbps)
+  }
 
   /** Feed the 16-bit RTP sequence number of one received MEDIA packet (skip RTCP). */
   observe(seq16: number): void {
