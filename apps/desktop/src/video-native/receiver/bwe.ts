@@ -161,7 +161,7 @@ export class LossDetector {
 // Extends a 16-bit RTP sequence number to a monotonic value, wrap-aware, so loss
 // math survives the 65535->0 rollover. Tracks the highest extended seq; each new
 // packet's extension = highest + shortest signed distance from the current low 16.
-class SeqExtender {
+export class SeqExtender {
   private maxExtended = -1
 
   extend(seq16: number): number {

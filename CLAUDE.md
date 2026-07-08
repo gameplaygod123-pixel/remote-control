@@ -1202,10 +1202,19 @@ Lessons:
            **`nack-test.cpp` PASS** (emits exactly one Generic NACK for the missing seqs); patched
            binary drop-in (regression spike clean). Artifacts + full build/apply/verify/install recipe:
            [`apps/desktop/native/ndc-nack/README.md`](apps/desktop/native/ndc-nack/README.md). The
-           risky unknowns (can we build+patch ndc? does NACK emission work?) are now CLEARED. **NEXT:
-           Phase C** — Mac receiver TS: shallow ~1-frame receive buffer + delay PLI ~1 RTT so the ~11ms
-           retransmit lands (NACK alone fires but the resend arrives after the AU is dropped) → Phase D
-           package + real-hw e2e (golden rule #1).
+           risky unknowns (can we build+patch ndc? does NACK emission work?) are now CLEARED.
+         - ✅ **Phase C DONE (2026-07-09)** — `receiver/reorderBuffer.ts` `SeqReorderBuffer` wired into
+           `receiver/index.ts` behind **`VIDEO_NACK_BUFFER=1`** (default OFF = byte-identical immediate-
+           PLI path). In-order = drain immediately (0 latency); small gap (≤64) HELD 30ms for the
+           retransmit → arrives = silent release (no PLI/hitch), else onGap→PLI; blackout gap (>64) =
+           skip now→PLI (no penalty). `lossDetector` still measures network loss (analyzer `loss=`);
+           `pli=`/`hitch` now = UNRECOVERED loss only. 11 reorder unit tests + typecheck + lint clean.
+         - ⏳ **NEXT = Phase D (needs WC + hardware, golden rule #1):** install the patched darwin ndc
+           into the controller (`rm`+`cp`+`codesign --force --sign -`, recipe in
+           [`native/ndc-nack/README.md`](apps/desktop/native/ndc-nack/README.md)) + launch controller
+           with `VIDEO_NACK_BUFFER=1`; **agent unchanged** (stock ndc retransmits). e2e decider:
+           `analyze-session.mjs` shows per-loss `pli=`/`hitch` → ~0 (silent repair) while `loss=`
+           (network) unchanged. Pair with STEP 2 (lower bitrate) for blackout losses NACK can't beat.
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a

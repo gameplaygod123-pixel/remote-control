@@ -12,6 +12,7 @@ import {
   seqForwardDistance,
   LossDetector
 } from '../bwe'
+import { SeqReorderBuffer } from '../reorderBuffer'
 
 let failures = 0
 function check(name: string, cond: boolean): void {
@@ -296,6 +297,110 @@ console.log('LossDetector')
   let total = 0
   for (const s of [65533, 65534, 65535, 0, 1, 2, 3, 4]) total += d.observe(s & 0xffff)
   check('loss: wrap in-order -> 0 confirmed', total === 0)
+}
+
+// ── SeqReorderBuffer (Phase C: NACK retransmit-aware in-order release) ──
+{
+  // one-slot fake timer (the buffer only arms one timeout at a time)
+  function fakeTimer(): {
+    api: { set: (cb: () => void) => unknown; clear: () => void }
+    fire: () => void
+    armed: () => boolean
+  } {
+    let pending: (() => void) | null = null
+    return {
+      api: { set: (cb: () => void) => ((pending = cb), 1), clear: () => (pending = null) },
+      fire: () => {
+        const c = pending
+        pending = null
+        if (c) c()
+      },
+      armed: () => pending !== null
+    }
+  }
+  const pkt = (seq: number): Buffer => Buffer.from([seq & 0xff, (seq >> 8) & 0xff])
+  const seqOf = (b: Buffer): number => b[0] | (b[1] << 8)
+
+  // in-order -> released immediately, no gap, no timer
+  {
+    const t = fakeTimer()
+    const out: number[] = []
+    let gaps = 0
+    const b = new SeqReorderBuffer(
+      { onPacket: (p) => out.push(seqOf(p)), onGap: () => gaps++ },
+      { timers: t.api }
+    )
+    for (const s of [100, 101, 102, 103]) b.push(s, pkt(s))
+    check('reorder: in-order releases immediately in order', out.join(',') === '100,101,102,103')
+    check('reorder: in-order arms no timer, no gap', !t.armed() && gaps === 0)
+  }
+
+  // small gap filled by a retransmit before the timeout -> SILENT (no onGap)
+  {
+    const t = fakeTimer()
+    const out: number[] = []
+    let gaps = 0
+    const b = new SeqReorderBuffer(
+      { onPacket: (p) => out.push(seqOf(p)), onGap: () => gaps++ },
+      { timers: t.api }
+    )
+    for (const s of [100, 101, /*102 lost*/ 103, 104]) b.push(s, pkt(s))
+    check('reorder: gap holds (102 not yet released)', out.join(',') === '100,101' && t.armed())
+    b.push(102, pkt(102)) // the retransmit
+    check(
+      'reorder: retransmit fills the gap -> in-order release, NO onGap',
+      out.join(',') === '100,101,102,103,104' && gaps === 0
+    )
+  }
+
+  // small gap whose retransmit never comes -> timeout -> onGap + release ahead
+  {
+    const t = fakeTimer()
+    const out: number[] = []
+    const gapCounts: number[] = []
+    const b = new SeqReorderBuffer(
+      { onPacket: (p) => out.push(seqOf(p)), onGap: (n) => gapCounts.push(n) },
+      { timers: t.api }
+    )
+    for (const s of [100, 101, /*102 lost*/ 103, 104]) b.push(s, pkt(s))
+    t.fire() // hold expires, retransmit never arrived
+    check(
+      'reorder: timeout -> onGap(1) + releases ahead',
+      out.join(',') === '100,101,103,104' && gapCounts.join(',') === '1'
+    )
+    b.push(102, pkt(102)) // a late retransmit of the skipped packet is dropped
+    check('reorder: late retransmit of a skipped seq is dropped', out.join(',') === '100,101,103,104')
+  }
+
+  // large gap (> maxGap) = blackout -> immediate onGap, no waiting
+  {
+    const t = fakeTimer()
+    const out: number[] = []
+    const gapCounts: number[] = []
+    const b = new SeqReorderBuffer(
+      { onPacket: (p) => out.push(seqOf(p)), onGap: (n) => gapCounts.push(n) },
+      { timers: t.api, maxGap: 64 }
+    )
+    b.push(100, pkt(100))
+    b.push(200, pkt(200)) // gap of 99 > 64
+    check(
+      'reorder: blackout gap skips immediately (no timer wait)',
+      gapCounts.join(',') === '99' && !t.armed() && out.join(',') === '100,200'
+    )
+  }
+
+  // wrap-around delivered in order -> no spurious gap
+  {
+    const t = fakeTimer()
+    const out: number[] = []
+    let gaps = 0
+    const b = new SeqReorderBuffer(
+      { onPacket: () => out.push(1), onGap: () => gaps++ },
+      { timers: t.api }
+    )
+    for (const s of [65534, 65535, 0, 1, 2]) b.push(s & 0xffff, pkt(s))
+    check('reorder: wrap in-order -> all released, no gap', out.length === 5 && gaps === 0 && !t.armed())
+  }
 }
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILED ❌`)

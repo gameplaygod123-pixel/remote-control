@@ -45,8 +45,18 @@ channels, not `RtcpReceivingSession`, so the media-only patch can't affect them.
   then a gap → the patched `RtcpReceivingSession` emits exactly one Generic NACK listing the
   missing seqs). Patched binary is drop-in (regression spike clean). Full recipe +
   build/apply/verify/install steps in [`apps/desktop/native/ndc-nack/README.md`](../apps/desktop/native/ndc-nack/README.md).
-- ⏳ **Phase C** (next) — Mac receiver TS: shallow ~1-frame receive buffer + delay PLI ~1 RTT.
-- ⏳ **Phase D** — package + real-hardware e2e (golden rule #1).
+- ✅ **Phase C DONE** — `receiver/reorderBuffer.ts` `SeqReorderBuffer`: a shallow seq-ordered
+  RTP buffer wired into `receiver/index.ts` behind `VIDEO_NACK_BUFFER=1` (default OFF =
+  byte-identical immediate-PLI path). In-order packets drain immediately (0 added latency); a
+  small gap (≤`maxGap`=64) is HELD `NACK_BUFFER_HOLD_MS`=30ms for the retransmit — if it arrives,
+  released in order SILENTLY (no PLI/hitch); if not, `onGap`→PLI (fallback). A large gap (blackout,
+  never NACKed) skips immediately→PLI (no latency penalty). `lossDetector` still MEASURES network
+  loss for the analyzer's `loss=`; `pli=`/`hitch` now reflect only UNRECOVERED loss. Unit-tested
+  (11 reorder cases: silent-fill, timeout, blackout-skip, wrap, dup-drop) + typecheck + lint clean.
+- ⏳ **Phase D** (next, needs WC + hardware) — install the patched darwin ndc into the controller
+  (`rm`+`cp`+`codesign`), launch with `VIDEO_NACK_BUFFER=1`, agent unchanged → e2e: `analyze-
+  session.mjs` should show per-loss `pli=`/`hitch` drop toward 0 (losses repaired silently) while
+  `loss=` (network) is unchanged. Pair with STEP 2 (lower bitrate) for blackout losses.
 
 ## Build approach (the hard part)
 ndc builds via `cmake-js` + cmake FetchContent(libdatachannel v0.24.2) + OpenSSL. Mac lacks

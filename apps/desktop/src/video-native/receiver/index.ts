@@ -27,6 +27,16 @@ import type { NativeVideoStats, VideoCodec } from '../shared/contract'
 import { RtpDepacketizer, createDepacketizer, isRtcp } from './rtpDepacketizer'
 import { videoDimensions } from './spsDimensions'
 import { BandwidthEstimator, bweCeilingForCodec, LossDetector } from './bwe'
+import { SeqReorderBuffer } from './reorderBuffer'
+
+// Phase C of the NACK endgame (docs/step-nack-retransmit.md): with the patched ndc
+// (native/ndc-nack) emitting NACKs, hold RTP packets in a shallow seq-ordered buffer so
+// a ~1-RTT retransmit fills a gap before the frame is presented -> silent loss repair
+// (no PLI/IDR/fps-dip). OPT-IN (VIDEO_NACK_BUFFER=1) + needs the patched ndc; default
+// OFF = today's immediate-PLI path, byte-identical. Enabled together for the Phase D e2e.
+function nackBufferEnabled(): boolean {
+  return process.env.VIDEO_NACK_BUFFER === '1'
+}
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 
 // Must match the sender (sender/index.ts): same STUN pair (golden rule #4), same
@@ -36,6 +46,9 @@ const STATS_INTERVAL_MS = 1_000
 // Rate-limit our PLI to the agreed <=1/s (two-sided design: sender debounces
 // forced IDRs at 400ms, receiver never storms it) -- see sender/index.ts item A.
 const KEYFRAME_REQUEST_COOLDOWN_MS = 1_000
+// How long the Phase C reorder buffer holds a small gap waiting for the NACK retransmit
+// (~1 RTT ≈ 11ms on this link + margin). Latency is only added when a gap actually occurs.
+const NACK_BUFFER_HOLD_MS = 30
 
 function log(message: string): void {
   logVideoReceiver('HELPER', message)
@@ -69,6 +82,11 @@ interface Session {
   // sender forces a cheap IDR (~1 RTT recovery). Reorder tolerance avoids PLIing for a
   // packet that merely arrived out of order (a self-inflicted judder).
   lossDetector: LossDetector
+  // Phase C: shallow seq-ordered RTP buffer (null unless VIDEO_NACK_BUFFER=1). When set,
+  // packets flow through it (retransmit-aware, in-order release) instead of straight to
+  // the depacketizer; lossDetector then only MEASURES network loss (stats), and the
+  // buffer's onGap drives the PLI for losses the retransmit couldn't repair.
+  reorder: SeqReorderBuffer | null
   // Auto-test instrumentation (parsed by scripts/analyze-session.mjs): a "hitch" is
   // the interval from a detected loss to the next keyframe AU that recovers decode.
   // hitchStartMs = perf.now of the loss that opened the current unrecovered hitch (0
@@ -154,6 +172,7 @@ function startSession(): void {
     firstFrameSeen: false,
     lastKeyframeRequestAt: 0,
     lossDetector: new LossDetector(),
+    reorder: null,
     hitchStartMs: 0,
     lossEventsInWindow: 0,
     lostPacketsInWindow: 0,
@@ -167,6 +186,17 @@ function startSession(): void {
     lastStats: {}
   }
   current = session
+
+  if (nackBufferEnabled()) {
+    session.reorder = new SeqReorderBuffer(
+      {
+        onPacket: (pkt) => processPacket(session, pkt),
+        onGap: (count) => onConfirmedLoss(session, count)
+      },
+      { holdMs: NACK_BUFFER_HOLD_MS }
+    )
+    log(`NACK receive buffer ON (hold ${NACK_BUFFER_HOLD_MS}ms)`)
+  }
 
   // We ANSWER: ndc generates the answer when we setRemoteDescription(offer).
   pc.onLocalDescription((sdp, type) => {
@@ -200,55 +230,79 @@ function startSession(): void {
     track.onMessage((msg: Buffer) => {
       if (current !== session) return
       if (isRtcp(msg)) return // RTCP (e.g. sender reports) -- ndc handles it
-      // Feed the RTP sequence number (bytes 2-3) to the BWE estimator BEFORE
-      // depacketizing -- loss is a per-packet signal, independent of AU reassembly.
-      if (msg.length >= 4) {
-        const seq = msg.readUInt16BE(2)
-        session.bwe.observe(seq)
-        // Real-time loss detection (reorder-tolerant): a CONFIRMED lost packet -> request
-        // a keyframe so the sender forces a cheap IDR (capturer 'I' stdin, no respawn) and
-        // the decoder recovers in ~1 RTT instead of waiting for the periodic IDR (~2s).
-        // The detector holds a gap briefly to see if the packet was merely reordered, so
-        // we don't force an unnecessary IDR (a self-inflicted judder).
+      if (msg.length < 4) return
+      const seq = msg.readUInt16BE(2)
+      // BWE always sees the raw per-packet seq (network loss drives bitrate).
+      session.bwe.observe(seq)
+
+      if (session.reorder) {
+        // Phase C path: lossDetector MEASURES network loss for the stats line only (so
+        // the analyzer still shows loss=/lostpkts= = what the link dropped), while the
+        // reorder buffer decides recovery -- a gap the retransmit fills is released
+        // silently (no PLI, no hitch); one it can't (blackout / retransmit lost) surfaces
+        // via onGap -> onConfirmedLoss -> PLI. So pli=/hitch reflect UNRECOVERED loss.
         const lost = session.lossDetector.observe(seq)
         if (lost > 0) {
           session.lossEventsInWindow += 1
           session.lostPacketsInWindow += lost
-          // Open a hitch if not already in one (loss -> broken frame -> decode stalls
-          // until the recovering keyframe). Timed to the recovering AU below.
-          if (session.hitchStartMs === 0) session.hitchStartMs = performance.now()
-          requestKeyframe(session, `packet loss (${lost} pkt)`)
         }
+        session.reorder.push(seq, msg)
+        return
       }
-      for (const au of session.depacketizer.push(msg)) {
-        session.framesInWindow += 1
-        session.bytesInWindow += au.data.length
-        // Close an open hitch when a keyframe (the recovering IDR) arrives: this is the
-        // real perceived-freeze duration (loss -> decodable again). Logged for the
-        // auto-analyzer; the goal is to keep these ~1 RTT (PLI-forced IDR), not ~2s.
-        if (au.keyframe && session.hitchStartMs > 0) {
-          const ms = Math.round(performance.now() - session.hitchStartMs)
-          session.hitchStartMs = 0
-          log(`hitch recovered in ${ms}ms (loss -> keyframe)`)
-        }
-        // Read the real resolution off the in-band SPS once (the first AU is an
-        // IDR with parameter sets); ndc/VideoToolbox never surface it to Node.
-        if (!session.lastStats.width) {
-          const dims = videoDimensions(au.data, session.codec)
-          if (dims) {
-            session.lastStats.width = dims.width
-            session.lastStats.height = dims.height
-            log(`resolution ${dims.width}x${dims.height} (from SPS)`)
-          }
-        }
-        trackJitter(session)
-        feedRender(session, au.data)
+
+      // Default path (no NACK buffer): reorder-tolerant loss detection -> immediate PLI so
+      // the sender forces a cheap IDR (capturer 'I' stdin) and the decoder recovers in ~1
+      // RTT instead of waiting for the periodic IDR (~2s).
+      const lost = session.lossDetector.observe(seq)
+      if (lost > 0) {
+        session.lossEventsInWindow += 1
+        session.lostPacketsInWindow += lost
+        if (session.hitchStartMs === 0) session.hitchStartMs = performance.now()
+        requestKeyframe(session, `packet loss (${lost} pkt)`)
       }
+      processPacket(session, msg)
     })
     track.onError((err) => {
       if (current === session) log(`track error: ${err}`)
     })
   })
+}
+
+// A confirmed UNRECOVERED loss from the reorder buffer (retransmit never arrived, or a
+// blackout too big to NACK): open a hitch + PLI so the sender forces a recovering IDR.
+// Distinct from the network-loss counters (which the lossDetector already bumped) -- this
+// is the loss that actually costs a visible recovery.
+function onConfirmedLoss(s: Session, count: number): void {
+  if (s.hitchStartMs === 0) s.hitchStartMs = performance.now()
+  requestKeyframe(s, `packet loss (${count} pkt, unrecovered)`)
+}
+
+// Depacketize one in-order RTP packet and emit any completed access units (hitch-close,
+// one-time resolution read, jitter, render). Shared by the default path and the reorder
+// buffer's ordered-release callback.
+function processPacket(s: Session, msg: Buffer): void {
+  for (const au of s.depacketizer.push(msg)) {
+    s.framesInWindow += 1
+    s.bytesInWindow += au.data.length
+    // Close an open hitch when a keyframe (the recovering IDR) arrives: the real
+    // perceived-freeze duration (loss -> decodable again), logged for the auto-analyzer.
+    if (au.keyframe && s.hitchStartMs > 0) {
+      const ms = Math.round(performance.now() - s.hitchStartMs)
+      s.hitchStartMs = 0
+      log(`hitch recovered in ${ms}ms (loss -> keyframe)`)
+    }
+    // Read the real resolution off the in-band SPS once (first AU = IDR + parameter sets).
+    if (!s.lastStats.width) {
+      const dims = videoDimensions(au.data, s.codec)
+      if (dims) {
+        s.lastStats.width = dims.width
+        s.lastStats.height = dims.height
+        log(`resolution ${dims.width}x${dims.height} (from SPS)`)
+      }
+    }
+    trackJitter(s)
+    feedRender(s, au.data)
+  }
 }
 
 // Frames now flow only on desktop change (ddagrab dup_frames=0), so a static
@@ -341,6 +395,7 @@ process.on('message', (raw: MainToVideoReceiver) => {
         if (offered !== current.codec) {
           current.codec = offered
           current.depacketizer = createDepacketizer(offered)
+          current.reorder?.reset() // new offer = fresh seq stream; drop any held packets
           // HEVC gets a LOWER BWE ceiling (15 vs 25 Mbps): HEVC@15 ≈ H.264@25 quality,
           // and capping it at 25 overflowed the Parsec-shared link -> loss -> ~2s
           // decode stalls (v1.28.0-beta.1). Re-seed the estimator before any packets.
