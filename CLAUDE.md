@@ -435,7 +435,14 @@ to push FPS.
     NOT chase true 6% now** — the only paths (drop ULL for PTD=0 all-intra, or downscale
     1440→1080) sacrifice the latency (Step 1) or resolution the owner values more; judder-
     fixed is the win. Building **PRERELEASE v1.26.0-beta.2** (packs `88a3ce8`) for the
-    owner to FEEL the smoothness.
+    owner to FEEL the smoothness. → **beta.2 VERIFIED by the owner on real hardware:
+    "ลื่นเหมือน Parsec ละ" (smooth like Parsec) — judder GONE. PROMOTED to full
+    v1.26.0.** (golden rule #1/#7 honored: locked-60 = native capturer, verified via
+    beta.2 before the full release.) The whole Step 3 custom DXGI capturer (change-
+    detection + locked-60 cadence + idle-decay + BWE stdin primitive) is now a full
+    release. NEXT (owner: "รอบหน้าปล่อยออโต้บิตเรต Max ไม่เกิน 60 แบบ parsec") = BWE
+    auto-bitrate, ≤60 Mbps cap — the capturer stdin `B<kbps>` is ready; Mac builds the
+    receiver estimate + feedback path.
   - **"Parsec 6%" WAS A MYTH — corrected (owner Task-Manager + Parsec overlay, 2026-07-08):**
     with Task Manager open (its perf graph continuously ANIMATING = not truly static),
     **Parsec itself sits at ~35% GPU Video-Encode** (overlay: Host Video Encode 8.72ms/
