@@ -161,6 +161,84 @@ func runSelftest(hevc: Bool) {
   logErr("selftest decoded \(decoded)/\(FRAMES)")
 }
 
+// LTR de-risk: prove VideoToolbox produces a DECODABLE stream when Long-Term Reference
+// frames are enabled + an LTR-refresh is forced mid-stream (the mechanism our
+// PLI->LTR-P recovery relies on -- docs/step-ltr-recovery.md). This is the analog of
+// --selftest-hevc: if the LTR-marked bitstream decodes clean 120/120 through the SAME
+// Decoder, LTR is VideoToolbox-compatible (unlike intra-refresh, which failed to decode
+// at all). It does NOT prove NVENC->VT (that's the joint prerelease) -- it proves the VT
+// DECODER handles LTR reference management, the one Mac-side risk.
+func runLtrSelftest() {
+  let W = 1920, H = 1080, FRAMES = 120, FPS = 60
+  logErr("selftest-ltr \(W)x\(H) @\(FPS) x\(FRAMES)")
+  let renderer = AVSampleBufferDisplayLayer().sampleBufferRenderer
+  let decoder = Decoder()
+  var decoded = 0
+  decoder.onSample = { sb in renderer.enqueue(sb); decoded += 1 }
+
+  // LTR requires the low-latency rate-control encoder (WWDC21). Request it in the spec.
+  let spec: [String: Any] = [
+    kVTVideoEncoderSpecification_EnableLowLatencyRateControl as String: kCFBooleanTrue as Any
+  ]
+  var comp: VTCompressionSession?
+  VTCompressionSessionCreate(allocator: kCFAllocatorDefault, width: Int32(W), height: Int32(H),
+    codecType: kCMVideoCodecType_H264, encoderSpecification: spec as CFDictionary, imageBufferAttributes: nil,
+    compressedDataAllocator: nil, outputCallback: nil, refcon: nil, compressionSessionOut: &comp)
+  guard let enc = comp else { emit(["evt": "fatal", "message": "no encoder"]); return }
+  VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+  VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+  VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 600 as CFNumber)
+  // Enable LTR (WWDC21 low-latency API). If the encoder rejects it, LTR isn't available.
+  let ltrStatus = VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_EnableLTR, value: kCFBooleanTrue)
+  logErr("EnableLTR status=\(ltrStatus)")
+
+  var tokensToAck: [Int] = [] // LTR tokens the "receiver" has acknowledged
+  var forcedRefresh = false
+
+  for f in 0..<FRAMES {
+    var pb: CVPixelBuffer?
+    CVPixelBufferCreate(kCFAllocatorDefault, W, H, kCVPixelFormatType_32BGRA,
+      [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary, &pb)
+    guard let pixel = pb else { continue }
+    CVPixelBufferLockBaseAddress(pixel, [])
+    if let base = CVPixelBufferGetBaseAddress(pixel) {
+      memset(base, Int32(f & 0xff), CVPixelBufferGetBytesPerRow(pixel) * H)
+    }
+    CVPixelBufferUnlockBaseAddress(pixel, [])
+
+    // Per-frame LTR properties: acknowledge any LTR tokens seen so far, and at frame 90
+    // force an LTR refresh (encode a frame from an acknowledged LTR -- our recovery frame).
+    var props: [String: Any] = [:]
+    if !tokensToAck.isEmpty {
+      props[kVTEncodeFrameOptionKey_AcknowledgedLTRTokens as String] = tokensToAck as CFArray
+      tokensToAck.removeAll()
+    }
+    if f == 90 { props[kVTEncodeFrameOptionKey_ForceLTRRefresh as String] = kCFBooleanTrue; forcedRefresh = true }
+
+    VTCompressionSessionEncodeFrame(enc, imageBuffer: pixel,
+      presentationTimeStamp: CMTime(value: Int64(f), timescale: Int32(FPS)),
+      duration: .invalid, frameProperties: props as CFDictionary, infoFlagsOut: nil) { st, _, sample in
+        guard st == noErr, let s = sample else { return }
+        // If this frame is an LTR that needs acknowledgement, remember its token to ack next.
+        if let arr = CMSampleBufferGetSampleAttachmentsArray(s, createIfNecessary: false),
+           CFArrayGetCount(arr) > 0 {
+          let dict = unsafeBitCast(CFArrayGetValueAtIndex(arr, 0), to: CFDictionary.self)
+          let key = Unmanaged.passUnretained(kVTSampleAttachmentKey_RequireLTRAcknowledgementToken).toOpaque()
+          if CFDictionaryContainsKey(dict, key) {
+            let tok = unsafeBitCast(CFDictionaryGetValue(dict, key), to: CFNumber.self)
+            var v = 0; CFNumberGetValue(tok, .intType, &v); tokensToAck.append(v)
+          }
+        }
+        decoder.push(sampleToAnnexB(s, keyframe: isKeyframe(s), hevc: false))
+    }
+  }
+  VTCompressionSessionCompleteFrames(enc, untilPresentationTimeStamp: .invalid)
+  usleep(300_000)
+  let ok = decoded >= FRAMES - 2 && forcedRefresh // ~all frames decoded through the LTR refresh
+  emit(["evt": "selftest-result", "decoded": decoded, "forcedLTRRefresh": forcedRefresh, "ok": ok])
+  logErr("selftest-ltr decoded \(decoded)/\(FRAMES) forcedRefresh=\(forcedRefresh) ok=\(ok)")
+}
+
 // ─────────────────────────── windowed mode ───────────────────────────
 final class RenderApp: NSObject, NSApplicationDelegate {
   var window: NSWindow!
@@ -261,7 +339,9 @@ final class RenderApp: NSObject, NSApplicationDelegate {
 }
 
 // ─────────────────────────── entry ───────────────────────────
-if CommandLine.arguments.contains("--selftest-hevc") {
+if CommandLine.arguments.contains("--selftest-ltr") {
+  runLtrSelftest()
+} else if CommandLine.arguments.contains("--selftest-hevc") {
   runSelftest(hevc: true)
 } else if CommandLine.arguments.contains("--selftest") {
   runSelftest(hevc: false)
