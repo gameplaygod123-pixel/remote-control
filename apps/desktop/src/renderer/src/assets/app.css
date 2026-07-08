@@ -561,37 +561,53 @@
 }
 
 /* Fullscreen: the drag titlebar is hidden (the OS provides its own chrome), so the
-   float can rise to the top edge AND grow so the stats stay readable on a big
-   screen -- the owner checks encode/network/bitrate here at a glance. */
+   float becomes a full-width bar across the top -- everything on ONE row, spread
+   out, so the readout reads like a proper HUD strip instead of a cramped wrapping
+   pill (the owner's "make it long when fullscreen" ask). */
 .session-float.is-fullscreen {
   top: 10px;
+  left: 12px;
+  right: 12px;
+  transform: none; /* stretch edge-to-edge instead of centered-auto width */
 }
 .session-float.is-fullscreen .session-float__panel {
-  gap: 8px 14px;
-  padding: 9px 16px;
-  border-radius: 14px;
+  width: 100%;
+  max-width: none; /* override the windowed "never wider than the window" clamp */
+  justify-content: center;
+  gap: 8px 12px;
+  padding: 9px 18px;
+  border-radius: 16px;
+}
+/* The stats get their OWN full-width row (flex-basis 100% forces the break) and
+   spread edge-to-edge -- a proper long telemetry strip, the owner's "make it long
+   in fullscreen" ask -- while the Back/NATIVE/status controls wrap on their own
+   rows above/below (kept wrapping so the long "connection: connected" pill never
+   overflows the bar). */
+.session-float.is-fullscreen .stats-badge {
+  flex: 1 1 100%;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  padding: 2px 6px;
 }
 .session-float.is-fullscreen .connection-type-badge,
 .session-float.is-fullscreen .session-float__input {
   font-size: 14px;
   padding: 5px 11px;
+  flex-shrink: 0;
 }
 .session-float.is-fullscreen .session-float__name {
   font-size: 15px;
 }
 
-/* Live telemetry, as a row of labeled chips (dim uppercase label + bright value)
-   inside one pill -- reads at a glance instead of a run-on "·" string, and the
-   chips space out cleanly as the pill grows in fullscreen. The pill is always dark
-   (it sits on the dark float panel), so colors are fixed light, not themed. */
+/* Live telemetry as a row of labeled chips (dim uppercase label + bright value),
+   split by thin dividers -- reads at a glance instead of a run-on "·" string. No
+   background of its own (it sits ON the float panel; a second pill looked nested
+   and awkward). Always-dark surface, so colors are fixed light, not themed. */
 .stats-badge {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 3px 0;
-  padding: 3px 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
   font-variant-numeric: tabular-nums; /* digits don't jitter as they update */
 }
 .stat {
@@ -617,14 +633,10 @@
   white-space: nowrap;
 }
 
-/* Fullscreen: the row is the star of the readout -- give the chips more room and
-   step the type up so encode/network/bitrate read from across the screen. */
-.session-float.is-fullscreen .stats-badge {
-  gap: 5px 0;
-  padding: 5px 6px;
-}
+/* Fullscreen: step the chip type up so encode/network/bitrate read from across the
+   screen (layout/spread is handled by the full-width bar rules above). */
 .session-float.is-fullscreen .stat {
-  padding: 2px 16px;
+  padding: 2px 8px;
   gap: 7px;
 }
 .session-float.is-fullscreen .stat__k {
