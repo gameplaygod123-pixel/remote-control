@@ -560,6 +560,32 @@
   opacity: 1;
 }
 
+/* Fullscreen: the drag titlebar is hidden (the OS provides its own chrome), so the
+   float can rise to the top edge AND grow so the stats stay readable on a big
+   screen -- the owner checks encode/network/bitrate here at a glance. */
+.session-float.is-fullscreen {
+  top: 10px;
+}
+.session-float.is-fullscreen .session-float__panel {
+  gap: 8px 14px;
+  padding: 9px 16px;
+  border-radius: 14px;
+}
+.session-float.is-fullscreen .connection-type-badge,
+.session-float.is-fullscreen .session-float__input {
+  font-size: 14px;
+  padding: 5px 11px;
+}
+.session-float.is-fullscreen .session-float__name {
+  font-size: 15px;
+}
+
+/* Live telemetry reads as data: tabular figures so the digits don't jitter as they
+   update, and it's the row that grows most in fullscreen. */
+.stats-badge {
+  font-variant-numeric: tabular-nums;
+}
+
 /* Input-dead alarm: video is connected but the input channel never opened
    (see ControllerSession inputAlert). Never let the pill fade -- it's the one
    moment the person NEEDS to notice the controls. */

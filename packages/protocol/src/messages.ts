@@ -107,6 +107,19 @@ export const VideoBitrateMessage = z.object({
   channel: SignalChannel.optional(),
 });
 
+// Native-video sender telemetry (agent -> controller): the encode/capture time per
+// frame that only the agent's capturer/NVENC knows, surfaced in the controller's HUD
+// (the media-only native pc has no back-channel, so it rides signaling like
+// video-bitrate). Relayed unchanged by the server (resolveRelayTarget). Values are
+// nullable -- ffmpeg exposes no per-frame split; the custom capturer fills encodeMs.
+export const VideoSenderStatsMessage = z.object({
+  type: z.literal("video-sender-stats"),
+  deviceId: z.string(),
+  encodeMs: z.number().nullable(),
+  captureMs: z.number().nullable(),
+  channel: SignalChannel.optional(),
+});
+
 // Keeps the WebSocket connection alive through proxies/tunnels (e.g. a free
 // Cloudflare quick tunnel) that silently close idle connections after ~1-2
 // minutes of no traffic. Sent by the client on an interval well under that.
@@ -244,6 +257,7 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   SdpAnswerMessage,
   IceCandidateMessage,
   VideoBitrateMessage,
+  VideoSenderStatsMessage,
   PingMessage,
   PongMessage,
   ListDevicesMessage,

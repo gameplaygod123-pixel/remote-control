@@ -348,11 +348,22 @@ function AgentView(): React.JSX.Element {
       })
     })
     window.api.videoSender.onStats((stats) => {
-      // Sender-side pipeline telemetry (fps/kbps/capture). The unified HUD lives
-      // on the CONTROLLER; surfacing these across the link is a follow-up (would
-      // need its own stats message -- deliberately not invented here). Kept in a
-      // ref so a future agent-side debug readout can consume it without a re-wire.
+      // Sender-side pipeline telemetry (fps/kbps + encode/capture ms). The unified
+      // HUD lives on the CONTROLLER, so relay the encode/capture split over signaling
+      // ('video-sender-stats', channel:'video-native') for the HUD to show alongside
+      // the receiver numbers. Only while native is live and there's something to show
+      // (encodeMs is null on ffmpeg -> no traffic). Kept in a ref too for any
+      // agent-side readout.
       nativeStatsRef.current = stats
+      if (useNativeVideoRef.current && (stats.encodeMs != null || stats.captureMs != null)) {
+        clientRef.current?.send({
+          type: 'video-sender-stats',
+          deviceId: deviceIdRef.current ?? '',
+          encodeMs: stats.encodeMs,
+          captureMs: stats.captureMs,
+          channel: 'video-native'
+        })
+      }
     })
     window.api.videoSender.onDown(() => {
       // The sender host auto-respawns and restarts capture with the last config

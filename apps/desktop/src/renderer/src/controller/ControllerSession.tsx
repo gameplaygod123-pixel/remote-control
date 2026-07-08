@@ -81,6 +81,14 @@ export default function ControllerSession({
   // fullscreen "just works" (one window); we only use this to hide the drag
   // titlebar in fullscreen, where the OS traffic-lights/exit are available.
   const [fullscreen, setFullscreen] = useState(false)
+  // Sender-side (agent) encode time per frame, relayed over signaling from the
+  // agent's video-sender ('video-sender-stats'); null until the capturer reports it
+  // (H.264/NVENC encode ms). Shown in the HUD next to the receiver-side numbers so
+  // the owner can see the encode cost at a glance (Parsec-overlay style).
+  const [senderEncodeMs, setSenderEncodeMs] = useState<number | null>(null)
+  // The live BWE bitrate target (kbps) the receiver's AIMD is asking the sender for,
+  // so the HUD can show "actual → target" and the owner can watch auto-bitrate adapt.
+  const [bweTargetKbps, setBweTargetKbps] = useState<number | null>(null)
   // Fetched from a main-process file rather than localStorage, which is
   // scoped to the Vite dev server's origin and would reset this identity
   // if the dev-server port ever shifted between runs.
@@ -510,9 +518,10 @@ export default function ControllerSession({
         // BWE: the receiver's loss-based AIMD target -> relay to the agent's sender
         // on channel:'video-native' (server just forwards it; the agent forwards it
         // to the capturer stdin as 'B<kbps>'). Dormant unless native is engaged.
-        window.api.videoReceiver.onBitrate((kbps) =>
+        window.api.videoReceiver.onBitrate((kbps) => {
+          setBweTargetKbps(kbps)
           transport.send({ type: 'video-bitrate', deviceId, kbps, channel: 'video-native' })
-        )
+        })
         window.api.videoReceiver.onDown(() => setStatus('native video down -- repairing'))
         window.api.window.onFullScreen((v) => setFullscreen(v))
       }
@@ -713,6 +722,10 @@ export default function ControllerSession({
             message.sdpMid,
             message.sdpMLineIndex
           )
+        } else if (message.type === 'video-sender-stats') {
+          // Sender-side encode telemetry relayed from the agent (media-only pc has
+          // no back-channel). Surfaced in the HUD next to the receiver numbers.
+          setSenderEncodeMs(message.encodeMs)
         } else if (message.type === 'sdp-offer' && pcRef.current) {
           const pc = pcRef.current
           await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
@@ -776,7 +789,7 @@ export default function ControllerSession({
   return (
     <div className={`session-shell${nativeActive ? ' native-video' : ''}`}>
       <div
-        className={`session-float${panelOpen ? ' is-open' : ''}${inputAlert ? ' input-alert' : ''}`}
+        className={`session-float${panelOpen ? ' is-open' : ''}${inputAlert ? ' input-alert' : ''}${fullscreen ? ' is-fullscreen' : ''}`}
       >
         {panelOpen ? (
           <div className="session-float__panel">
@@ -811,15 +824,21 @@ export default function ControllerSession({
             </span>
             {displayStats && displayStats.fps > 0 && (
               <span
-                className="connection-type-badge"
+                className="connection-type-badge stats-badge"
                 title="What's actually being received -- not just what was requested"
               >
+                {/* Encode (agent, relayed) + Decode (receiver). Native decode is not
+                    exposed by AVSampleBufferDisplayLayer, so it only shows on the
+                    WebRTC path; encode shows once the agent's capturer reports it. */}
+                {senderEncodeMs != null ? `Encode ${senderEncodeMs.toFixed(1)}ms · ` : ''}
                 {displayStats.processingMs > 0 ? `Decode ${displayStats.processingMs}ms · ` : ''}
                 Network {displayStats.rttMs ?? '?'}ms ·{' '}
                 {displayStats.jitterMs != null ? `Jitter ${displayStats.jitterMs}ms · ` : ''}
                 {displayStats.lossPct != null ? `Loss ${displayStats.lossPct.toFixed(1)}% · ` : ''}
                 {displayStats.fps}fps · {displayStats.width}×{displayStats.height} ·{' '}
-                {(displayStats.kbps / 1000).toFixed(1)} Mbps
+                {(displayStats.kbps / 1000).toFixed(1)}
+                {/* actual → BWE target: watch auto-bitrate adapt to the link. */}
+                {bweTargetKbps != null ? ` → ${(bweTargetKbps / 1000).toFixed(0)}` : ''} Mbps
                 {displayStats.codec ? ` · ${displayStats.codec}` : ''}
               </span>
             )}
