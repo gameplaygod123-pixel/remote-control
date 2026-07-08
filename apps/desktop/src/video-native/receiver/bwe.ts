@@ -85,6 +85,17 @@ export interface BweUpdate {
   changed: boolean
 }
 
+/**
+ * Signed 16-bit forward distance prev->cur (wrap-aware, RTP seq): 1 = in order,
+ * >1 = a gap of (d-1) lost packets, <=0 = reorder/dup (not a loss). Used by the
+ * receiver for real-time loss detection (loss -> PLI -> fast IDR recovery).
+ */
+export function seqForwardDistance(prev16: number, cur16: number): number {
+  let d = (cur16 - prev16) & 0xffff
+  if (d > 0x8000) d -= 0x10000
+  return d
+}
+
 // Extends a 16-bit RTP sequence number to a monotonic value, wrap-aware, so loss
 // math survives the 65535->0 rollover. Tracks the highest extended seq; each new
 // packet's extension = highest + shortest signed distance from the current low 16.

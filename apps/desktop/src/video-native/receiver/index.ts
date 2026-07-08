@@ -26,7 +26,7 @@ import type { MainToVideoReceiver, VideoReceiverToMain } from '../shared/ipc'
 import type { NativeVideoStats, VideoCodec } from '../shared/contract'
 import { RtpDepacketizer, createDepacketizer, isRtcp } from './rtpDepacketizer'
 import { videoDimensions } from './spsDimensions'
-import { BandwidthEstimator, bweCeilingForCodec } from './bwe'
+import { BandwidthEstimator, bweCeilingForCodec, seqForwardDistance } from './bwe'
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 
 // Must match the sender (sender/index.ts): same STUN pair (golden rule #4), same
@@ -62,6 +62,13 @@ interface Session {
   bwe: BandwidthEstimator
   firstFrameSeen: boolean
   lastKeyframeRequestAt: number
+  // Highest 16-bit RTP seq seen, for REAL-TIME packet-loss detection (a gap = a lost
+  // packet). On loss we PLI immediately: a lost packet breaks the current frame, and
+  // since inter frames reference it, the decoder (VideoToolbox) stalls until the next
+  // decodable entry point -- without a PLI that's the periodic IDR (~2s @ gop 120),
+  // the exact ~2s freeze WC saw on HEVC (frames are larger / more loss-sensitive).
+  // A forced IDR via PLI recovers in ~1 RTT instead. -1 until the first packet.
+  lastSeq16: number
   framesInWindow: number
   bytesInWindow: number
   // Frame-pacing jitter: how evenly reassembled AUs land (perceived smoothness).
@@ -137,6 +144,7 @@ function startSession(): void {
     bwe: new BandwidthEstimator(),
     firstFrameSeen: false,
     lastKeyframeRequestAt: 0,
+    lastSeq16: -1,
     framesInWindow: 0,
     bytesInWindow: 0,
     lastAuArrivalMs: 0,
@@ -181,7 +189,23 @@ function startSession(): void {
       if (isRtcp(msg)) return // RTCP (e.g. sender reports) -- ndc handles it
       // Feed the RTP sequence number (bytes 2-3) to the BWE estimator BEFORE
       // depacketizing -- loss is a per-packet signal, independent of AU reassembly.
-      if (msg.length >= 4) session.bwe.observe(msg.readUInt16BE(2))
+      if (msg.length >= 4) {
+        const seq = msg.readUInt16BE(2)
+        session.bwe.observe(seq)
+        // Real-time loss detection: a forward seq gap = a lost packet. Request a
+        // keyframe NOW so the sender forces a cheap IDR (via the capturer's 'I' stdin,
+        // no respawn) and the decoder recovers in ~1 RTT instead of waiting for the
+        // periodic IDR (~2s) -- the HEVC ~2s-freeze fix. Rate-limited to <=1/s inside
+        // requestKeyframe; reorder/dup (gap <= 0) is ignored, and lastSeq16 only
+        // advances forward so a late reorder doesn't read as a second gap.
+        if (session.lastSeq16 >= 0) {
+          const gap = seqForwardDistance(session.lastSeq16, seq)
+          if (gap > 1) requestKeyframe(session, `packet loss (gap ${gap - 1})`)
+          if (gap > 0) session.lastSeq16 = seq
+        } else {
+          session.lastSeq16 = seq
+        }
+      }
       for (const au of session.depacketizer.push(msg)) {
         session.framesInWindow += 1
         session.bytesInWindow += au.data.length

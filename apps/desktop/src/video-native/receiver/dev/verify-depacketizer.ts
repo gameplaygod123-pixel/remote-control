@@ -8,7 +8,8 @@ import {
   BWE_HEVC_CEIL_KBPS,
   BWE_FLOOR_KBPS,
   BWE_START_KBPS,
-  bweCeilingForCodec
+  bweCeilingForCodec,
+  seqForwardDistance
 } from '../bwe'
 
 let failures = 0
@@ -246,6 +247,18 @@ function feedRun(est: BandwidthEstimator, start: number, n: number): void {
     last = est.tick(CALM_JITTER)
   }
   check('bwe: sustained loss floors at 5 Mbps', last?.targetKbps === BWE_FLOOR_KBPS)
+}
+
+// seqForwardDistance (real-time loss detection for PLI-on-loss)
+console.log('seqForwardDistance')
+{
+  check('seq: in order -> 1', seqForwardDistance(100, 101) === 1)
+  check('seq: gap of 2 lost -> 3', seqForwardDistance(100, 103) === 3)
+  check('seq: reorder (behind) -> negative', seqForwardDistance(100, 99) < 0)
+  check('seq: dup -> 0', seqForwardDistance(100, 100) === 0)
+  check('seq: wrap 65535->0 -> 1 (no false gap)', seqForwardDistance(65535, 0) === 1)
+  check('seq: wrap gap 65534->1 -> 3', seqForwardDistance(65534, 1) === 3)
+  check('seq: reorder across wrap 0->65535 -> -1', seqForwardDistance(0, 65535) === -1)
 }
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILED ❌`)
