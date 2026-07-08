@@ -862,7 +862,19 @@ Lessons:
    `B<kbps>` to the capturer stdin. **(B) H.265** — the real remaining Parsec gap
    (1.6× efficiency, ~half bitrate); needs codec-aware `nalSplitter.ts` + HEVC
    `decoder.swift` (VideoToolbox HW-decodes HEVC on the M4 Pro). Do A first, then B.
-   - **(A) BWE — MAC SIDE DONE (`20e05bf`, awaiting WC wire + joint prerelease):**
+   - **(A) BWE — ✅ PRERELEASE v1.27.0-beta.1 SHIPPED (awaiting owner e2e on real
+     hardware).** Both halves landed (Mac AIMD `20e05bf`, agent forward `3790ad2`).
+     Mac ops done THIS session: signaling server rebuilt + restarted (PID 35445 now
+     relays `video-bitrate`); prerelease built via `build-win.sh` (all 4 packed checks
+     incl. `resources/capturer/capturer.exe`, 175MB) off `feat/native-video` →
+     **v1.27.0-beta.1**. **ENABLE: launch the agent with `VIDEO_CAPTURER=1`** (default
+     OFF = ffmpeg = no BWE; capturer engages native). **NEXT e2e (owner + WC): static
+     screen → target holds; constrain the link → loss → bitrate drops; leave it →
+     ramps to 60 & holds. PASS = received-fps ≈ emitted (net-drop 0) + smooth (NOT
+     "locked 60"). Capturer logs NO retune — WC can tail `video-sender.log` for
+     `set-bitrate → sent B<kbps>`, judge by the bitrate that actually goes out. If
+     clean → promote full v1.27.0.** Detail of each half below.
+   - **(A) BWE — MAC SIDE DONE (`20e05bf`):**
      `receiver/bwe.ts` (NEW, pure, units 10/10) = wrap-aware `SeqExtender` +
      seq-gap loss-fraction per 1s window + `AimdController` (clean <2% loss →
      +2 Mbps additive; >5% → ×0.85; clamp **[5, 60] Mbps** (owner cap); start 25;
