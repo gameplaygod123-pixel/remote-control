@@ -862,10 +862,34 @@ Lessons:
    `B<kbps>` to the capturer stdin. **(B) H.265** — the real remaining Parsec gap
    (1.6× efficiency, ~half bitrate); needs codec-aware `nalSplitter.ts` + HEVC
    `decoder.swift` (VideoToolbox HW-decodes HEVC on the M4 Pro). Do A first, then B.
-   - **(A) BWE — ✅ PRERELEASE v1.27.0-beta.2 (bufferbloat fix, awaiting owner e2e).**
-     Both halves landed (Mac AIMD `20e05bf`, agent forward `3790ad2`); signaling
-     server rebuilt+restarted (PID 35445 relays `video-bitrate`). **ENABLE: launch the
-     agent with `VIDEO_CAPTURER=1`** (default OFF = ffmpeg = no BWE).
+   - **(A) BWE — ✅ PRERELEASE v1.27.0-beta.3 (BWE bufferbloat fix + HUD telemetry,
+     awaiting owner e2e).** BWE both halves landed (Mac AIMD `20e05bf`, agent forward
+     `3790ad2`). **ENABLE: launch the agent with `VIDEO_CAPTURER=1`** (default OFF =
+     ffmpeg = no BWE). Signaling server restarted (PID 39111 now relays BOTH
+     `video-bitrate` AND `video-sender-stats`).
+     - **beta.3 adds the HUD telemetry the owner asked for ("เพิ่มตัวดู Encode/Decode +
+       ขยายแถบตอน fullscreen"):** (1) **Encode ms** — the capturer measures pure HW
+       encode (nvEncEncodePicture→nvEncLockBitstream, excludes the fwrite/pipe-
+       backpressure wait that bloated the number before; WC `df75bbb`, ~3-7ms on the RTX
+       at 60fps), reports `enc_ms=` in its per-sec log → `frameSource.getEncodeMs()`
+       (ignores the 0.0 idle-window value) → `sender/index.ts` fills `encodeMs` →
+       AgentView forwards it over the new **`video-sender-stats`** signaling msg
+       (agent→controller, `packages/protocol` + server relay) → HUD shows `Encode X.Xms`
+       (Mac `92197a5`). (2) **Fullscreen HUD expand** — float rises to the top edge (drag
+       titlebar hidden there) + stats row grows (14px tabular). (3) **BWE target in HUD**
+       — `actual → target Mbps` so the owner watches auto-bitrate adapt. **Decode ms
+       deliberately NOT shown for native** — AVSampleBufferDisplayLayer has no decode-time
+       callback (real native decode = a VTDecompressionSession rewrite, deferred/offered);
+       WebRTC path still shows Decode. Controller-renderer bits also show on a plain
+       `start-controller.command` relaunch (dev), but Encode needs beta.3 on the agent.
+     - **beta.1 (`7cdea74`, cap 60, loss-only) = REGRESSION → BUFFERBLOAT (WC diagnosis
+       from `video-sender.log`):** capped BWE at 60 Mbps but the owner's link is ~40, so
+       a 60 Mbps VBR burst filled the queue → **3 symptoms, one cause:** double cursor
+       (instant local Mac cursor vs the delayed in-video cursor), higher end-to-end
+       latency, eventual freeze (queue finally overflows → packet loss → decoder waits
+       for IDR). Loss-only AIMD **never backed off** (bitrate pinned B60000, 2 backoffs
+       all session) because **bufferbloat is DELAY, not packet loss, until overflow.**
+       NOT an agent-forward bug (forward relayed every value correctly). Also: **cap 60
      - **beta.1 (`7cdea74`, cap 60, loss-only) = REGRESSION → BUFFERBLOAT (WC diagnosis
        from `video-sender.log`):** capped BWE at 60 Mbps but the owner's link is ~40, so
        a 60 Mbps VBR burst filled the queue → **3 symptoms, one cause:** double cursor
