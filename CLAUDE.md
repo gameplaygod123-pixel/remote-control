@@ -982,12 +982,37 @@ Lessons:
        the joint prerelease `VIDEO_CAPTURER=1` (golden rule #1), then owner e2e:
        static→target holds, narrow net→loss→bitrate drops, open→ramps to 60 & holds;
        pass = received fps ≈ emitted (net-drop 0) + smooth, NOT "locked 60".**
-   - **(B) H.265 — capturer `--codec` now passed (`20e05bf`, `capturerArgs.ts`:
-     config.codec 'hevc'→`--codec h265`, unit-tested).** WC verified `--codec h265`
-     emits valid HEVC Annex-B (VPS+SPS+PPS in-band, decodes clean). REMAINING = Mac:
-     codec-aware `nalSplitter.ts` (HEVC VCL 0-31, IDR 19/20, 2-byte NAL) + HEVC
-     `decoder.swift` (`CMVideoFormatDescriptionCreateFromHEVCParameterSets`) + codec
-     negotiation. Its own prerelease AFTER A.
+   - **(B) H.265 — FULL CODE DONE both ends (`e825583`), Mac receiver half VERIFIED on
+     real hardware, → PRERELEASE v1.28.0-beta.1 (awaiting joint e2e).** HEVC is opt-in
+     `VIDEO_CODEC=hevc` on the AGENT (default byte-identical H.264); the Mac receiver
+     **auto-detects the codec from the offer SDP** (`H265/90000` rtpmap) so nothing needs
+     configuring on the controller. Full spec: [`docs/bwe-hevc-plan.md`](docs/bwe-hevc-plan.md).
+     - **Sender (TS, runs on agent):** `resolveCodec(env)` → node-datachannel
+       `addH265Codec` + `H265RtpPacketizer` (0.32.3 ships both; no depacketizer, same as
+       H.264); codec-aware `AccessUnitAssembler` (HEVC 2-byte NAL header, `type=(b0>>1)&0x3f`,
+       VCL 0-31, IDR 19/20); coherent ffmpeg fallback (`hevc_nvenc` + `-f hevc`;
+       `hevc_nvenc` never MF-fallbacks → the SDP codec can't disagree with the bitstream).
+       capturer `--codec h265` was already done (WC-verified valid HEVC Annex-B).
+     - **Receiver (Mac):** codec-aware `RtpDepacketizer` (RFC 7798 — AP 48 / FU 49 /
+       2-byte header / FU-header rebuild); HEVC `decoder.swift` (VPS 32+SPS 33+PPS 34 →
+       `CMVideoFormatDescriptionCreateFromHEVCParameterSets`, `nalUnitHeaderLength:4`) gated
+       by a new `rvr_set_codec` C ABI; HEVC SPS dimension parser (`videoDimensions(au,codec)`,
+       profile_tier_level skip + conformance window) for the HUD; codec plumbed
+       receiver→main→koffi (`evt:'codec'` → `setNativeCodec` → `rvr_set_codec`, guarded so a
+       stale dylib still loads H.264).
+     - **VERIFIED on the real Mac (golden rule #1, receiver half):** the render selftest
+       `--selftest-hevc` encodes HEVC via VideoToolbox and **decodes 120/120** through the
+       exact production `Decoder`; `videoDimensions()` parsed **1920×1080** from that real
+       VideoToolbox HEVC SPS. Sender + depacketizer unit tests cover BOTH codecs (all pass);
+       typecheck + source lint clean; `librvr.dylib` rebuilt with `rvr_set_codec`.
+     - **NEXT (joint e2e, golden rule #1 — the SENDER/Windows half is unverified):** WC
+       installs **v1.28.0-beta.1**, runs the agent with **`VIDEO_CAPTURER=1` + `VIDEO_CODEC=hevc`**;
+       owner relaunches `start-controller.command` (rebuilds librvr.dylib + runs the updated
+       receiver from dev). DECIDER: HUD shows **`CODEC h265`**, video decodes clean (no
+       green/artefacts/freeze — proves ndc's win32 H265RtpPacketizer + the HEVC FU/AP path),
+       and HEVC delivers Parsec-like quality at a lower bitrate than H.264 at the same scene.
+       If clean → promote (rolls A+B into v1.28.0). If ndc win32 lacks a working H265
+       packetizer → fall back to H.264 (the env just isn't set).
 0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
    + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
    code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
