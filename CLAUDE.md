@@ -360,10 +360,34 @@ to push FPS.
     signed). **ENABLE AT RUNTIME:** the helper inherits the agent env
     (`videoSenderHost` forks with `{...process.env}`), so launch the agent with
     **`VIDEO_CAPTURER=1`** (e.g. `set VIDEO_CAPTURER=1 && PersonalRemote.exe`) — default
-    OFF = ffmpeg. **NEXT (WC e2e, Parsec open, 10+ min): GPU during active control near
-    Parsec (now measurable clean — one NVENC session), smooth, coexists (ACCESS_LOST
-    recovers), HUD ⚡NATIVE + fps tracks real change, PLI recovery via stdin, no
-    stuck-key/mouse-dead. Clean → promote v1.26.0, then 3d (cursor).**
+    OFF = ffmpeg.
+  - **3c e2e RESULT (WC, real hardware) — change-detection ✅, but found the REAL
+    remaining Parsec gap = NO adaptive bitrate (BWE):** capturer verified spawning
+    (`spawn capturer`, not ffmpeg), packed binary encodes/decodes clean. **Change-
+    detection PASSED hard:** static+mouse-still = enc 0% (~1 frame/s); static+MOUSE-
+    MOVING = enc ~0% (`skipped_pointeronly` 25-60/s) vs beta.4's flat 38-42% — the
+    Parsec-GPU-idle goal ddagrab structurally couldn't hit. BUT GPU + smoothness still
+    lose to Parsec, and WC nailed WHY: **we push a FIXED 60fps + fixed bitrate with NO
+    BWE** (`sendMessageBinary` per AU, no drop/adapt). The owner's link is ~35-45 Mbps;
+    pushing 50/60 → the Mac receives only fps 33-48 / 30-45 Mbps = **packet overflow →
+    whole-frame DROPS → not smooth** (THIS is the owner's "กะชาก" judder — frames
+    dropped from overflow, not a capture/present issue). Parsec adapts fps+bitrate to
+    fit the link → no drops → smooth AND less encode → lower GPU. So the smoothness gap
+    AND the GPU gap are the SAME cause: **no adaptive bitrate/framerate.** Codec (H.265
+    vs our H.264) is NOT the culprit (A/B inconclusive, scene-variance dominates; enc%
+    ours ~30.5 vs Parsec ~19.3 at 50Mbps 1440p60 — HEVC would help ~1.6× but needs a Mac
+    HEVC-decode rewrite = parked). Latency is fine (Net 10ms, jitter 4-13ms, same NVENC
+    encode ~4-9ms, same VideoToolbox decode ~4ms). **PLAN:** (1) BAND-AID now — fit a
+    fixed bitrate to the link (~25-30 Mbps, WC testing 25/35 for zero-drop + steady 60);
+    Mac bakes the winning number into `DEFAULT_VIDEO_CONFIG` + rebuild. (2) THE REAL FIX
+    = **BWE / adaptive bitrate+fps** (receiver measures bandwidth/loss → feedback over
+    the input pc data channel → sender sets capturer bitrate LIVE via a new stdin cmd
+    `B<kbps>`, like `'I'`=IDR, no respawn) — fixes smoothness + GPU together; Mac
+    (receiver) + Windows (sender). (3) min-fps floor (WC prototyped, 30fps decay→0 on
+    static) — keep OFF by default (costs GPU 8→22% active, addresses low-motion cadence
+    not the drop-judder); revisit after BWE. WC's experiment infra (env override +
+    `%LOCALAPPDATA%\pr-capturer-tune.txt` live tune-file + `--codec h264|h265`) is worth
+    committing (gated, no default change).
   - 3d cursor from DXGI over the dormant `'cursor'` channel (un-gate
     `PR_CURSOR_OVERLAY`) → Mac CSS overlay (reuse beta.4's plumbing).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
