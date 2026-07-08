@@ -436,6 +436,22 @@ to push FPS.
     1440→1080) sacrifice the latency (Step 1) or resolution the owner values more; judder-
     fixed is the win. Building **PRERELEASE v1.26.0-beta.2** (packs `88a3ce8`) for the
     owner to FEEL the smoothness.
+  - **"Parsec 6%" WAS A MYTH — corrected (owner Task-Manager + Parsec overlay, 2026-07-08):**
+    with Task Manager open (its perf graph continuously ANIMATING = not truly static),
+    **Parsec itself sits at ~35% GPU Video-Encode** (overlay: Host Video Encode 8.72ms/
+    frame @ locked 16.71ms = 60fps, Bitrate 3.10 Mbps, **Hardware H.265**). So Parsec is
+    NOT magically 6% on real (animating) content — **our locked-60 ~20% is already
+    competitive/better**; ~6% only ever happens on a fully FROZEN screen, which our
+    idle-decay already takes to 0%. Fully vindicates "don't chase 6%." **The ONE real
+    remaining differentiator = codec: Parsec H.265 vs our H.264.** H.265 ≈1.6× more
+    efficient → Parsec pushes 1440p60 at only ~3 Mbps (vs our higher H.264 bitrate) = less
+    network (fewer overflow drops) + better quality per bit, NOT lower GPU (HEVC encode GPU
+    is similar/higher). **NEXT after the beta.2 judder confirm: consider H.265** — the
+    capturer already has `--codec h265` (WC); the gap is Mac-receiver HEVC decode
+    (`decoder.swift` → `CMVideoFormatDescriptionCreateFromHEVCParameterSets` VPS+SPS+PPS,
+    2-byte NAL header, VCL types 0-31/IDR 19-20 + codec-aware `nalSplitter.ts` `isVcl()` +
+    negotiation; VideoToolbox on the M4 Pro decodes HEVC in hardware = feasible, medium
+    effort both ends).
   - 3d cursor from DXGI over the dormant `'cursor'` channel (un-gate
     `PR_CURSOR_OVERLAY`) → Mac CSS overlay (reuse beta.4's plumbing).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
