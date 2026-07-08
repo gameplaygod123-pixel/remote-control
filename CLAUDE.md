@@ -859,10 +859,31 @@ Lessons:
    **NEXT TWO (owner-requested 2026-07-08, spec in
    [`docs/bwe-hevc-plan.md`](docs/bwe-hevc-plan.md)):** **(A) BWE auto-bitrate ≤60 Mbps**
    — Mac receiver measures seq-gap loss → AIMD → target over signaling → agent forwards
-   `B<kbps>` to the capturer stdin (capturer half DONE). **(B) H.265** — the real
-   remaining Parsec gap (1.6× efficiency, ~half bitrate); capturer `--codec h265` DONE,
-   needs codec-aware `nalSplitter.ts` + HEVC `decoder.swift` (VideoToolbox HW-decodes HEVC
-   on the M4 Pro). Do A first (higher impact), then B; each its own prerelease.
+   `B<kbps>` to the capturer stdin. **(B) H.265** — the real remaining Parsec gap
+   (1.6× efficiency, ~half bitrate); needs codec-aware `nalSplitter.ts` + HEVC
+   `decoder.swift` (VideoToolbox HW-decodes HEVC on the M4 Pro). Do A first, then B.
+   - **(A) BWE — MAC SIDE DONE (`20e05bf`, awaiting WC wire + joint prerelease):**
+     `receiver/bwe.ts` (NEW, pure, units 10/10) = wrap-aware `SeqExtender` +
+     seq-gap loss-fraction per 1s window + `AimdController` (clean <2% loss →
+     +2 Mbps additive; >5% → ×0.85; clamp **[5, 60] Mbps** (owner cap); start 25;
+     1 Mbps hysteresis). Static screen = no packets → `tick()` null → HOLD (don't
+     probe on silence). Wired end-to-end on Mac: `receiver/index.ts` observes RTP
+     seq (bytes 2-3) + emits `evt:'bitrate'` on a moved target → `ipc.ts` /
+     `videoReceiverHost` / `main` / `preload` / `ControllerSession` → signaling
+     **`video-bitrate` {deviceId, kbps, channel:'video-native'}** (new in
+     `packages/protocol`; server relays it in the sdp/ice `resolveRelayTarget`
+     group — **the live signaling server must be rebuilt/restarted to relay it**,
+     like `video-native` SDP needed; old servers just drop it → sender holds
+     launch bitrate = graceful). **WC's remaining half = the 7 agent-side forward
+     points** (signaling `video-bitrate` → agent main → IPC → video-sender helper
+     → capturer stdin `B<kbps>`; capturer `B<kbps>` retune already verified
+     25→12→45). WC was blocked ONLY on the protocol type — now landed.
+   - **(B) H.265 — capturer `--codec` now passed (`20e05bf`, `capturerArgs.ts`:
+     config.codec 'hevc'→`--codec h265`, unit-tested).** WC verified `--codec h265`
+     emits valid HEVC Annex-B (VPS+SPS+PPS in-band, decodes clean). REMAINING = Mac:
+     codec-aware `nalSplitter.ts` (HEVC VCL 0-31, IDR 19/20, 2-byte NAL) + HEVC
+     `decoder.swift` (`CMVideoFormatDescriptionCreateFromHEVCParameterSets`) + codec
+     negotiation. Its own prerelease AFTER A.
 0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
    + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
    code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
