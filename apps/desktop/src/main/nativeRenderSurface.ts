@@ -13,15 +13,18 @@
 import koffi from 'koffi'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import type { VideoCodec } from '../video-native/shared/contract'
 
 type AttachFn = (viewPtr: bigint) => void
 type PushFn = (data: Buffer, len: number) => void
+type SetCodecFn = (codec: number) => void
 type DetachFn = () => void
 
 let loaded = false
 let available = false
 let attachFn: AttachFn | null = null
 let pushFn: PushFn | null = null
+let setCodecFn: SetCodecFn | null = null
 let detachFn: DetachFn | null = null
 
 function resolveLibPath(): string | null {
@@ -52,6 +55,13 @@ function ensureLoaded(): boolean {
     const lib = koffi.load(libPath)
     attachFn = lib.func('void rvr_attach(uint64_t view)') as unknown as AttachFn
     pushFn = lib.func('void rvr_push(uint8_t *data, int32_t len)') as unknown as PushFn
+    // Optional (older dylibs won't export it) -- guarded so a stale librvr.dylib
+    // without rvr_set_codec still loads and plays H.264 instead of failing to load.
+    try {
+      setCodecFn = lib.func('void rvr_set_codec(int32_t codec)') as unknown as SetCodecFn
+    } catch {
+      setCodecFn = null
+    }
     detachFn = lib.func('void rvr_detach()') as unknown as DetachFn
     available = true
     console.log(`[native-render] loaded ${libPath}`)
@@ -84,6 +94,16 @@ export function attachNativeSurface(handle: Buffer): boolean {
 export function pushNativeAccessUnit(au: Buffer): void {
   if (!available || !pushFn) return
   pushFn(au, au.length)
+}
+
+/**
+ * Set the decoder codec (from the offer SDP) before AUs arrive, so the decoder
+ * builds the right CMFormatDescription (H.264 vs HEVC parameter sets). No-op if the
+ * dylib is unavailable or predates rvr_set_codec (it then decodes H.264 as before).
+ */
+export function setNativeCodec(codec: VideoCodec): void {
+  if (!ensureLoaded() || !setCodecFn) return
+  setCodecFn(codec === 'hevc' ? 1 : 0)
 }
 
 /** Remove the video subview (session end / receiver-down). No-op if unavailable. */

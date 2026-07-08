@@ -14,8 +14,12 @@ import type { VideoConfig } from '../shared/contract'
 
 /** Which ffmpeg encoder the sender drives. NVENC is the primary (GPU zero-copy,
  *  ~7% CPU at 1440p60); MF is the vendor-agnostic fallback for non-NVIDIA GPUs
- *  (needs a per-frame GPU->CPU hwdownload, ~130% CPU) -- see RESULTS.md §C. */
-export type SenderEncoder = 'h264_nvenc' | 'h264_mf'
+ *  (needs a per-frame GPU->CPU hwdownload, ~130% CPU) -- see RESULTS.md §C.
+ *  hevc_nvenc is the HEVC counterpart of h264_nvenc (opt-in VIDEO_CODEC=hevc); it
+ *  keeps the ffmpeg FALLBACK codec-coherent with the negotiated SDP when the custom
+ *  capturer (the real HEVC path) isn't running. There is no hevc_mf fallback -- HEVC
+ *  is NVENC-only here; a non-NVIDIA box stays on H.264. */
+export type SenderEncoder = 'h264_nvenc' | 'h264_mf' | 'hevc_nvenc'
 
 /** `-g` (IDR interval, frames). Step 1 tried NVENC `-intra-refresh` (rolling I-MBs
  *  instead of a periodic full IDR) for a flatter bitrate, but it is INCOMPATIBLE
@@ -62,7 +66,11 @@ function encoderArgs(
   maxBitrateKbps: number
 ): string[] {
   const bitrate = `${bitrateKbps}k`
-  if (encoder === 'h264_nvenc') {
+  if (encoder === 'h264_nvenc' || encoder === 'hevc_nvenc') {
+    // Same measured-good low-latency NVENC flag set for both codecs -- hevc_nvenc
+    // accepts the identical -tune ull / -rc vbr / -bf 0 / -g / -forced-idr /
+    // -zerolatency / -rc-lookahead / -no-scenecut knobs. Only -c:v differs.
+    const codecArg = encoder === 'hevc_nvenc' ? 'hevc_nvenc' : 'h264_nvenc'
     // VBR (was CBR): the target is the AVERAGE, `-maxrate` the hard cap. A static
     // screen falls to a few Mbps (like Parsec) instead of pumping the full rate
     // constantly -- big cut in average traffic, which is what strained ICE at 60
@@ -70,7 +78,7 @@ function encoderArgs(
     // `-tune ull` + `-bf 0` + `-zerolatency` keep the per-frame path low-latency.
     return [
       '-c:v',
-      'h264_nvenc',
+      codecArg,
       '-preset',
       preset, // p1 (fastest) default; p1→p4 quality sweep
       '-tune',
@@ -141,7 +149,7 @@ function filterChain(encoder: SenderEncoder, config: VideoConfig, outputIdx: num
   // the OS cursor in the frame (the old composited path) for cursor:'composited'.
   const drawMouse = config.cursor === 'separate' ? 0 : 1
   const grab = `ddagrab=output_idx=${outputIdx}:framerate=${config.fps}:dup_frames=0:draw_mouse=${drawMouse}`
-  if (encoder === 'h264_nvenc') {
+  if (encoder === 'h264_nvenc' || encoder === 'hevc_nvenc') {
     // TRUE zero-copy: hand ddagrab's D3D11 RGB surface straight to NVENC, which
     // ingests the d3d11 frame and does RGB->NV12 on-GPU internally (verified:
     // "Using input frames context (format d3d11) with h264_nvenc encoder").
@@ -186,7 +194,9 @@ export function buildFfmpegArgs(config: VideoConfig, opts: FfmpegArgOptions = {}
     '-bsf:v',
     'dump_extra',
     '-f',
-    'h264',
+    // Elementary-stream container must match the codec (dump_extra keeps VPS/SPS/PPS
+    // in-band for both). hevc_nvenc -> raw HEVC; h264_* -> raw H.264.
+    encoder === 'hevc_nvenc' ? 'hevc' : 'h264',
     '-flush_packets',
     '1',
     'pipe:1'

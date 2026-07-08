@@ -16,16 +16,31 @@
 // here so it isn't "fixed" by accident. Removing it needs an out-of-band framed
 // muxer (future work), not a change to this splitter.
 
+import type { VideoCodec } from '../shared/contract'
+
 const START_CODE = Buffer.from([0x00, 0x00, 0x00, 0x01])
 
-function nalType(nal: Buffer): number {
-  return nal.length > 0 ? nal[0] & 0x1f : -1
+// NAL header layout differs by codec:
+//   H.264 (RFC 6184): 1-byte header, type = byte0 & 0x1f (types 1..31).
+//   HEVC  (RFC 7798): 2-byte header, type = (byte0 >> 1) & 0x3f (types 0..63).
+function nalType(nal: Buffer, codec: VideoCodec): number {
+  if (nal.length === 0) return -1
+  return codec === 'hevc' ? (nal[0] >> 1) & 0x3f : nal[0] & 0x1f
 }
 
-/** VCL slice types 1..5 (1 = non-IDR, 5 = IDR). One per frame in our low-latency
- *  single-slice config, so a VCL NAL marks the end of an access unit. */
-function isVcl(type: number): boolean {
-  return type >= 1 && type <= 5
+/** VCL (coded picture slice) NAL types -- one per frame in our low-latency
+ *  single-slice config, so a VCL NAL marks the end of an access unit.
+ *   H.264: 1..5 (1 = non-IDR .. 5 = IDR).
+ *   HEVC : 0..31 (all VCL types; TRAIL/RASL/RADL/IDR/CRA/BLA). */
+function isVcl(type: number, codec: VideoCodec): boolean {
+  return codec === 'hevc' ? type >= 0 && type <= 31 : type >= 1 && type <= 5
+}
+
+/** A VCL type that begins a keyframe (decodable entry point).
+ *   H.264: IDR = 5.
+ *   HEVC : IDR_W_RADL = 19, IDR_N_LP = 20 (our capturer emits IDR keyframes). */
+function isKeyframeVcl(type: number, codec: VideoCodec): boolean {
+  return codec === 'hevc' ? type === 19 || type === 20 : type === 5
 }
 
 /**
@@ -85,26 +100,30 @@ export interface AccessUnit {
 }
 
 /**
- * Groups NAL units into access units. Leading parameter/SEI/AUD NALs (types
- * 6/7/8/9) attach to the frame that follows; the frame is flushed the moment its
- * VCL slice arrives. With `-bsf:v dump_extra` each IDR is preceded by SPS+PPS, so
- * a keyframe AU is self-contained (decodable after a mid-stream join / respawn).
+ * Groups NAL units into access units. Leading parameter/SEI/AUD NALs attach to
+ * the frame that follows (H.264 6/7/8/9; HEVC VPS/SPS/PPS 32/33/34 + SEI 39/40 +
+ * AUD 35); the frame is flushed the moment its VCL slice arrives. With `-bsf:v
+ * dump_extra` / the capturer's in-band params each IDR is preceded by its
+ * parameter sets, so a keyframe AU is self-contained (decodable after a
+ * mid-stream join / respawn). Codec-aware: pass 'hevc' for the HEVC NAL layout.
  */
 export class AccessUnitAssembler {
   private pending: Buffer[] = []
   private hasVcl = false
 
+  constructor(private readonly codec: VideoCodec = 'h264') {}
+
   push(nal: Buffer): AccessUnit | null {
-    const type = nalType(nal)
+    const type = nalType(nal, this.codec)
     let flushed: AccessUnit | null = null
 
     // A VCL while we already hold one means a new AU began without our VCL having
     // flushed (multi-slice / unexpected) -- flush what we have first, defensively.
-    if (isVcl(type) && this.hasVcl) {
+    if (isVcl(type, this.codec) && this.hasVcl) {
       flushed = this.flush()
     }
     this.pending.push(nal)
-    if (isVcl(type)) {
+    if (isVcl(type, this.codec)) {
       this.hasVcl = true
       // Single slice per frame in our config -> this VCL ends the AU.
       const au = this.flush()
@@ -118,7 +137,7 @@ export class AccessUnitAssembler {
     let keyframe = false
     const parts: Buffer[] = []
     for (const nal of this.pending) {
-      if (nalType(nal) === 5) keyframe = true
+      if (isKeyframeVcl(nalType(nal, this.codec), this.codec)) keyframe = true
       parts.push(START_CODE, nal)
     }
     this.pending = []

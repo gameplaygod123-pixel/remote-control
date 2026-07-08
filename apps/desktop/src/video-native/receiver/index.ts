@@ -23,9 +23,9 @@ import {
   type LogLevel
 } from 'node-datachannel'
 import type { MainToVideoReceiver, VideoReceiverToMain } from '../shared/ipc'
-import type { NativeVideoStats } from '../shared/contract'
-import { H264Depacketizer, isRtcp } from './rtpDepacketizer'
-import { spsDimensions } from './spsDimensions'
+import type { NativeVideoStats, VideoCodec } from '../shared/contract'
+import { RtpDepacketizer, createDepacketizer, isRtcp } from './rtpDepacketizer'
+import { videoDimensions } from './spsDimensions'
 import { BandwidthEstimator } from './bwe'
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 
@@ -52,7 +52,11 @@ interface Session {
   id: number
   pc: InstanceType<typeof PeerConnection>
   track: Track | null
-  depacketizer: H264Depacketizer
+  // Codec is auto-detected from the offer SDP (H264 default; H265 when the agent
+  // opted into VIDEO_CODEC=hevc). Drives the depacketizer payload format, the SPS
+  // dimension parser, and the codec reported to main (which sets the Swift decoder).
+  codec: VideoCodec
+  depacketizer: RtpDepacketizer
   // Loss-based AIMD bitrate estimator (feeds the sender's live bitrate over
   // signaling via evt:'bitrate'). Media-only pc has no built-in BWE -- see bwe.ts.
   bwe: BandwidthEstimator
@@ -89,7 +93,10 @@ function closeSession(): void {
 function requestKeyframe(s: Session, reason: string): void {
   if (!s.track) return
   const now = performance.now()
-  if (s.lastKeyframeRequestAt !== 0 && now - s.lastKeyframeRequestAt < KEYFRAME_REQUEST_COOLDOWN_MS) {
+  if (
+    s.lastKeyframeRequestAt !== 0 &&
+    now - s.lastKeyframeRequestAt < KEYFRAME_REQUEST_COOLDOWN_MS
+  ) {
     return // rate-limited to <=1/s so we never storm the sender
   }
   s.lastKeyframeRequestAt = now
@@ -125,7 +132,8 @@ function startSession(): void {
     id,
     pc,
     track: null,
-    depacketizer: new H264Depacketizer(),
+    codec: 'h264',
+    depacketizer: createDepacketizer('h264'),
     bwe: new BandwidthEstimator(),
     firstFrameSeen: false,
     lastKeyframeRequestAt: 0,
@@ -180,7 +188,7 @@ function startSession(): void {
         // Read the real resolution off the in-band SPS once (the first AU is an
         // IDR with parameter sets); ndc/VideoToolbox never surface it to Node.
         if (!session.lastStats.width) {
-          const dims = spsDimensions(au.data)
+          const dims = videoDimensions(au.data, session.codec)
           if (dims) {
             session.lastStats.width = dims.width
             session.lastStats.height = dims.height
@@ -236,7 +244,7 @@ function reportStats(session: Session): void {
     renderMs: session.lastStats.renderMs ?? null,
     rttMs: null, // derived on the controller from the input pc (see above)
     jitterMs: session.framesInWindow > 0 ? Math.round(session.jitterMs) : null,
-    codec: 'h264'
+    codec: session.codec
   }
   // Per-second stats to the log too (not just the HUD) so frame-pacing evidence —
   // fps swing + jitter over time, vs Parsec — is inspectable after the fact (golden
@@ -272,6 +280,19 @@ process.on('message', (raw: MainToVideoReceiver) => {
         break
       }
       log(`remote-offer (${raw.sdp.length} bytes)`)
+      // Auto-detect the codec from the offer's rtpmap (the agent advertises H265 only
+      // when it opted into VIDEO_CODEC=hevc). Swap the depacketizer to the matching
+      // RTP payload format and tell main so it sets the Swift decoder before any AU
+      // arrives. No controller-side config needed -- the sender's choice drives it.
+      {
+        const offered: VideoCodec = /a=rtpmap:\d+\s+H265\//i.test(raw.sdp) ? 'hevc' : 'h264'
+        if (offered !== current.codec) {
+          current.codec = offered
+          current.depacketizer = createDepacketizer(offered)
+          log(`codec detected from offer: ${offered}`)
+          send({ evt: 'codec', codec: offered })
+        }
+      }
       try {
         current.pc.setRemoteDescription(raw.sdp, 'offer')
       } catch (e) {

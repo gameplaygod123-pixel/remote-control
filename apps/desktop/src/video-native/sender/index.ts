@@ -24,6 +24,7 @@ import {
   Video,
   RtpPacketizationConfig,
   H264RtpPacketizer,
+  H265RtpPacketizer,
   RtcpSrReporter,
   RtcpNackResponder,
   initLogger,
@@ -31,7 +32,7 @@ import {
   type LogLevel
 } from 'node-datachannel'
 import type { MainToVideoSender, VideoSenderToMain } from '../shared/ipc'
-import type { NativeVideoStats, VideoConfig } from '../shared/contract'
+import type { NativeVideoStats, VideoCodec, VideoConfig } from '../shared/contract'
 import {
   FfmpegFrameSource,
   CapturerFrameSource,
@@ -119,6 +120,19 @@ function resolveFfmpegTuning(): { preset?: string; bitrateKbps?: number } {
 function capturerEnabled(): boolean {
   return process.env.VIDEO_CAPTURER === '1'
 }
+
+// ── Step: H.265 (HEVC) opt-in ─────────────────────────────────────────────────
+// HEVC is ~1.6x more efficient than H.264 (Parsec runs 1440p60 HEVC at ~half the
+// bitrate). OPT-IN via VIDEO_CODEC=hevc and default OFF so a plain agent is
+// byte-identical H.264. The Mac receiver auto-detects the codec from the offer SDP
+// (H265/90000 in the rtpmap), so nothing needs configuring on the controller. All
+// three encode paths honour it coherently (capturer --codec h265, ffmpeg hevc_nvenc,
+// -f hevc); the h264_mf fallback stays H.264 but hevc_nvenc never falls back to it
+// (frameSource only MF-fallbacks the h264_nvenc encoder), so the SDP codec can never
+// disagree with the bitstream. VideoToolbox on the Mac decodes HEVC in hardware.
+function resolveCodec(config: VideoConfig): VideoCodec {
+  return process.env.VIDEO_CODEC === 'hevc' ? 'hevc' : config.codec
+}
 function resolveCapturerPath(): string | null {
   const fromEnv = process.env.CAPTURER_PATH
   if (fromEnv && existsSync(fromEnv)) return fromEnv
@@ -167,22 +181,35 @@ function closeSession(): void {
   }
 }
 
-function startSession(config: VideoConfig): void {
+function startSession(rawConfig: VideoConfig): void {
   closeSession()
   sessionCounter += 1
   const id = sessionCounter
-  log(`startSession id=${id} ${config.width}x${config.height}@${config.fps} codec=${config.codec} startBr=${config.startBitrateKbps}kbps cursor=${config.cursor}`)
+  // Resolve the codec (VIDEO_CODEC=hevc opt-in) once and thread it through the whole
+  // session via config.codec: the RTP track/packetizer, capturer/ffmpeg args, the AU
+  // assembler NAL layout, and the reported stats all read it, so they can't disagree.
+  const config: VideoConfig = { ...rawConfig, codec: resolveCodec(rawConfig) }
+  log(
+    `startSession id=${id} ${config.width}x${config.height}@${config.fps} codec=${config.codec} startBr=${config.startBitrateKbps}kbps cursor=${config.cursor}`
+  )
 
   const pc = new PeerConnection(`video-sender-${id}`, { iceServers: ICE_SERVERS })
 
-  // SendOnly H.264 track + SR reporter + NACK responder (auto-retransmit lost
+  // SendOnly video track + SR reporter + NACK responder (auto-retransmit lost
   // packets from a send buffer, zero JS involvement -- item A first line of defence).
+  // Codec-matched: an H.265 stream needs addH265Codec + H265RtpPacketizer (RFC 7798
+  // payload format) or the receiver can't depacketize it. The rtpmap the receiver
+  // sees in the offer (H264 vs H265) is what it auto-detects the codec from.
   const media = new Video('video', 'SendOnly')
-  media.addH264Codec(PAYLOAD_TYPE)
+  const hevc = config.codec === 'hevc'
+  if (hevc) media.addH265Codec(PAYLOAD_TYPE)
+  else media.addH264Codec(PAYLOAD_TYPE)
   media.addSSRC(SSRC, CNAME)
   const track = pc.addTrack(media)
   const rtpConfig = new RtpPacketizationConfig(SSRC, CNAME, PAYLOAD_TYPE, CLOCK_RATE)
-  const packetizer = new H264RtpPacketizer('LongStartSequence', rtpConfig, MAX_FRAGMENT)
+  const packetizer = hevc
+    ? new H265RtpPacketizer('LongStartSequence', rtpConfig, MAX_FRAGMENT)
+    : new H264RtpPacketizer('LongStartSequence', rtpConfig, MAX_FRAGMENT)
   packetizer.addToChain(new RtcpSrReporter(rtpConfig))
   packetizer.addToChain(new RtcpNackResponder())
   track.setMediaHandler(packetizer)
@@ -244,7 +271,9 @@ function startSession(config: VideoConfig): void {
     const now = performance.now()
     const since = now - session.lastKeyframeAt
     if (session.lastKeyframeAt !== 0 && since < KEYFRAME_COOLDOWN_MS) {
-      log(`RTCP keyframe request (pli=${fb.pli} fir=${fb.fir}) coalesced -- ${Math.round(since)}ms since last forced IDR (< ${KEYFRAME_COOLDOWN_MS}ms cooldown)`)
+      log(
+        `RTCP keyframe request (pli=${fb.pli} fir=${fb.fir}) coalesced -- ${Math.round(since)}ms since last forced IDR (< ${KEYFRAME_COOLDOWN_MS}ms cooldown)`
+      )
       return
     }
     session.lastKeyframeAt = now
@@ -315,9 +344,15 @@ function startFrameSource(session: Session): void {
     log(`ffmpeg: ${ffmpegPath}`)
     const tuning = resolveFfmpegTuning()
     if (tuning.preset || tuning.bitrateKbps) {
-      log(`quality-sweep override: preset=${tuning.preset ?? 'p1'} bitrateKbps=${tuning.bitrateKbps ?? session.config.startBitrateKbps}`)
+      log(
+        `quality-sweep override: preset=${tuning.preset ?? 'p1'} bitrateKbps=${tuning.bitrateKbps ?? session.config.startBitrateKbps}`
+      )
     }
-    session.source = new FfmpegFrameSource(ffmpegPath, session.config, gop, cb, 'h264_nvenc', tuning)
+    // Codec-matched encoder so the ffmpeg fallback emits the same codec the SDP
+    // negotiated. hevc_nvenc never MF-fallbacks (frameSource only MF-fallbacks
+    // h264_nvenc), so it can't silently drop back to an H.264 bitstream.
+    const encoder = session.config.codec === 'hevc' ? 'hevc_nvenc' : 'h264_nvenc'
+    session.source = new FfmpegFrameSource(ffmpegPath, session.config, gop, cb, encoder, tuning)
     session.source.start()
   }
 

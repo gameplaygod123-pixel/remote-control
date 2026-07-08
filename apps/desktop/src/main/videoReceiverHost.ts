@@ -115,6 +115,10 @@ export function startVideoReceiverHost(callbacks: VideoReceiverCallbacks): Video
         case 'au':
           callbacks.onAu(msg.data)
           break
+        case 'codec':
+          log(`codec from helper: ${msg.codec}`)
+          callbacks.onCodec(msg.codec)
+          break
         case 'first-frame':
           log('first-frame decoded + on screen')
           callbacks.onFirstFrame()

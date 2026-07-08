@@ -53,19 +53,18 @@ func readExact(_ fd: Int32, _ n: Int) -> Data? {
 }
 
 // ─────────────────────────── AVCC/format-desc -> Annex-B (selftest helper) ───────────────────────────
-func sampleToAnnexB(_ sample: CMSampleBuffer, keyframe: Bool) -> Data {
+func sampleToAnnexB(_ sample: CMSampleBuffer, keyframe: Bool, hevc: Bool = false) -> Data {
   var out = Data()
   if keyframe, let fmt = CMSampleBufferGetFormatDescription(sample) {
+    let getParamSet = hevc
+      ? CMVideoFormatDescriptionGetHEVCParameterSetAtIndex
+      : CMVideoFormatDescriptionGetH264ParameterSetAtIndex
     var setCount = 0
-    CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, parameterSetIndex: 0,
-      parameterSetPointerOut: nil, parameterSetSizeOut: nil,
-      parameterSetCountOut: &setCount, nalUnitHeaderLengthOut: nil)
+    getParamSet(fmt, 0, nil, nil, &setCount, nil)
     for i in 0..<setCount {
       var ptr: UnsafePointer<UInt8>?
       var size = 0
-      if CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, parameterSetIndex: i,
-          parameterSetPointerOut: &ptr, parameterSetSizeOut: &size,
-          parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr, let p = ptr {
+      if getParamSet(fmt, i, &ptr, &size, nil, nil) == noErr, let p = ptr {
         out.append(contentsOf: [0, 0, 0, 1])
         out.append(UnsafeBufferPointer(start: p, count: size))
       }
@@ -103,18 +102,30 @@ func isKeyframe(_ sample: CMSampleBuffer) -> Bool {
 }
 
 // ─────────────────────────── selftest (headless) ───────────────────────────
-func runSelftest() {
+// Encodes synthetic frames with VideoToolbox in the chosen codec, feeds them back
+// through the SAME Decoder the production path uses, and confirms frames decode.
+// `--selftest-hevc` exercises the HEVC path end-to-end on the real Mac hardware
+// (golden rule #1: prove the native VideoToolbox HEVC decode before shipping).
+func runSelftest(hevc: Bool) {
   let W = 1920, H = 1080, FRAMES = 120, FPS = 60
-  logErr("selftest \(W)x\(H) @\(FPS) x\(FRAMES)")
+  logErr("selftest \(hevc ? "hevc" : "h264") \(W)x\(H) @\(FPS) x\(FRAMES)")
   let renderer = AVSampleBufferDisplayLayer().sampleBufferRenderer
   let decoder = Decoder()
+  decoder.setCodec(hevc ? .hevc : .h264)
   var decoded = 0
   decoder.onFirstFrame = { emit(["evt": "first-frame"]) }
   decoder.onSample = { sb in renderer.enqueue(sb); decoded += 1 }
 
+  // Optional: dump the first keyframe AU (in-band params + IDR) to a file so the TS
+  // videoDimensions() parser can be verified against a REAL VideoToolbox-encoded
+  // bitstream (H.264 or HEVC). Set PR_DUMP_AU=<path>.
+  let dumpPath = ProcessInfo.processInfo.environment["PR_DUMP_AU"]
+  var dumped = false
+
   var comp: VTCompressionSession?
   VTCompressionSessionCreate(allocator: kCFAllocatorDefault, width: Int32(W), height: Int32(H),
-    codecType: kCMVideoCodecType_H264, encoderSpecification: nil, imageBufferAttributes: nil,
+    codecType: hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264,
+    encoderSpecification: nil, imageBufferAttributes: nil,
     compressedDataAllocator: nil, outputCallback: nil, refcon: nil, compressionSessionOut: &comp)
   guard let enc = comp else { emit(["evt": "fatal", "message": "no encoder"]); return }
   VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
@@ -135,7 +146,12 @@ func runSelftest() {
       presentationTimeStamp: CMTime(value: Int64(f), timescale: Int32(FPS)),
       duration: .invalid, frameProperties: nil, infoFlagsOut: nil) { st, _, sample in
         guard st == noErr, let s = sample else { return }
-        let au = sampleToAnnexB(s, keyframe: isKeyframe(s))
+        let kf = isKeyframe(s)
+        let au = sampleToAnnexB(s, keyframe: kf, hevc: hevc)
+        if kf, !dumped, let path = dumpPath {
+          try? au.write(to: URL(fileURLWithPath: path))
+          dumped = true
+        }
         decoder.push(au)
     }
   }
@@ -245,8 +261,10 @@ final class RenderApp: NSObject, NSApplicationDelegate {
 }
 
 // ─────────────────────────── entry ───────────────────────────
-if CommandLine.arguments.contains("--selftest") {
-  runSelftest()
+if CommandLine.arguments.contains("--selftest-hevc") {
+  runSelftest(hevc: true)
+} else if CommandLine.arguments.contains("--selftest") {
+  runSelftest(hevc: false)
 } else {
   let app = NSApplication.shared
   app.setActivationPolicy(.accessory) // no Dock icon; still shows windows

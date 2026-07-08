@@ -11,7 +11,7 @@
 // Both are separate native processes outside Chromium; main only relays their
 // SDP/ICE over the existing signaling and positions the receiver's render.
 
-import type { NativeVideoStats, VideoConfig } from './contract'
+import type { NativeVideoStats, VideoCodec, VideoConfig } from './contract'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Sender = agent (Windows). Owns DXGI capture + HW encode + the outbound track.
@@ -74,6 +74,10 @@ export type VideoReceiverToMain =
    * channel so the Buffer transfers efficiently at 60fps.
    */
   | { evt: 'au'; data: Buffer }
+  /** Codec auto-detected from the offer SDP (H265 => the agent opted into hevc).
+   *  Main sets the in-process decoder (setNativeCodec -> librvr rvr_set_codec) so it
+   *  builds the right CMFormatDescription BEFORE the first AU arrives. */
+  | { evt: 'codec'; codec: VideoCodec }
   /** First decoded frame is on screen -- renderer can drop its "connecting…"
    *  overlay. Cheap signal that avoids guessing from stats. */
   | { evt: 'first-frame' }
@@ -107,6 +111,8 @@ export interface VideoReceiverCallbacks {
   onIce: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
   /** One Annex-B access unit -> push into the in-process render surface. */
   onAu: (au: Buffer) => void
+  /** Codec detected from the offer -> set the native decoder before AUs arrive. */
+  onCodec: (codec: VideoCodec) => void
   onFirstFrame: () => void
   onStats: (stats: NativeVideoStats) => void
   /** BWE: a new sender bitrate target (kbps) to relay over signaling to the agent. */

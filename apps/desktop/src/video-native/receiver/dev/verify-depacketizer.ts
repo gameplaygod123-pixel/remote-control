@@ -1,7 +1,7 @@
 // Unit checks for the receiver's pure RTP->Annex-B reassembly (rtpDepacketizer.ts)
 // -- the piece the joint e2e can't isolate. Mirrors sender/dev/verify-units.mjs.
 // Run from apps/desktop:  node_modules/.bin/tsx src/video-native/receiver/dev/verify-depacketizer.ts
-import { H264Depacketizer, isRtcp } from '../rtpDepacketizer'
+import { H264Depacketizer, createDepacketizer, isRtcp } from '../rtpDepacketizer'
 import { BandwidthEstimator, BWE_CEIL_KBPS, BWE_FLOOR_KBPS, BWE_START_KBPS } from '../bwe'
 
 let failures = 0
@@ -81,6 +81,55 @@ function rtp(payload: Buffer, opts: { marker?: boolean; ts?: number; seq?: numbe
   check('ts-change: prior AU flushed when ts advances', second.length === 1)
   check('ts-change: flushed AU is nalA', second[0]?.data.equals(Buffer.concat([SC, nalA])) === true)
   check('ts-change: non-IDR not keyframe', second[0]?.keyframe === false)
+}
+
+// 4b. HEVC single NAL (IDR_W_RADL type 19, 2-byte header) -> keyframe AU
+{
+  const d = createDepacketizer('hevc')
+  const nal = Buffer.concat([Buffer.from([0x26, 0x01]), Buffer.from('idrdata')]) // type=(0x26>>1)=19
+  const aus = d.push(rtp(nal, { marker: true, ts: 5000 }))
+  check('hevc single: 1 AU', aus.length === 1)
+  check('hevc single: keyframe true (IDR 19)', aus[0]?.keyframe === true)
+  check('hevc single: Annex-B framed', aus[0]?.data.equals(Buffer.concat([SC, nal])) === true)
+}
+
+// 4c. HEVC FU (type 49): IDR NAL split S/mid/E -> reassembled to original 2-byte NAL
+{
+  const d = createDepacketizer('hevc')
+  // FU PayloadHdr: type 49 -> byte0 = 49<<1 = 0x62, byte1 = 0x01 (layer/tid).
+  const p0 = 0x62
+  const p1 = 0x01
+  const fuType = 19 // IDR_W_RADL
+  const pS = Buffer.from([p0, p1, 0x80 | fuType, 0xaa, 0xbb])
+  const pM = Buffer.from([p0, p1, fuType, 0xcc])
+  const pE = Buffer.from([p0, p1, 0x40 | fuType, 0xdd])
+  check('hevc FU start: no AU yet', d.push(rtp(pS, { marker: false, ts: 6000 })).length === 0)
+  check('hevc FU mid: no AU yet', d.push(rtp(pM, { marker: false, ts: 6000 })).length === 0)
+  const aus = d.push(rtp(pE, { marker: true, ts: 6000 }))
+  // Rebuilt header: h0 = (0x62 & 0x81) | (19<<1) = 0x26, h1 = 0x01.
+  const want = Buffer.concat([SC, Buffer.from([0x26, 0x01, 0xaa, 0xbb, 0xcc, 0xdd])])
+  check('hevc FU end: 1 AU', aus.length === 1)
+  check('hevc FU: reassembled 2-byte NAL correct', aus[0]?.data.equals(want) === true)
+  check('hevc FU: keyframe true (IDR)', aus[0]?.keyframe === true)
+}
+
+// 4d. HEVC AP (type 48): VPS+SPS aggregated -> two NALs, keyframe (SPS present)
+{
+  const d = createDepacketizer('hevc')
+  const vps = Buffer.from([0x40, 0x01, 0x0c]) // type 32
+  const sps = Buffer.from([0x42, 0x01, 0x22]) // type 33
+  const ap = Buffer.concat([
+    Buffer.from([0x60, 0x01]), // AP PayloadHdr (type 48)
+    Buffer.from([0x00, vps.length]),
+    vps,
+    Buffer.from([0x00, sps.length]),
+    sps
+  ])
+  const aus = d.push(rtp(ap, { marker: true, ts: 7000 }))
+  const want = Buffer.concat([SC, vps, SC, sps])
+  check('hevc AP: 1 AU', aus.length === 1)
+  check('hevc AP: two NALs w/ start codes', aus[0]?.data.equals(want) === true)
+  check('hevc AP: keyframe true (SPS 33)', aus[0]?.keyframe === true)
 }
 
 // 5. isRtcp routing

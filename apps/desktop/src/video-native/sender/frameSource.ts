@@ -52,7 +52,7 @@ export interface FfmpegTuning {
 export class FfmpegFrameSource implements FrameSource {
   private proc: ChildProcess | null = null
   private splitter = new NalSplitter()
-  private assembler = new AccessUnitAssembler()
+  private assembler: AccessUnitAssembler
   private encoder: SenderEncoder
   private everProduced = false
   private triedMf = false
@@ -79,6 +79,7 @@ export class FfmpegFrameSource implements FrameSource {
     private readonly tuning: FfmpegTuning = {}
   ) {
     this.encoder = encoder
+    this.assembler = new AccessUnitAssembler(config.codec)
   }
 
   start(): void {
@@ -150,7 +151,9 @@ export class FfmpegFrameSource implements FrameSource {
     })
     const brk = this.tuning.bitrateKbps ?? this.config.startBitrateKbps
     const preset = this.tuning.preset ?? 'p1'
-    this.cb.onLog?.(`spawn ffmpeg (${this.encoder}) ${this.config.width}x${this.config.height}@${this.config.fps} g=${this.gop} preset=${preset} ${brk}k`)
+    this.cb.onLog?.(
+      `spawn ffmpeg (${this.encoder}) ${this.config.width}x${this.config.height}@${this.config.fps} g=${this.gop} preset=${preset} ${brk}k`
+    )
     const proc = spawn(this.ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     this.proc = proc
 
@@ -189,9 +192,7 @@ export class FfmpegFrameSource implements FrameSource {
       // SPS/PPS) WITHOUT tearing down the session -- unless it's crash-looping.
       if (this.everProduced) {
         const now = Date.now()
-        this.crashTimes = this.crashTimes.filter(
-          (t) => now - t < FfmpegFrameSource.CRASH_WINDOW_MS
-        )
+        this.crashTimes = this.crashTimes.filter((t) => now - t < FfmpegFrameSource.CRASH_WINDOW_MS)
         this.crashTimes.push(now)
         if (this.crashTimes.length > FfmpegFrameSource.MAX_CRASHES_IN_WINDOW) {
           this.cb.onFatal(
@@ -240,7 +241,7 @@ export class FfmpegFrameSource implements FrameSource {
 export class CapturerFrameSource implements FrameSource {
   private proc: ChildProcess | null = null
   private splitter = new NalSplitter()
-  private assembler = new AccessUnitAssembler()
+  private assembler: AccessUnitAssembler
   private everProduced = false
   private stopped = false
   private respawning = false
@@ -261,7 +262,9 @@ export class CapturerFrameSource implements FrameSource {
     private readonly gop: number,
     private readonly cb: FrameSourceCallbacks,
     private readonly tuning: CapturerArgOptions = {}
-  ) {}
+  ) {
+    this.assembler = new AccessUnitAssembler(config.codec)
+  }
 
   start(): void {
     this.spawn()
@@ -403,9 +406,7 @@ export class CapturerFrameSource implements FrameSource {
       // Died AFTER streaming. capturer.exe recovers ACCESS_LOST internally, so this
       // is unexpected; restart in place (fresh IDR) unless it's crash-looping.
       const now = Date.now()
-      this.crashTimes = this.crashTimes.filter(
-        (t) => now - t < CapturerFrameSource.CRASH_WINDOW_MS
-      )
+      this.crashTimes = this.crashTimes.filter((t) => now - t < CapturerFrameSource.CRASH_WINDOW_MS)
       this.crashTimes.push(now)
       if (this.crashTimes.length > CapturerFrameSource.MAX_CRASHES_IN_WINDOW) {
         this.cb.onFatal(

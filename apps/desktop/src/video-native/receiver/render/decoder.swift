@@ -19,16 +19,33 @@ import VideoToolbox
   (Int(b[i]) << 24) | (Int(b[i+1]) << 16) | (Int(b[i+2]) << 8) | Int(b[i+3])
 }
 
+enum Codec {
+  case h264
+  case hevc
+}
+
 // Annex-B access unit -> ready-to-enqueue CMSampleBuffer. Rebuilds the format
-// description from in-band SPS/PPS; emits AVCC (4-byte length prefixed) samples
-// tagged DisplayImmediately for the lowest-latency present.
+// description from in-band parameter sets (H.264 SPS/PPS or HEVC VPS/SPS/PPS);
+// emits AVCC (4-byte length prefixed) samples tagged DisplayImmediately for the
+// lowest-latency present. Codec is set once from the offer SDP before AUs arrive.
 final class Decoder {
+  private var codec: Codec = .h264
   private var formatDesc: CMVideoFormatDescription?
+  private var vps: Data? // HEVC only
   private var sps: Data?
   private var pps: Data?
   private var firstFrame = false
   var onFirstFrame: (() -> Void)?
   var onSample: ((CMSampleBuffer) -> Void)?
+
+  // Switching codec invalidates any format description / parameter sets built for
+  // the old one, so clear them (the new stream's params arrive in-band next IDR).
+  func setCodec(_ c: Codec) {
+    if c == codec { return }
+    codec = c
+    formatDesc = nil
+    vps = nil; sps = nil; pps = nil
+  }
 
   private func splitNALs(_ au: [UInt8]) -> [ArraySlice<UInt8>] {
     var nals: [ArraySlice<UInt8>] = []
@@ -53,6 +70,13 @@ final class Decoder {
   }
 
   private func rebuildFormatDesc() {
+    switch codec {
+    case .h264: rebuildH264()
+    case .hevc: rebuildHevc()
+    }
+  }
+
+  private func rebuildH264() {
     guard let sps = sps, let pps = pps else { return }
     sps.withUnsafeBytes { (s: UnsafeRawBufferPointer) in
       pps.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
@@ -69,7 +93,33 @@ final class Decoder {
           }
         }
         if st == noErr { formatDesc = fd }
-        else { FileHandle.standardError.write("[decoder] fmt desc failed \(st)\n".data(using: .utf8)!) }
+        else { FileHandle.standardError.write("[decoder] h264 fmt desc failed \(st)\n".data(using: .utf8)!) }
+      }
+    }
+  }
+
+  private func rebuildHevc() {
+    // HEVC needs all three parameter sets (VPS+SPS+PPS) to build the format desc.
+    guard let vps = vps, let sps = sps, let pps = pps else { return }
+    vps.withUnsafeBytes { (v: UnsafeRawBufferPointer) in
+      sps.withUnsafeBytes { (s: UnsafeRawBufferPointer) in
+        pps.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
+          let ptrs = [v.bindMemory(to: UInt8.self).baseAddress!,
+                      s.bindMemory(to: UInt8.self).baseAddress!,
+                      p.bindMemory(to: UInt8.self).baseAddress!]
+          let sizes = [vps.count, sps.count, pps.count]
+          var fd: CMFormatDescription?
+          let st = ptrs.withUnsafeBufferPointer { pp in
+            sizes.withUnsafeBufferPointer { ss in
+              CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                allocator: kCFAllocatorDefault, parameterSetCount: 3,
+                parameterSetPointers: pp.baseAddress!, parameterSetSizes: ss.baseAddress!,
+                nalUnitHeaderLength: 4, extensions: nil, formatDescriptionOut: &fd)
+            }
+          }
+          if st == noErr { formatDesc = fd }
+          else { FileHandle.standardError.write("[decoder] hevc fmt desc failed \(st)\n".data(using: .utf8)!) }
+        }
       }
     }
   }
@@ -77,13 +127,31 @@ final class Decoder {
   func push(_ au: Data) {
     let bytes = [UInt8](au)
     var picture: [[UInt8]] = []
-    for slice in splitNALs(bytes) {
-      guard let first = slice.first else { continue }
-      switch first & 0x1f {
-      case 7: sps = Data(slice); rebuildFormatDesc()
-      case 8: pps = Data(slice); rebuildFormatDesc()
-      case 9: break
-      default: picture.append(Array(slice))
+    switch codec {
+    case .h264:
+      for slice in splitNALs(bytes) {
+        guard let first = slice.first else { continue }
+        switch first & 0x1f {
+        case 7: sps = Data(slice); rebuildFormatDesc()
+        case 8: pps = Data(slice); rebuildFormatDesc()
+        case 9: break // AUD
+        default: picture.append(Array(slice))
+        }
+      }
+    case .hevc:
+      for slice in splitNALs(bytes) {
+        guard let first = slice.first else { continue }
+        // HEVC NAL type = (byte0 >> 1) & 0x3f. Params: VPS 32 / SPS 33 / PPS 34.
+        // Skip AUD 35 + SEI 39/40. VCL 0..31 are coded picture slices.
+        let t = (Int(first) >> 1) & 0x3f
+        switch t {
+        case 32: vps = Data(slice); rebuildFormatDesc()
+        case 33: sps = Data(slice); rebuildFormatDesc()
+        case 34: pps = Data(slice); rebuildFormatDesc()
+        case 35, 39, 40: break // AUD / SEI prefix+suffix
+        default:
+          if t <= 31 { picture.append(Array(slice)) }
+        }
       }
     }
     guard let fmt = formatDesc, !picture.isEmpty else { return }

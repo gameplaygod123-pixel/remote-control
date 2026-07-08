@@ -111,23 +111,81 @@ function parseSps(rbsp: Uint8Array): { width: number; height: number } | null {
   return { width, height }
 }
 
-// Scan an Annex-B access unit for the first SPS NAL (type 7) and return its coded
-// dimensions, or null if none/parse fails.
-export function spsDimensions(au: Buffer): { width: number; height: number } | null {
+// HEVC profile_tier_level -- we only need to SKIP it to reach the picture size.
+// general PTL = 96 bits (profile 8 + compat 32 + constraints 48 + level 8); then,
+// if there are sub-layers, their present flags + reserved bits + sub-layer PTLs.
+function skipHevcPtl(r: BitReader, maxSubLayersMinus1: number): void {
+  r.bits(8) // general_profile_space(2)+tier_flag(1)+profile_idc(5)
+  r.bits(32) // general_profile_compatibility_flags
+  r.bits(32)
+  r.bits(16) // 48 bits: source flags (4) + constraint/reserved (44)
+  r.bits(8) // general_level_idc
+  const subProfile: number[] = []
+  const subLevel: number[] = []
+  for (let i = 0; i < maxSubLayersMinus1; i++) {
+    subProfile.push(r.bit())
+    subLevel.push(r.bit())
+  }
+  if (maxSubLayersMinus1 > 0) {
+    for (let i = maxSubLayersMinus1; i < 8; i++) r.bits(2) // reserved_zero_2bits
+  }
+  for (let i = 0; i < maxSubLayersMinus1; i++) {
+    if (subProfile[i]) {
+      r.bits(32)
+      r.bits(32)
+      r.bits(24)
+    } // 88 bits
+    if (subLevel[i]) r.bits(8)
+  }
+}
+
+// HEVC SPS (RFC/H.265 §7.3.2.2.1) -> coded picture size with the conformance window
+// applied. Only the fields up to conformance_window are decoded.
+function parseHevcSps(rbsp: Uint8Array): { width: number; height: number } | null {
+  const r = new BitReader(rbsp)
+  r.bits(4) // sps_video_parameter_set_id
+  const maxSubLayersMinus1 = r.bits(3)
+  r.bit() // sps_temporal_id_nesting_flag
+  skipHevcPtl(r, maxSubLayersMinus1)
+  r.ue() // sps_seq_parameter_set_id
+  const chromaFormatIdc = r.ue()
+  if (chromaFormatIdc === 3) r.bit() // separate_colour_plane_flag
+  let width = r.ue() // pic_width_in_luma_samples
+  let height = r.ue() // pic_height_in_luma_samples
+  if (r.bit()) {
+    // conformance_window_flag
+    const l = r.ue()
+    const rr = r.ue()
+    const t = r.ue()
+    const b = r.ue()
+    const subW = chromaFormatIdc === 1 || chromaFormatIdc === 2 ? 2 : 1
+    const subH = chromaFormatIdc === 1 ? 2 : 1
+    width -= (l + rr) * subW
+    height -= (t + b) * subH
+  }
+  if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return null
+  return { width, height }
+}
+
+// Scan an Annex-B access unit for the first NAL of the given kind and return its
+// coded dimensions. `test` selects the SPS by codec, `hdr` is the NAL-header byte
+// count to skip before the RBSP.
+function scanForSps(
+  au: Buffer,
+  test: (b0: number) => boolean,
+  hdr: number,
+  parse: (rbsp: Uint8Array) => { width: number; height: number } | null
+): { width: number; height: number } | null {
   const n = au.length
   let i = 0
   while (i + 2 < n) {
-    // Find a start code (00 00 01; the 4-byte 00 00 00 01 matches on its last 3).
     if (au[i] === 0 && au[i + 1] === 0 && au[i + 2] === 1) {
       const nalStart = i + 3
-      if (nalStart < n && (au[nalStart] & 0x1f) === 7) {
-        // The NAL runs until the next start code, or to the end of the buffer if
-        // this SPS is the last NAL (don't truncate the trailing bytes).
+      if (nalStart < n && test(au[nalStart])) {
         let j = nalStart + 1
         while (j + 2 < n && !(au[j] === 0 && au[j + 1] === 0 && au[j + 2] === 1)) j++
         const end = j + 2 < n ? j : n
-        // Skip the 1-byte NAL header, unescape, parse.
-        return parseSps(unescapeRbsp(au.subarray(nalStart + 1, end)))
+        return parse(unescapeRbsp(au.subarray(nalStart + hdr, end)))
       }
       i = nalStart
     } else {
@@ -135,4 +193,22 @@ export function spsDimensions(au: Buffer): { width: number; height: number } | n
     }
   }
   return null
+}
+
+// Scan an Annex-B access unit for the first H.264 SPS NAL (type 7) and return its
+// coded dimensions, or null if none/parse fails.
+export function spsDimensions(au: Buffer): { width: number; height: number } | null {
+  return scanForSps(au, (b0) => (b0 & 0x1f) === 7, 1, parseSps)
+}
+
+// Codec-aware dimensions from the in-band SPS: H.264 SPS type 7 (1-byte header) or
+// HEVC SPS type 33 (2-byte header, type = (b0 >> 1) & 0x3f).
+export function videoDimensions(
+  au: Buffer,
+  codec: 'h264' | 'hevc'
+): { width: number; height: number } | null {
+  if (codec === 'hevc') {
+    return scanForSps(au, (b0) => ((b0 >> 1) & 0x3f) === 33, 2, parseHevcSps)
+  }
+  return spsDimensions(au)
 }

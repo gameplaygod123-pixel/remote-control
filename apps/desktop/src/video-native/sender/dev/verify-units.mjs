@@ -110,6 +110,41 @@ bundle()
       check('keyframe AU carries SPS+PPS+IDR (3 NALs)', starts === 3)
     }
 
+    // ── AccessUnitAssembler (HEVC): 2-byte header, VCL 0..31, IDR 19/20 ──
+    console.log('AccessUnitAssembler (HEVC)')
+    {
+      const asm = new AccessUnitAssembler('hevc')
+      const aus = []
+      // VPS(32)=0x40, SPS(33)=0x42, PPS(34)=0x44, IDR_W_RADL(19)=0x26 (type<<1).
+      for (const nal of [
+        Buffer.from([0x40, 0x01]),
+        Buffer.from([0x42, 0x01]),
+        Buffer.from([0x44, 0x01]),
+        Buffer.from([0x26, 0x01, 9])
+      ]) {
+        const au = asm.push(nal)
+        if (au) aus.push(au)
+      }
+      // TRAIL_R(1)=0x02 -> a P slice, its own non-keyframe AU.
+      const pAu = asm.push(Buffer.from([0x02, 0x01, 7]))
+      if (pAu) aus.push(pAu)
+      check(
+        'hevc: VPS+SPS+PPS+IDR collapse into ONE keyframe AU',
+        aus.length === 2 && aus[0].keyframe === true
+      )
+      check('hevc: P slice is a separate non-keyframe AU', aus[1] && aus[1].keyframe === false)
+      let hstarts = 0
+      for (let i = 0; i + 3 < aus[0].data.length; i++)
+        if (
+          aus[0].data[i] === 0 &&
+          aus[0].data[i + 1] === 0 &&
+          aus[0].data[i + 2] === 0 &&
+          aus[0].data[i + 3] === 1
+        )
+          hstarts++
+      check('hevc: keyframe AU carries VPS+SPS+PPS+IDR (4 NALs)', hstarts === 4)
+    }
+
     // ── buildFfmpegArgs ──
     console.log('buildFfmpegArgs')
     {
@@ -187,6 +222,19 @@ bundle()
           .join(' ')
           .includes('-b:v 30000k')
       )
+      // HEVC fallback encoder: same low-latency flags, hevc_nvenc + raw hevc container
+      // (so the ffmpeg fallback stays codec-coherent with the negotiated H265 SDP).
+      const hv = buildFfmpegArgs({ ...cfg, codec: 'hevc' }, { encoder: 'hevc_nvenc' }).join(' ')
+      check(
+        'hevc: -c:v hevc_nvenc + -f hevc + same ull/vbr flags',
+        hv.includes('-c:v hevc_nvenc') &&
+          hv.includes('-f hevc') &&
+          !hv.includes('-f h264') &&
+          hv.includes('-tune ull') &&
+          hv.includes('-rc vbr') &&
+          hv.includes('-g 120') &&
+          !hv.includes('-intra-refresh')
+      )
     }
 
     // ── buildCapturerArgs (Step 3 custom DXGI capturer CLI contract) ──
@@ -208,7 +256,9 @@ bundle()
       check('capturer: h264 codec by default', a.includes('--codec h264'))
       check(
         'capturer: hevc config -> --codec h265',
-        buildCapturerArgs({ ...cfg, codec: 'hevc' }).join(' ').includes('--codec h265')
+        buildCapturerArgs({ ...cfg, codec: 'hevc' })
+          .join(' ')
+          .includes('--codec h265')
       )
       check('capturer: fps from config', a.includes('--fps 60'))
       check(

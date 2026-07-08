@@ -55,6 +55,7 @@ import {
   attachNativeSurface,
   detachNativeSurface,
   pushNativeAccessUnit,
+  setNativeCodec,
   nativeSurfaceAvailable
 } from './nativeRenderSurface'
 import type { VideoSenderHost, VideoReceiverHost } from '../video-native/shared/ipc'
@@ -556,6 +557,9 @@ app.whenReady().then(async () => {
         }
         pushNativeAccessUnit(au)
       },
+      // Codec detected from the offer -> set the in-process decoder (H.264 vs HEVC)
+      // BEFORE the first AU, so it builds the correct CMFormatDescription.
+      onCodec: (codec) => setNativeCodec(codec),
       onFirstFrame: () => sendToWindow(controllerWindow, 'video-receiver:first-frame'),
       onStats: (stats) => sendToWindow(controllerWindow, 'video-receiver:stats', stats),
       // BWE: the receiver's AIMD target -> renderer relays it over signaling as

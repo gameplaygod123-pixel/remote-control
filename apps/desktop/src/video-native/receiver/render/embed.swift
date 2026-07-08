@@ -56,6 +56,10 @@ final class EmbeddedSurface {
     FileHandle.standardError.write("[embed] attached video subview \(contentView.bounds)\n".data(using: .utf8)!)
   }
 
+  func setCodec(_ c: Codec) {
+    decoder.setCodec(c)
+  }
+
   func push(_ data: Data) {
     decoder.push(data)
   }
@@ -81,6 +85,14 @@ public func rvr_attach(_ viewPtr: UInt64) {
   guard let raw = UnsafeRawPointer(bitPattern: UInt(viewPtr)) else { return }
   let view = Unmanaged<NSView>.fromOpaque(raw).takeUnretainedValue()
   onMain { EmbeddedSurface.shared.attach(view) }
+}
+
+/// Set the decoder codec before AUs arrive (0 = H.264, 1 = HEVC). Detected from the
+/// offer SDP on the JS side (nativeRenderSurface.setNativeCodec). Idempotent.
+@_cdecl("rvr_set_codec")
+public func rvr_set_codec(_ codec: Int32) {
+  let c: Codec = codec == 1 ? .hevc : .h264
+  onMain { EmbeddedSurface.shared.setCodec(c) }
 }
 
 /// Feed one Annex-B access unit (decode + enqueue). `ptr`/`len` are only valid for
