@@ -1,33 +1,57 @@
-// Bandwidth estimator (BWE) for the native video receiver — AIMD, loss-based.
+// Bandwidth estimator (BWE) for the native video receiver — AIMD, loss + jitter.
 //
 // The native video pc is media-only (no data channel, so no built-in WebRTC BWE /
-// REMB), so the Mac receiver estimates congestion ITSELF from RTP sequence-number
-// gaps and steers the SENDER's NVENC bitrate over signaling. The capturer already
-// accepts a live `B<kbps>` on stdin (nvEncReconfigureEncoder, no respawn — WC
-// verified 25→12→45 Mbps), so the loop is: receiver measures loss → AIMD target →
-// signaling `video-bitrate` → agent → capturer stdin. See docs/bwe-hevc-plan.md.
+// REMB), so the Mac receiver estimates congestion ITSELF and steers the SENDER's
+// NVENC bitrate over signaling. The capturer accepts a live `B<kbps>` on stdin
+// (nvEncReconfigureEncoder, no respawn — WC verified 25→12→45 Mbps), so the loop is:
+// receiver measures congestion → AIMD target → signaling `video-bitrate` → agent →
+// capturer stdin. See docs/bwe-hevc-plan.md.
 //
-// Model = AIMD (the classic TCP / loss-based congestion controller). Each ~1s
-// window: clean link → additive-increase (gentle probe up); lossy → multiplicative-
-// decrease (back off fast). Clamped to [FLOOR, CEIL]. Owner: cap 60 Mbps like
-// Parsec. Pure + unit-tested (dev/verify-units) — no I/O, so the control law is
-// reviewable in isolation before it ever touches the encoder (a bad number just
-// changes bitrate; it can't crash anything, unlike the native FFI paths).
+// Model = AIMD (TCP-style). Each ~1s window: calm link → additive-increase (gentle
+// probe up); congested → multiplicative-decrease (back off fast). Congestion = seq-
+// gap packet LOSS **or** a frame-pacing JITTER spike — the jitter term is what makes
+// this see BUFFERBLOAT (a full link queues + delays AUs long before it drops them;
+// v1.27.0-beta.1 used loss only, capped 60 Mbps, and bloated the ~40 Mbps link). The
+// ceiling is now 25 Mbps (v1.26.0's proven-smooth target) so BWE can only back OFF
+// from a known-good point, never overshoot. Pure + unit-tested (dev/verify-...) — no
+// I/O, so the control law is reviewable in isolation (a bad number just changes
+// bitrate; it can't crash anything, unlike the native FFI paths).
 
 /** Never starve the encoder below this — a floor keeps the picture decodable even
  *  on a bad link (mirrors the WebRTC x-google-min-bitrate floor from v1.22.0). */
 export const BWE_FLOOR_KBPS = 5_000
-/** Hard ceiling. Owner: "Max ไม่เกิน 60" (Parsec-like). BWE never targets above this. */
-export const BWE_CEIL_KBPS = 60_000
-/** Initial target — matches DEFAULT_VIDEO_CONFIG.startBitrateKbps so the first
- *  window doesn't yank the capturer off its launch bitrate. */
+/**
+ * Hard ceiling. Set to **25 Mbps** = v1.26.0's proven-smooth VBR target (its
+ * maxrate ~40 Mbps was owner-verified "smooth like Parsec" on this exact link).
+ *
+ * NOT 60 (the owner's first ask): v1.27.0-beta.1 capped 60 and BUFFERBLOATED — the
+ * link is ~40 Mbps, so a 60 Mbps VBR burst filled the queue → AUs arrived late/in
+ * clumps → double cursor (local Mac cursor vs the delayed video cursor), higher
+ * end-to-end latency, and eventual freeze. Loss-only AIMD never saw it (bloat is
+ * DELAY, not packet loss, until the queue finally overflows). Capping at v1.26.0's
+ * proven target means BWE's worst case == v1.26.0 (smooth) and it can only back OFF
+ * below that on a bad link — it can never overshoot into bloat. The real "Parsec
+ * runs 1440p60 at ~3 Mbps" win is H.265 (Feature B, 1.6× efficiency), NOT pushing
+ * H.264 higher. See docs/bwe-hevc-plan.md + the WC bufferbloat diagnosis.
+ */
+export const BWE_CEIL_KBPS = 25_000
+/** Start AT the ceiling (= the proven-good v1.26.0 point + the capturer's launch
+ *  bitrate) so there's no cold-start ramp; BWE only ever backs OFF from here when
+ *  the link is congested, then probes back up toward the cap when it clears. */
 export const BWE_START_KBPS = 25_000
 
 // Loss thresholds (fraction of a 1s window's expected packets that went missing).
 const LOSS_LOW = 0.02 // < 2% sustained -> increase
 const LOSS_HIGH = 0.05 // > 5% -> decrease immediately
+// Delay signal (bufferbloat): jitter = smoothed AU inter-arrival deviation. A
+// saturated link delivers AUs in bursts -> jitter climbs BEFORE any packet loss, so
+// this catches congestion earlier than loss alone (the v1.27.0-beta.1 gap). Healthy
+// active streaming here measured 3-13ms, so 30ms = a clear queue-buildup signal and
+// 18ms = "calm enough to probe up again".
+const JITTER_CONGESTION_MS = 30 // > this -> back off (bloat precursor)
+const JITTER_PROBE_OK_MS = 18 // must be under this to probe UP
 const INCREASE_KBPS = 2_000 // additive-increase step per clean window (~gentle probe)
-const DECREASE_FACTOR = 0.85 // multiplicative-decrease on loss (~15% cut)
+const DECREASE_FACTOR = 0.85 // multiplicative-decrease on congestion (~15% cut)
 /** Hysteresis: don't signal a change smaller than this (avoid thrashing the encoder
  *  / spamming signaling for sub-Mbps wiggles). */
 const EMIT_THRESHOLD_KBPS = 1_000
@@ -64,19 +88,26 @@ class SeqExtender {
   }
 }
 
-// The AIMD control law, split out so it's trivially testable (feed a loss series,
-// assert the target ramps to the cap when clean and backs off on loss).
+// The AIMD control law, split out so it's trivially testable (feed loss+jitter
+// series, assert it backs off on either congestion signal and ramps to the cap
+// only when BOTH are calm). Congestion = loss OR high jitter (bufferbloat), which
+// is the v1.27.0-beta.1 fix: loss alone missed the delay-only bloat on a full link.
 class AimdController {
   private target = BWE_START_KBPS
   private lastEmitted = BWE_START_KBPS
 
-  update(lossFraction: number): BweUpdate {
-    if (lossFraction > LOSS_HIGH) {
+  update(lossFraction: number, jitterMs: number | null): BweUpdate {
+    const congested =
+      lossFraction > LOSS_HIGH || (jitterMs != null && jitterMs > JITTER_CONGESTION_MS)
+    const calm = lossFraction < LOSS_LOW && (jitterMs == null || jitterMs < JITTER_PROBE_OK_MS)
+    if (congested) {
+      // Back off fast on loss OR a jitter spike (queue building = bloat precursor).
       this.target = Math.max(BWE_FLOOR_KBPS, Math.round(this.target * DECREASE_FACTOR))
-    } else if (lossFraction < LOSS_LOW && this.target < BWE_CEIL_KBPS) {
+    } else if (calm && this.target < BWE_CEIL_KBPS) {
+      // Probe back up toward the cap only when both signals are clear.
       this.target = Math.min(BWE_CEIL_KBPS, this.target + INCREASE_KBPS)
     }
-    // Between LOW..HIGH: hold (a small, tolerable amount of loss — don't oscillate).
+    // In the dead-band (mild loss/jitter): hold — don't oscillate.
     const changed = Math.abs(this.target - this.lastEmitted) >= EMIT_THRESHOLD_KBPS
     if (changed) this.lastEmitted = this.target
     return { targetKbps: this.target, lossFraction, changed }
@@ -84,11 +115,12 @@ class AimdController {
 }
 
 /**
- * Observe RTP sequence numbers, and once per ~1s window (`tick()`) run AIMD on the
- * measured loss and return the new bitrate target (with a `changed` flag for the
- * caller's hysteresis). Static screens produce NO packets (change-detection capture)
- * → `tick()` returns null → the caller HOLDS the current target (no signal to
- * measure, so don't probe up or back off on silence).
+ * Observe RTP sequence numbers, and once per ~1s window (`tick(jitterMs)`) run AIMD
+ * on the measured loss + the receiver's frame-pacing jitter (bufferbloat signal) and
+ * return the new bitrate target (with a `changed` flag for the caller's hysteresis).
+ * Static screens produce NO packets (change-detection capture) → `tick()` returns
+ * null → the caller HOLDS the current target (no signal to measure, so don't probe
+ * up or back off on silence).
  */
 export class BandwidthEstimator {
   private extender = new SeqExtender()
@@ -105,9 +137,10 @@ export class BandwidthEstimator {
     this.count += 1
   }
 
-  /** Close the window: loss = 1 - received/expected across [min..max] seq. Returns
-   *  the AIMD result, or null if no packets arrived this window (idle → hold). */
-  tick(): BweUpdate | null {
+  /** Close the window: loss = 1 - received/expected across [min..max] seq, plus the
+   *  receiver's current smoothed `jitterMs` (bufferbloat signal; null when idle/
+   *  unknown). Returns the AIMD result, or null if no packets arrived (idle → hold). */
+  tick(jitterMs: number | null): BweUpdate | null {
     if (this.count === 0) return null
     const expected = this.windowMax - this.windowMin + 1
     // Reorder/dup can push count slightly past expected -> clamp to [0,1].
@@ -116,6 +149,6 @@ export class BandwidthEstimator {
     this.windowMin = Infinity
     this.windowMax = -Infinity
     this.count = 0
-    return this.controller.update(lossFraction)
+    return this.controller.update(lossFraction, jitterMs)
   }
 }

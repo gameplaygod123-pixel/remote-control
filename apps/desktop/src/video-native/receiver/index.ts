@@ -253,7 +253,7 @@ function reportStats(session: Session): void {
   // sender ONLY when it moved enough to matter (hysteresis in the estimator). A
   // static screen produces no packets -> tick() is null -> hold. main relays this
   // over signaling ('video-bitrate') -> agent -> capturer stdin 'B<kbps>'.
-  const bwe = session.bwe.tick()
+  const bwe = session.bwe.tick(stats.jitterMs)
   if (bwe?.changed) {
     log(`bwe loss=${(bwe.lossFraction * 100).toFixed(1)}% -> target ${bwe.targetKbps}kbps`)
     send({ evt: 'bitrate', kbps: bwe.targetKbps })

@@ -90,8 +90,11 @@ function rtp(payload: Buffer, opts: { marker?: boolean; ts?: number; seq?: numbe
   check('isRtcp: PT 96 (RTP) false', isRtcp(Buffer.from([0x80, 96, 0, 0])) === false)
 }
 
-// ── BWE (bwe.ts): loss-based AIMD bitrate estimator ──
+// ── BWE (bwe.ts): loss+jitter AIMD bitrate estimator ──
+// v1.27.0-beta.2: start AT the cap (25 Mbps = v1.26.0's proven-smooth target);
+// BWE only backs OFF on congestion (loss OR jitter/bufferbloat) then probes back up.
 console.log('BandwidthEstimator (BWE)')
+const CALM_JITTER = 5 // ms, well under JITTER_PROBE_OK_MS -> "link is calm"
 // Observe a clean run of `n` consecutive seqs starting at `start` (wrap-aware).
 function feedRun(est: BandwidthEstimator, start: number, n: number): void {
   for (let i = 0; i < n; i++) est.observe((start + i) & 0xffff)
@@ -99,62 +102,71 @@ function feedRun(est: BandwidthEstimator, start: number, n: number): void {
 {
   // 1. no packets this window -> hold (null)
   const est = new BandwidthEstimator()
-  check('bwe: no packets -> tick() null (idle hold)', est.tick() === null)
+  check('bwe: no packets -> tick() null (idle hold)', est.tick(CALM_JITTER) === null)
 }
 {
-  // 2. clean window -> additive increase from the start bitrate, changed=true
+  // 2. clean+calm at the start (= cap) -> stays pinned at the cap, changed=false
   const est = new BandwidthEstimator()
   feedRun(est, 0, 100)
-  const u = est.tick()
-  check(
-    'bwe: clean window -> increase past start',
-    !!u && u.lossFraction === 0 && u.targetKbps > BWE_START_KBPS
-  )
-  check('bwe: clean window -> changed=true', u?.changed === true)
+  const u = est.tick(CALM_JITTER)
+  check('bwe: clean at cap -> holds at cap (no overshoot)', u?.targetKbps === BWE_CEIL_KBPS)
+  check('bwe: clean at cap -> changed=false', u?.changed === false)
+  check('bwe: start == cap (25 Mbps, v1.26.0 proven target)', BWE_START_KBPS === BWE_CEIL_KBPS)
 }
 {
-  // 3. ~19% loss (skip every 5th of 100) -> multiplicative decrease below start
+  // 3. ~19% loss (skip every 5th of 100) -> multiplicative decrease below cap
   const est = new BandwidthEstimator()
   for (let i = 0; i < 100; i++) if (i % 5 !== 0) est.observe(i)
-  const u = est.tick()
+  const u = est.tick(CALM_JITTER)
   check('bwe: heavy loss measured (>5%)', !!u && u.lossFraction > 0.05)
-  check('bwe: heavy loss -> decrease below start', !!u && u.targetKbps < BWE_START_KBPS)
+  check('bwe: heavy loss -> decrease below cap', !!u && u.targetKbps < BWE_CEIL_KBPS)
+  check('bwe: heavy loss -> changed=true', u?.changed === true)
 }
 {
-  // 4. wrap-around (65533..2) must NOT read as loss
+  // 4. JITTER spike alone (no loss) -> back off (the bufferbloat fix)
+  const est = new BandwidthEstimator()
+  feedRun(est, 0, 100) // zero loss
+  const u = est.tick(40) // jitter > JITTER_CONGESTION_MS
+  check('bwe: jitter spike (no loss) still measured loss=0', u?.lossFraction === 0)
+  check('bwe: jitter spike -> back off (delay signal)', !!u && u.targetKbps < BWE_CEIL_KBPS)
+}
+{
+  // 5. wrap-around (65533..2) must NOT read as loss
   const est = new BandwidthEstimator()
   feedRun(est, 65533, 6) // 65533,65534,65535,0,1,2
-  const u = est.tick()
+  const u = est.tick(CALM_JITTER)
   check('bwe: seq wrap 65535->0 is not loss', u?.lossFraction === 0)
 }
 {
-  // 5. mild loss (3%, between thresholds) after a change -> hold, changed=false
+  // 6. after a back-off, clean+calm windows ramp BACK UP toward the cap and pin
   const est = new BandwidthEstimator()
-  feedRun(est, 0, 100)
-  est.tick() // one clean step (target moved, lastEmitted updated)
-  for (let i = 0; i < 100; i++) if (i % 34 !== 0) est.observe(1000 + i) // ~3 dropped
-  const u = est.tick()
-  check('bwe: mild loss in dead-band -> changed=false (no thrash)', u?.changed === false)
-}
-{
-  // 6. sustained clean -> ramp caps at 60 Mbps, and AT the cap a clean window
-  //    produces no change (changed=false)
-  const est = new BandwidthEstimator()
-  let last = est.tick()
-  for (let w = 0; w < 40; w++) {
+  for (let i = 0; i < 100; i++) if (i % 2 === 0) est.observe(i) // 50% loss -> drop hard
+  est.tick(CALM_JITTER)
+  let last = null as ReturnType<BandwidthEstimator['tick']>
+  for (let w = 1; w < 20; w++) {
     feedRun(est, w * 200, 100)
-    last = est.tick()
+    last = est.tick(CALM_JITTER)
   }
-  check('bwe: clean ramp caps at 60 Mbps', last?.targetKbps === BWE_CEIL_KBPS)
-  check('bwe: no change once pinned at the cap', last?.changed === false)
+  check('bwe: recovers/ramps back up to the 25 Mbps cap', last?.targetKbps === BWE_CEIL_KBPS)
+  check('bwe: no change once re-pinned at the cap', last?.changed === false)
 }
 {
-  // 7. sustained loss -> floor at 5 Mbps
+  // 7. mild loss (3%, between thresholds) + calm jitter -> hold, changed=false.
+  //    Drop once first so we're off the cap (else "hold" is trivially at cap).
+  const est = new BandwidthEstimator()
+  for (let i = 0; i < 100; i++) if (i % 2 === 0) est.observe(i) // drop
+  est.tick(CALM_JITTER)
+  for (let i = 0; i < 100; i++) if (i % 34 !== 0) est.observe(1000 + i) // ~3% loss
+  const u = est.tick(CALM_JITTER)
+  check('bwe: mild loss dead-band + calm -> changed=false (no thrash)', u?.changed === false)
+}
+{
+  // 8. sustained loss -> floor at 5 Mbps
   const est = new BandwidthEstimator()
   let last = null as ReturnType<BandwidthEstimator['tick']>
   for (let w = 0; w < 60; w++) {
     for (let i = 0; i < 100; i++) if (i % 2 === 0) est.observe(w * 200 + i) // 50% loss
-    last = est.tick()
+    last = est.tick(CALM_JITTER)
   }
   check('bwe: sustained loss floors at 5 Mbps', last?.targetKbps === BWE_FLOOR_KBPS)
 }
