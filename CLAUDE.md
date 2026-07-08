@@ -1169,6 +1169,18 @@ Lessons:
            the receiver actually SENDING NACKs (today it PLI→IDRs every loss) + a small buffer so the
            11ms-late resend lands. First = a SPIKE: does ndc `RtcpReceivingSession` emit NACKs w/ `nack`
            fb? → **STEP 3b app-FEC only if 3a insufficient** (heavier, ndc has no raw-RTP/FEC API).
+         - ❌ **STEP 3a SPIKED (2026-07-09) → BLOCKED at the ndc surface.** `dev/spike-nack.mjs` (Mac
+           loopback) proved the **SDP negotiates `nack`** (offer+answer, H264+H265) ✅, BUT ndc 0.32.3
+           pins **libdatachannel v0.24.2** whose `RtcpReceivingSession` emits only RR+PLI+REMB — it
+           tracks seq gaps but **NEVER sends a Generic NACK**, and ndc gives JS no way to send raw RTCP.
+           So the sender's `RtcpNackResponder` is dead code (no NACK ever arrives). **Both silent-repair
+           endgames (NACK retransmit AND app-FEC) require a NATIVE ndc fork** (patch libdatachannel's
+           RtcpReceivingSession to emit NACK on a gap it already tracks + rebuild the addon for
+           darwin-arm64 + win32-x64 — golden rule #1, breaks "keep native minimal"). **Fork in the road
+           (owner decision):** (A) NOT forking → ship `vbv=16 + LTR off` (opt 2) + STEP 2 lower bitrate =
+           MINOR JUDDER/60@97%, done cheap; (B) all-the-way → the libdatachannel NACK-emit patch (most
+           contained native option, > app-FEC given RTT 11ms) + a shallow receive buffer. Detail +
+           spike in [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
      - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
        exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
        only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a

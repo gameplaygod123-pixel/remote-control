@@ -122,21 +122,36 @@ Goal: eliminate the ~1s fps dip per loss so 60fps is nailed like Parsec. Sequenc
 smaller/faster-recovering dips AND brings the external bursts down into "scattered" (retransmit/FEC-
 repairable) territory. Mac-only + owner reconnect. Measure the blackout-burst pkt count drop.
 
-**STEP 3a (recommended over FEC) — NACK/RTX retransmit + a shallow receive buffer.** The RTT here is
-only **~11ms**, so re-sending a lost packet is nearly free vs FEC's constant overhead + interleaving
-latency. AND the sender **already has `RtcpNackResponder` in its send chain** (`sender/index.ts:233`)
-— it will retransmit on NACK. What's missing: (a) the receiver actually SENDING NACKs (it uses
-`RtcpReceivingSession` + goes straight to PLI→IDR on every loss today — even a 3-pkt loss), and (b) a
-**shallow ~1-frame (~16ms) receive buffer** so an 11ms-late retransmit lands before the frame is
-needed (today we present immediately, `DisplayImmediately=true`, so a late packet misses its frame).
-Trade: +~16ms latency for silent repair of scattered loss — the guide's "shallow adaptive jitter
-buffer" (§3). **First task = a SPIKE:** does ndc 0.32.3 `RtcpReceivingSession` generate NACKs when the
-SDP negotiates `nack` feedback? (ndc exports no separate NACK-requester; libdatachannel's receiving
-session may do it internally.) If yes → tiny win. If no → we'd need to patch ndc (option 3 territory)
-or fall to FEC. Keep PLI→IDR as the fallback for losses too big for the buffer window (blackouts).
+**STEP 3a — NACK/RTX retransmit — SPIKED 2026-07-09 → BLOCKED at the ndc surface.** The idea was
+sound (RTT ~11ms → re-send nearly free; sender ALREADY has `RtcpNackResponder`, `sender/index.ts:233`)
+but the spike killed it:
+- ✅ **SDP negotiates NACK** — `dev/spike-nack.mjs` (Mac loopback mirroring the real sender/receiver
+  ndc setup) confirmed both offer AND answer carry `a=rtcp-fb:96 nack` + `nack pli`, for H.264 and
+  H.265. So the retransmit path is open at the SDP level.
+- ❌ **but the receiver never SENDS a NACK.** ndc 0.32.3 pins **libdatachannel v0.24.2**, whose
+  `RtcpReceivingSession` (verified against the v0.24.2 source, `src/rtcpreceivingsession.cpp`) emits
+  only **RR + PLI + REMB** — it `updateSeq()`-tracks gaps and counts loss in the RR, but **never builds
+  a Generic NACK (RTPFB PT=205 FMT=1)**. And ndc exposes no separate NACK-requester, and no way for JS
+  to send raw RTCP. So the sender's `RtcpNackResponder` is effectively **dead code** — it can only
+  retransmit in response to a NACK that this receiver will never send.
+- **Consequence:** retransmit can't be enabled through the ndc surface. Unblocking needs a **native
+  patch** — fork libdatachannel's `RtcpReceivingSession` to emit a NACK on a detected seq gap (it
+  already tracks the gaps in `updateSeq`; the sender side already handles the response) and rebuild the
+  ndc native addon for **both** darwin-arm64 (Mac receiver) + win32-x64 (agent). That's a native-build
+  project (golden rule #1) that also breaks the "keep the native layer minimal" principle — a real
+  decision, not a quick win. (Same wall as app-FEC below: every true silent-repair path needs native
+  ndc work.)
 
-**STEP 3b (only if 3a insufficient) — app-level FEC.** The heavier path, kept below for reference.
-Given 11ms RTT + the existing NackResponder, retransmit should be tried first.
+**STEP 3b — app-level FEC.** Also blocked (no raw-RTP access, below). No cheaper than the NACK patch.
+
+**So both silent-repair endgames require a native ndc fork.** Practical fork in the road:
+- **If NOT forking native:** the endpoint is **CONFIG OPTION 2 (`vbv=16 + LTR off`) + STEP 2 (lower
+  bitrate)** — encoder-side only, MINOR JUDDER / 60@97%, ~50ms blip per loss. Ship it.
+- **If going all the way:** the **libdatachannel NACK-emit patch** is the most contained native option
+  (one handler emits NACK on a gap it already tracks; the sender response already exists; RTT 11ms makes
+  it effective) — strictly better here than app-FEC. Then add a shallow ~1-frame receive buffer so the
+  11ms-late resend lands (we present immediately today, `DisplayImmediately=true`). Requires building
+  the ndc native addon on Mac + Windows + golden-rule-1 verification.
 
 **Layer 2 — FEC (recover the scattered remainder silently).** Systematic block FEC:
 - Sender: for every group of **K** media RTP packets, generate **M** parity packets
