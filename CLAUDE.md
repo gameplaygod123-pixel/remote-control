@@ -410,6 +410,32 @@ to push FPS.
     own metric showed `queued_frames=0` so verify empirically, toggleable, ~1 frame
     latency) — BWE fixes overflow/robustness but does NOT make motion smooth. PENDING:
     WC compares HUD received-fps vs emitted (41-60) at 25/35 to confirm net-drop=0.
+  - **THE FIX — Parsec overlay revealed it + LOCKED-60 capturer (WC `88a3ce8`):** the
+    owner sent a Parsec perf overlay on a STATIC screen showing **Host/Client Video Frame
+    Time 16.57/16.66ms = Parsec holds a LOCKED 60fps cadence even when nothing moves**
+    (Encode field blank = unchanged frames are near-free skip-frames). So Parsec is NOT
+    change-detection-drop like our 3a-3c; it's **locked-60 cadence + cheap skip-frames**
+    → smooth AND low-GPU. Our change-detection dropped frames → VARIABLE cadence = the
+    judder. WC re-architected the capturer: **LOCKED 1/fps clock (emit every 16.66ms)**,
+    drain the latest DXGI change per tick → real P/IDR if the screen changed, else a skip
+    frame. RESULT: **cadence locked 60 (emitted 60/61 per sec, was 41-60) = judder fix ✅**;
+    skip frame = 114-118 bytes (~55 Kbps idle) ✅; decode clean (IPPP, IDR ~2s) ✅. **GPU
+    did NOT reach Parsec's 6%:** static-locked ~17-20% enc @1440p (HEVC no better) —
+    Parsec's 6% uses TRUE coded-skip (`NV_ENC_PIC_TYPE_SKIPPED`) which NVENC only allows
+    with `enablePTD=0`, but PTD=0 + the ULTRA_LOW_LATENCY preset falls back to ALL-INTRA
+    (every frame I, 62KB, worst) → reverted; under PTD=1 a "skip" still costs a motion-
+    estimation pass ~17-20% @1440p. WC's fix = **idle-decay (`--locked-idle-ms`, default
+    350):** a truly static screen has nothing to judder, so after 350ms of no change STOP
+    emitting → idle GPU ~0% (= legacy); lock 60 only while active. Net: **motion =
+    locked-60 smooth; true static = 0%; active-low-motion (video/typing) = the only
+    residual cost ~20%.** Flag-gated: `--legacy-emit` / tune `legacy=1` / env
+    `VIDEO_CAPTURER_LEGACY_EMIT=1` reverts to emit-on-change live. **MAC DECISIONS: (1)
+    default = LOCKED + idle 350** (judder was the owner's real complaint; locked fixes it;
+    true-static stays 0%; ~20% active-low-motion is acceptable on the 3060 Ti). **(2) do
+    NOT chase true 6% now** — the only paths (drop ULL for PTD=0 all-intra, or downscale
+    1440→1080) sacrifice the latency (Step 1) or resolution the owner values more; judder-
+    fixed is the win. Building **PRERELEASE v1.26.0-beta.2** (packs `88a3ce8`) for the
+    owner to FEEL the smoothness.
   - 3d cursor from DXGI over the dormant `'cursor'` channel (un-gate
     `PR_CURSOR_OVERLAY`) → Mac CSS overlay (reuse beta.4's plumbing).
 - **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not

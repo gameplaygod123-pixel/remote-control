@@ -1,6 +1,6 @@
 {
   "name": "desktop",
-  "version": "1.26.0-beta.1",
+  "version": "1.26.0-beta.2",
   "description": "An Electron application with React and TypeScript",
   "main": "./out/main/index.js",
   "author": "example.com",
