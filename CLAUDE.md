@@ -78,13 +78,25 @@ are on current code this time.
   (still live) cursor channel finally opens `pc !== conn` → **`startCursorCapture`
   never runs** → shapes go silent while input/scroll/pinch keep working on that same
   conn. Exactly the reported symptom.
-- **FIX:** guard on the CHANNEL's own state instead — `if (cursor.readyState !== 'open')
-  return` (the real signal that we can capture+send; still bails on a stale onopen after
-  close). Also `cursorStop?.()` before starting so only one capture runs. Agent-side
-  input-helper only; typecheck + lint clean. Golden rule #7 → PRERELEASE. **NEXT (WC):
-  install v1.35.0-beta.1, พับจอ (or force a re-pair) 2-3×, confirm the cursor SHAPES
-  come back every time (I-beam/hand/resize), input still fine, `data channel "cursor"
-  open` logs on each re-pair. If clean → promote full v1.35.0.**
+- **beta.1 FIX (partial):** guard the cursor `onopen` on the CHANNEL's own state
+  (`cursor.readyState !== 'open'`) instead of `pc !== conn`, + `cursorStop?.()` before
+  starting. This corrected the lifecycle but **beta.1 still FAILED (WC real-hw):** shapes
+  still dead after a re-pair.
+- **THE REAL ROOT CAUSE (WC diag, deeper than beta.1) → FIX in v1.35.0-beta.2:**
+  `startCursorCapture()` runs once per session and was calling `koffi.struct('PR_POINT')`
+  + `koffi.struct('CURSORINFO')` (and `koffi.load`/`user32.func`) EVERY time. **koffi throws
+  if a named struct is registered twice** → from the 2nd pairing on it threw → the try/catch
+  returned NOOP silently → no poll timer → no shapes. A latent bug since the overlay shipped
+  (v1.32–1.34), only exposed by a real re-pair. WC diag: before = session1 41 sends /
+  session2,3 = 0; after = every session sends. FIX (baked WC's proven fix): hoist the FFI
+  init to a **module-level singleton `initCursorFfi()`** (koffi.load + koffi.struct +
+  user32.func + handle resolution run ONCE, cached; a `failed` latch avoids re-throwing);
+  `startCursorCapture` now only spins a fresh `setInterval` off the cached handle. Keeps
+  beta.1's lifecycle guard. typecheck + lint clean. **koffi rule saved:
+  [[koffi-struct-register-once]].** Golden rule #1 (koffi) → PRERELEASE. **NEXT (WC): install
+  v1.35.0-beta.2, พับจอ/re-pair 2-3×, confirm shapes return EVERY session (I-beam/hand/resize).
+  If clean → promote full v1.35.0.** (WC has patched their local agent install meanwhile so the
+  owner can use the mouse across lid-close until beta.2 lands.)
 
 
 DONE — **B1: productize the streaming stack to DEFAULT-ON so a fresh install "just

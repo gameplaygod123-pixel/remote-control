@@ -57,12 +57,31 @@ const NOOP: CursorCaptureHandle = {
   }
 }
 
-// Starts polling; invokes onShape ONLY when the shape actually changes (so the
-// caller can send it straight down a channel). Returns a stop handle.
-export function startCursorCapture(onShape: (shape: CursorShape) => void): CursorCaptureHandle {
-  if (process.platform !== 'win32') return NOOP
+// The FFI is registered ONCE, lazily, and cached module-wide. koffi.struct(name,
+// ...) THROWS if the same named struct is registered twice -- so doing this INSIDE
+// startCursorCapture (which runs once per session / per re-pair) threw from the
+// SECOND pairing onward, fell into the catch, and returned NOOP silently: cursor
+// shapes worked on the first connection and then went dead after every re-pair
+// (lid-close / reconnect) -- a latent bug since the overlay shipped, only exposed
+// by a real re-pair. Register the types + resolve the handles a single time here;
+// startCursorCapture below just spins a fresh poll timer off the cached handle.
+// GENERAL koffi RULE: never call koffi.struct(name)/koffi.load per connection.
+interface CursorFfi {
+  getCursorInfo: (pci: {
+    cbSize: number
+    flags: number
+    hCursor: number | bigint
+    ptScreenPos: { x: number; y: number }
+  }) => number
+  handleToShape: Map<string, CursorShape>
+}
 
-  let timer: ReturnType<typeof setInterval> | undefined
+let cursorFfi: CursorFfi | null = null
+let cursorFfiFailed = false
+
+function initCursorFfi(): CursorFfi | null {
+  if (cursorFfi) return cursorFfi
+  if (cursorFfiFailed) return null // a prior attempt failed -- don't re-run (and re-throw) every session
   try {
     const user32 = koffi.load('user32.dll')
 
@@ -76,14 +95,14 @@ export function startCursorCapture(onShape: (shape: CursorShape) => void): Curso
       hCursor: 'uintptr_t',
       ptScreenPos: 'PR_POINT'
     })
-    if (koffi.sizeof(CURSORINFO) !== CURSORINFO_SIZE) return NOOP
+    if (koffi.sizeof(CURSORINFO) !== CURSORINFO_SIZE) {
+      cursorFfiFailed = true
+      return null
+    }
 
-    const GetCursorInfo = user32.func('int GetCursorInfo(_Inout_ CURSORINFO *pci)') as (pci: {
-      cbSize: number
-      flags: number
-      hCursor: number | bigint
-      ptScreenPos: { x: number; y: number }
-    }) => number
+    const getCursorInfo = user32.func(
+      'int GetCursorInfo(_Inout_ CURSORINFO *pci)'
+    ) as CursorFfi['getCursorInfo']
     // LoadCursorW(HINSTANCE, LPCWSTR): both args + the return are pointer-sized.
     // The resource name is MAKEINTRESOURCE(id) -- the integer id in the pointer
     // slot -- so lpCursorName is declared size_t to accept it directly.
@@ -100,38 +119,53 @@ export function startCursorCapture(onShape: (shape: CursorShape) => void): Curso
       const h = LoadCursorW(null, id)
       if (h) handleToShape.set(String(h), shape)
     }
-    if (handleToShape.size === 0) return NOOP // LoadCursorW gave nothing -- bail
+    if (handleToShape.size === 0) {
+      cursorFfiFailed = true
+      return null // LoadCursorW gave nothing -- bail
+    }
 
-    let last: CursorShape | null = null
-    const info = { cbSize: CURSORINFO_SIZE, flags: 0, hCursor: 0, ptScreenPos: { x: 0, y: 0 } }
-    timer = setInterval(() => {
-      try {
-        info.cbSize = CURSORINFO_SIZE // GetCursorInfo requires this set each call
-        if (!GetCursorInfo(info)) return
-        const shape =
-          (info.flags & CURSOR_SHOWING) === 0
-            ? 'none'
-            : (handleToShape.get(String(info.hCursor)) ?? 'default')
-        if (shape !== last) {
-          last = shape
-          onShape(shape)
-        }
-      } catch {
-        /* a transient GetCursorInfo failure -- skip this tick */
-      }
-    }, POLL_INTERVAL_MS)
+    cursorFfi = { getCursorInfo, handleToShape }
+    return cursorFfi
   } catch {
-    // koffi load / struct / func setup failed -- no-op, controller keeps the
-    // local OS cursor. (A bad SIGNATURE segfaults uncatchably; this catch only
-    // covers load/parse errors -- hence the struct-size guard above.)
-    if (timer) clearInterval(timer)
-    return NOOP
+    // koffi load / struct / func setup failed -- no-op forever (controller keeps
+    // the local OS cursor). A bad SIGNATURE segfaults uncatchably; this catch only
+    // covers load/parse errors -- hence the struct-size guard above.
+    cursorFfiFailed = true
+    return null
   }
+}
+
+// Starts polling; invokes onShape ONLY when the shape actually changes (so the
+// caller can send it straight down a channel). Returns a stop handle. Safe to call
+// once per session / re-pair: the FFI is init'd a single time (initCursorFfi) and
+// this only creates a fresh poll timer + per-call shape state.
+export function startCursorCapture(onShape: (shape: CursorShape) => void): CursorCaptureHandle {
+  if (process.platform !== 'win32') return NOOP
+  const ffi = initCursorFfi()
+  if (!ffi) return NOOP
+
+  let last: CursorShape | null = null
+  const info = { cbSize: CURSORINFO_SIZE, flags: 0, hCursor: 0, ptScreenPos: { x: 0, y: 0 } }
+  const timer = setInterval(() => {
+    try {
+      info.cbSize = CURSORINFO_SIZE // GetCursorInfo requires this set each call
+      if (!ffi.getCursorInfo(info)) return
+      const shape =
+        (info.flags & CURSOR_SHOWING) === 0
+          ? 'none'
+          : (ffi.handleToShape.get(String(info.hCursor)) ?? 'default')
+      if (shape !== last) {
+        last = shape
+        onShape(shape)
+      }
+    } catch {
+      /* a transient GetCursorInfo failure -- skip this tick */
+    }
+  }, POLL_INTERVAL_MS)
 
   return {
     stop() {
-      if (timer) clearInterval(timer)
-      timer = undefined
+      clearInterval(timer)
     }
   }
 }
