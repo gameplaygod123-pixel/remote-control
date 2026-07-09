@@ -65,8 +65,14 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-09)
 
-IN PROGRESS (branch `feat/native-video`): **cursor-shape overlay dies after a
-lid-close re-pair → FIX in PRERELEASE v1.35.0-beta.1 (awaiting WC lid-close verify).**
+DONE — **cursor-shape overlay dies after a lid-close re-pair → FIXED + PROMOTED to
+full v1.35.0 (WC-verified real hardware).** WC E2E: พับจอ/re-pair + back/reconnect many
+rounds → cursor shapes (I-beam/hand/resize) return EVERY session (5/5 have `data channel
+"cursor" open` + shapes flowing, vs beta.1 where session 2+ opened the channel but sent 0);
+input/scroll/keyboard fine; default-on env intact (only GAIN=1.5), capturer unchanged.
+The two fixes together: beta.1's channel-state `onopen` guard + beta.2's koffi struct
+singleton (the real root cause). koffi lesson saved [[koffi-struct-register-once]].
+(Historical note below kept for the record.)
 Owner reproduced: after พับจอ (lid-close) + auto-reconnect, the native cursor SHAPES
 (I-beam/hand/resize) stop showing while scroll/pinch/keyboard keep working. NOT the
 earlier version-mismatch ([[cursor-shape-needs-both-sides-current-code]]) — both sides
@@ -763,7 +769,21 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.34.0** — **default-on streaming stack (fresh install just works).**
+Latest release: **v1.35.0** — **fix: native cursor SHAPE overlay dies after a re-pair
+(lid-close/reconnect).** Off `feat/native-video`; WC-verified on real hardware (5/5 sessions
+after re-pair show the shapes) via prereleases beta.1 (channel-state onopen guard) + beta.2
+(the real fix) before this full release. Root cause: `startCursorCapture()` ran once per
+session and re-registered koffi structs (`koffi.struct('PR_POINT'/'CURSORINFO')`) every call;
+koffi throws on a duplicate named struct → from the 2nd pairing on it threw → the guard
+returned NOOP silently → no cursor shapes after any re-pair (latent since v1.32). Fix = hoist
+the FFI init to a module-level singleton `initCursorFfi()` (koffi.load + koffi.struct +
+user32.func + handle resolution run ONCE, cached); `startCursorCapture` only spins a fresh poll
+timer. Also beta.1's `cursor.onopen` guard is now channel-state (`readyState`) not `pc !== conn`.
+Golden rule #1 (koffi) honored (prerelease + real-hw verify). koffi lesson:
+[[koffi-struct-register-once]]. **Rolls up v1.34.0 (default-on stack) + v1.33.0 (cursor shape)
++ v1.32.0 (smooth scroll).**
+
+Prior release: **v1.34.0** — **default-on streaming stack (fresh install just works).**
 Off `feat/native-video`; WC-verified on a simulated fresh machine (all `VIDEO_*` env deleted)
 + owner-confirmed before this full release. The Parsec-like stack was gated behind persisted
 env vars that a reinstall/registry-wipe would lose; now flipped from opt-in to **opt-out** so a
