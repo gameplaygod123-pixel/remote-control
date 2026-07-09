@@ -35,6 +35,15 @@ import { readClipboardText, writeClipboardText } from './clipboardNative'
 import { startCursorCapture } from './cursorCapture'
 import { logInputHelper } from '../main/inputHelperLog'
 
+// Parent-death watchdog: this helper is fork()ed by the Electron main process and
+// must never outlive it. On Windows a forked child does NOT auto-die when its parent
+// dies (crash / force-kill / app.exit during elevation-handoff or relaunch), so without
+// this it orphans and accumulates as extra "Personal Remote" entries in Task Manager.
+// The IPC channel emits 'disconnect' the instant main's end closes -- exit immediately
+// so exactly one generation of helpers is ever alive. main never disconnects while
+// alive (it uses the channel for ping/pong + IPC), so this can't fire spuriously.
+process.on('disconnect', () => process.exit(0))
+
 // TEMP diagnostic (helper-session-flapping investigation, see
 // docs/native-input-plan.md). `session` is passed explicitly rather than
 // read from the current sessionCounter -- a pc's own callbacks (onicecandidate,

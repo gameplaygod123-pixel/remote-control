@@ -44,6 +44,15 @@ import { NVENC_KEYFRAME_GOP } from './ffmpegArgs'
 import { isKeyframeRequest, parseRtcpFeedback } from './rtcpFeedback'
 import { logVideoSender } from '../../main/videoSenderLog'
 
+// Parent-death watchdog: fork()ed by Electron main; must never outlive it. On Windows a
+// forked child does NOT auto-die when its parent dies (crash / force-kill / app.exit on
+// elevation-handoff or relaunch), so without this it orphans and piles up as extra
+// "Personal Remote" processes (and leaves the capturer.exe it spawned running). The IPC
+// channel's 'disconnect' fires the instant main closes -> exit now. main never disconnects
+// while alive (it drives this over the ipc.ts contract), so it can't fire spuriously. The
+// capturer child dies with us (its stdin pipe closes -> EOF -> capturer exits).
+process.on('disconnect', () => process.exit(0))
+
 // ── RTP / media constants (must match what the Mac receiver negotiates) ─────────
 const PAYLOAD_TYPE = 96
 const CLOCK_RATE = 90_000

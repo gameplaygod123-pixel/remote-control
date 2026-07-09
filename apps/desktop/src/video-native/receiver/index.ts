@@ -41,6 +41,13 @@ function nackBufferEnabled(): boolean {
 }
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 
+// Parent-death watchdog: fork()ed by Electron main; must never outlive it. On Windows a
+// forked child does NOT auto-die when its parent dies (crash / force-kill / relaunch), so
+// without this it orphans and piles up as extra processes. The IPC channel's 'disconnect'
+// fires the instant main closes -> exit now. main never disconnects while alive (it drives
+// this over the ipc.ts contract), so it can't fire spuriously.
+process.on('disconnect', () => process.exit(0))
+
 // Must match the sender (sender/index.ts): same STUN pair (golden rule #4), same
 // verified servers -- a single STUN server is a single point of failure. TURN is
 // appended ONLY when configured via env (default STUN-only = byte-identical), for
