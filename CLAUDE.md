@@ -110,10 +110,24 @@ DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1
   ([[agent-env-overrides-must-be-persisted]]), relaunch agent + reconnect.** Coherent ONLY
   with the capturer (no composited cursor); the ffmpeg fallback (`draw_mouse=1`) would
   double the cursor → stays **opt-in + real-hw-verified before any default-on** (golden
-  rule #1); the flag is also the built-in cancel switch ("เผื่อไม่ดีค่อยยกเลิก"). **NEXT
-  (owner/WC): set the persisted env, reconnect, verify correct shapes (I-beam/hand/resize),
-  0-latency, NO double cursor. If clean → make it default-on when `VIDEO_CAPTURER=1` in a
-  follow-up prerelease.** (Comment in `input-helper/index.ts` updated to this reality.)
+  rule #1); the flag is also the built-in cancel switch ("เผื่อไม่ดีค่อยยกเลิก").
+  - **WC-VERIFIED on real hardware (2026-07-09, `PR_CURSOR_OVERLAY=1` + VIDEO_CAPTURER=1
+    + HEVC): PASS** — text field→I-beam, link/button→hand, window edge→resize
+    (ew/ns/nwse/nesw), normal→arrow; shapes change instantly (0-latency, 60ms poll); **NO
+    double cursor** (capturer draws no cursor → the CSS overlay is the one cursor). Owner
+    asked "does a Windows controller get this too?" → YES, the controller render is shared
+    (`ondatachannel 'cursor'` → `onCursorChannel` → `setRemoteCursor` → CSS on the video
+    el, pure React/CSS, OS-agnostic; glyph = the controller OS's native cursor). Caveat: a
+    Windows controller must be v1.32.0-beta.1+ (older = no `onCursorChannel`); not a concern
+    now (owner's Mac controller is dev/latest).
+  - **BAKED DEFAULT → PRERELEASE v1.33.0-beta.1:** `input-helper/index.ts`
+    `cursorOverlayEnabled()` — `PR_CURSOR_OVERLAY=0` forces off (cancel), `=1` forces on,
+    UNSET → **on automatically when `VIDEO_CAPTURER=1`** (the ONLY state where the video is
+    guaranteed cursor-free, so the overlay can't double). ffmpeg fallback (composites the
+    cursor) → overlay stays OFF = no double, per WC's requirement 2. Owner no longer needs
+    the env var. typecheck + lint clean. **NEXT (WC): install beta.1, REMOVE the
+    `PR_CURSOR_OVERLAY` env (keep VIDEO_CAPTURER=1), reconnect → confirm shapes still work
+    from the baked default. If clean → promote full v1.33.0.**
 - **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
   high-resolution signal — controller sent only `deltaY/40`, the agent did
   `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then

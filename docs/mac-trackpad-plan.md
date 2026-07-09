@@ -123,14 +123,16 @@ beta.4, shipped dormant in v1.32.0):
   macOS renders the real native cursor at 0 latency + correct hotspot; degrades to
   the local arrow if the channel never opens.
 
-**Enabling = set `PR_CURSOR_OVERLAY=1` on the agent** (no rebuild — it's in v1.32.0),
-persisted (registry, per [[agent-env-overrides-must-be-persisted]]), relaunch agent +
-reconnect. Coherent ONLY with the capturer (no composited cursor); with the ffmpeg
-fallback (`draw_mouse=1`) it would double the cursor, so it stays **opt-in and
-real-hardware-verified before any default-on** (golden rule #1). The flag is also the
-built-in cancel switch. **Verify:** correct shapes (I-beam/hand/resize), 0-latency,
-**no double cursor**. If clean → make it default-on when the capturer is active
-(tie to `VIDEO_CAPTURER`) in a follow-up prerelease.
+**WC-VERIFIED on real hardware + BAKED DEFAULT (v1.33.0-beta.1).** Verified with
+`PR_CURSOR_OVERLAY=1`: correct shapes (I-beam/hand/resize/arrow), 0-latency, no double
+cursor. Now default via `cursorOverlayEnabled()` (`input-helper/index.ts`):
+`PR_CURSOR_OVERLAY=0` forces off (cancel switch), `=1` forces on, UNSET → on when
+`VIDEO_CAPTURER=1` (the only state where the video is guaranteed cursor-free). The
+ffmpeg fallback composites the cursor, so the overlay auto-disables there → no double
+cursor. Shipped as a prerelease (golden rule #1, FFI now in the default path); promote
+after WC confirms the baked default works with the env removed. The controller render
+is shared, so a Windows controller (v1.32.0-beta.1+) gets the same feature (native OS
+cursor glyph).
 
 ## Safety / process
 
