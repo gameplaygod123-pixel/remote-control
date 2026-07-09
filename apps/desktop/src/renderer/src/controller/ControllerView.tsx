@@ -66,6 +66,18 @@ function ControllerView(): React.JSX.Element {
     window.api.pipeline.get().then(setPipeline)
   }, [])
 
+  // Parsec-style window X: tell main whether a session is live so it knows
+  // whether the X should drop back to the main page (session live) or hide to
+  // the tray (main page). Subscribe once to main's "go home" -- the X pressed
+  // during a session -> leave it and return to the device list.
+  useEffect(() => {
+    window.api.controller.setSessionActive(activeDevice !== null)
+  }, [activeDevice])
+
+  useEffect(() => {
+    window.api.controller.onGoHome(() => setActiveDevice(null))
+  }, [])
+
   // Persist + apply live. The macOS window is always transparent, so every
   // theme (including glass) just re-skins via CSS -- no relaunch.
   function changeTheme(next: ThemeName): void {

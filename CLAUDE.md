@@ -65,6 +65,35 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-09)
 
+DONE — **Parsec-style controller window X (background/tray) — owner-requested
+2026-07-09: "กด X ตอนเชื่อมต่อ remote ไม่ปิดโปรแกรม แต่กลับหน้าหลัก; กด X หน้าหลักก็ไม่ปิด
+ให้ไปรันพื้นหลัง เรียกใช้ได้เสมอเหมือน Parsec; รองรับ Windows ด้วย".** The controller's X no
+longer quits: **during a live session** it drops back to the main page (device list); **on the
+main page** it hides to a **tray** so the app keeps running in the background and can be
+re-summoned any time. Cross-platform (Mac menu-bar tray + Windows tray). NOT native/FFI → no
+prerelease; Mac controller runs from dev → **owner just relaunches `start-controller.command`**.
+- **Main (`main/index.ts`):** `controllerSessionActive` flag (set by the renderer via
+  `ipcMain.on('controller:session-active')`); new `setupControllerTray(win)` (mirrors
+  `setupAgentTray`) wired in the `appMode==='controller'` branch of `createWindow`. Its
+  `win.on('close')`: `isQuitting`→allow; else `preventDefault` + (session live → `sendToWindow
+  'controller:go-home'`, main page → `win.hide()`). Tray menu = Show / Quit (Quit sets
+  `isQuitting`). Added `app.on('before-quit', ()=>{isQuitting=true})` so **macOS Cmd+Q / app-menu
+  Quit actually quit** (else the close→hide handler would trap them). `app.on('activate')` now
+  also **re-shows a tray-hidden window** (dock click), not just recreates when none exist.
+  Re-summon paths: tray click, dock (mac), or relaunch (existing `second-instance` shows it).
+- **Preload:** new `window.api.controller.setSessionActive(active)` + `onGoHome(handler)`
+  (+ `.d.ts`).
+- **Renderer (`ControllerView.tsx`):** effect reports `setSessionActive(activeDevice !== null)`
+  on change; effect subscribes `onGoHome(() => setActiveDevice(null))` (X-during-session → leave
+  session, session cleanup runs via ControllerSession unmount).
+- Agent UNAFFECTED (`setupControllerTray` only runs in controller mode; the before-quit/activate
+  tweaks are benign for the agent). typecheck(node+web) + lint clean. **DEV NOTE:** closing the
+  controller window no longer quits it — use **Cmd+Q** or the **tray → Quit** (or Ctrl+C in the
+  `electron-vite dev` terminal). **NEXT (owner): relaunch `start-controller.command` → verify X
+  in-session returns to the list (session ends), X on the list hides to tray, tray/dock/relaunch
+  brings it back, Cmd+Q still quits.** A distributable Windows *controller* build is a separate
+  build step if ever wanted (logic is already cross-platform).
+
 DONE — **cursor-shape overlay dies after a lid-close re-pair → FIXED + PROMOTED to
 full v1.35.0 (WC-verified real hardware).** WC E2E: พับจอ/re-pair + back/reconnect many
 rounds → cursor shapes (I-beam/hand/resize) return EVERY session (5/5 have `data channel

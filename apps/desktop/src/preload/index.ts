@@ -71,6 +71,19 @@ const api = {
   controllerId: {
     get: (): Promise<string> => ipcRenderer.invoke('controller:get-id')
   },
+  // Parsec-style window lifecycle for the controller. The renderer reports
+  // whether a remote session is live so the main process can decide what the
+  // window's X does: session live -> go back to the main page (not close);
+  // main page -> hide to the tray (keep running in the background). onGoHome is
+  // main telling the renderer to leave the session (the X-during-session case).
+  controller: {
+    setSessionActive: (active: boolean): void => {
+      ipcRenderer.send('controller:session-active', active)
+    },
+    onGoHome: (handler: () => void): void => {
+      ipcRenderer.on('controller:go-home', () => handler())
+    }
+  },
   controllerMemory: {
     getCachedPin: (deviceId: string): Promise<string | undefined> =>
       ipcRenderer.invoke('controller-memory:get-cached-pin', deviceId),

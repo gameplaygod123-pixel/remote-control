@@ -293,6 +293,11 @@ let agentWindow: BrowserWindow | undefined
 // agentWindow; only one controller window per process.
 let controllerWindow: BrowserWindow | undefined
 
+// Whether the controller currently has a LIVE remote session (reported by the
+// renderer via 'controller:session-active'). Decides what the window's X does:
+// session live -> go back to the main page; main page -> hide to the tray.
+let controllerSessionActive = false
+
 // Forward a host-process event to a window's renderer, safely. The host
 // callbacks (input/sender/receiver) fire from a ChildProcess, so a stats/ice
 // message can arrive AFTER the window has been destroyed (session ended, app
@@ -335,6 +340,7 @@ function createWindow(appMode: AppMode): void {
     setupAgentTray(win)
   } else if (appMode === 'controller') {
     controllerWindow = win
+    setupControllerTray(win)
     // In native-video mode the decoded frames are composited INSIDE this window
     // (an AVSampleBufferDisplayLayer subview added by librvr.dylib -- see
     // nativeRenderSurface.ts / embed.swift), NOT a separate floating NSWindow, so
@@ -404,6 +410,51 @@ function setupAgentTray(win: BrowserWindow): void {
     if (isQuitting) return
     event.preventDefault()
     win.hide()
+  })
+}
+
+// Parsec-style background operation for the CONTROLLER. The X button no longer
+// quits: during a live remote session it drops back to the main page (so the
+// session ends but the app stays), and on the main page it hides to the tray so
+// the controller keeps running in the background and can be re-summoned any time
+// (tray icon, or relaunching the app -> the single-instance 'second-instance'
+// handler shows it). Only the tray "Quit" actually ends the process. Works on
+// Windows and macOS (the tray is a menu-bar item there).
+function setupControllerTray(win: BrowserWindow): void {
+  const trayIcon = nativeImage.createFromPath(icon).resize({ width: 16, height: 16 })
+  const tray = new Tray(trayIcon)
+  tray.setToolTip('Personal Remote')
+
+  function showWindow(): void {
+    win.show()
+    win.focus()
+  }
+
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Show Personal Remote', click: showWindow },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+  tray.on('click', showWindow)
+
+  win.on('close', (event) => {
+    if (isQuitting) return // real quit (tray Quit / Cmd+Q via before-quit path)
+    event.preventDefault()
+    if (controllerSessionActive) {
+      // X while controlling -> leave the session, stay on the main page.
+      sendToWindow(win, 'controller:go-home')
+    } else {
+      // X on the main page -> keep running in the background.
+      win.hide()
+    }
   })
 }
 
@@ -582,6 +633,12 @@ app.whenReady().then(async () => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+
+  // The controller renderer reports whether a remote session is live, so the
+  // window's X can go-back-to-main vs hide-to-tray (see setupControllerTray).
+  ipcMain.on('controller:session-active', (_event, active: boolean) => {
+    controllerSessionActive = active === true
+  })
 
   ipcMain.handle('get-mode', (): AppMode => appMode)
   ipcMain.handle('get-app-version', (): string => app.getVersion())
@@ -841,10 +898,28 @@ app.whenReady().then(async () => {
   initAutoUpdater()
 
   app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) launchWindows()
+    // On macOS, clicking the dock icon re-creates a window if none exist, OR
+    // re-shows one that's been hidden to the tray (the controller's
+    // background/Parsec mode) -- otherwise a tray-hidden controller couldn't be
+    // brought back from the dock.
+    const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed())
+    if (wins.length === 0) {
+      launchWindows()
+      return
+    }
+    const win = wins[0]
+    win.show()
+    win.focus()
   })
+})
+
+// Any real quit path (macOS Cmd+Q / app menu Quit / app.quit()) must actually
+// close, not get trapped by the tray windows' close->hide handlers. Mark it as a
+// quit BEFORE the windows receive their 'close' events so those handlers allow
+// it. The tray "Quit" also sets isQuitting; this covers Cmd+Q on macOS (the
+// controller's home).
+app.on('before-quit', () => {
+  isQuitting = true
 })
 
 // Quit when all windows are closed, except on macOS. There, it's common

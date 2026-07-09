@@ -54,6 +54,10 @@ declare global {
       controllerId: {
         get: () => Promise<string>
       }
+      controller: {
+        setSessionActive: (active: boolean) => void
+        onGoHome: (handler: () => void) => void
+      }
       controllerMemory: {
         getCachedPin: (deviceId: string) => Promise<string | undefined>
         setCachedPin: (deviceId: string, pin: string) => Promise<void>
