@@ -1648,7 +1648,13 @@ Lessons:
    every 25s but never checked for a pong and relied only on the WS `close` event,
    which never fires on a HALF-OPEN socket (tunnel host sleeps → no FIN/RST). Now
    force-closes + reconnects (re-resolving the URL) after 65s of silence. Benefits
-   agent + controller. Untested on the real half-open path yet — verify by
-   sleeping one machine mid-session and confirming auto-recovery without a manual
-   restart. Optional follow-up the owner deferred: (ค) auto-fallback input→video
-   pc if the input pc never opens.
+   agent + controller. **✅ VERIFIED on the real lid-close path (owner, 2026-07-09):**
+   after `git`-timestamping the signaling server's connection lifecycle logs
+   (`server/signaling/src/index.ts` `log()`/`logWarn()` helpers now prefix ISO time),
+   a lid-close test measured **disconnect 13:47:36Z → fully re-paired 13:48:08Z ≈ 31s
+   auto-recovery, no manual restart** (agent re-registered + controller re-paired on
+   its own). Observation: some connect/disconnect FLAPPING during the wake settle
+   (agent + controller + tunnel all reconnecting at once) before it stabilizes — not
+   harmful (ends paired) but the recovery isn't 100% clean; a follow-up could tighten
+   the initial reconnect backoff / de-flap if ~31s ever feels slow. Optional follow-up
+   the owner deferred: (ค) auto-fallback input→video pc if the input pc never opens.
