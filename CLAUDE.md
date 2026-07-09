@@ -1723,3 +1723,21 @@ Lessons:
    harmful (ends paired) but the recovery isn't 100% clean; a follow-up could tighten
    the initial reconnect backoff / de-flap if ~31s ever feels slow. Optional follow-up
    the owner deferred: (ค) auto-fallback input→video pc if the input pc never opens.
+   - **RE-PAIR WATCHDOG — DONE (2026-07-09, `ControllerSession.tsx`, controller-side
+     only, NO build — owner relaunches `start-controller.command`):** fixes the "re-pair
+     hangs at connecting ~4min" the owner hit after some lid-close wakes. ROOT CAUSE: all
+     the controller's pair retries were REACTIVE — scheduled ONLY when a specific message
+     is RECEIVED (a `pair-result: unknown device id`, or a pc `failed` event). During the
+     wake FLAPPING (agent + controller + tunnel all reconnecting at once) a pair-request OR
+     its pair-result can simply be LOST → no reactive retry is ever scheduled → the session
+     strands "connected to signaling but never paired" with no timer to recover. FIX: a
+     proactive `setInterval` watchdog (`REPAIR_WATCHDOG_INTERVAL_MS`=6s) that runs the whole
+     session and, while NO pc is actually `'connected'` (checks both `pcRef` webrtc/non-helper
+     input AND `inputPcRef` helper input), re-sends pair-request (idempotent server-side) so a
+     lost message can't wedge us. Skips the nudge while a human approval is pending
+     (`pendingApprovalRef`, set on `pairing-pending` / cleared on any `pair-result`) or the WS
+     is down (`signalingOpenRef`, set/cleared in onReconnect/onDisconnect — signaling's own
+     reconnect handles that). 6s > a healthy direct-link negotiation (~1-2s) so it only nudges
+     genuinely-stuck sessions; cleared on unmount. typecheck(web) clean, lint = only the
+     pre-existing exhaustive-deps warning. NEXT: owner relaunches the controller, repeats the
+     lid-close test, confirms a re-pair never hangs (recovers within ~6s even if a message drops).
