@@ -166,6 +166,17 @@ DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1
     test skipped — would disrupt the session; logic is unambiguous). **Mac-native trackpad
     is COMPLETE: Phase 1 (v1.32.0 smooth scroll+HWHEEL) + Phase 2 (pinch-zoom) + Phase 3
     (v1.33.0 native 0-latency cursor shape).**
+  - **GOTCHA (2026-07-09, cost a long false FFI chase → saved to
+    [[cursor-shape-needs-both-sides-current-code]]):** after all the v1.34.0/lid-test churn the
+    cursor shapes stopped showing while scroll/pinch/keyboard still worked. Root cause was NOT
+    the FFI — it was the **Mac controller running a STALE dev build missing its half of the
+    overlay** (`trackCursorChannel` + CSS). The shape needs BOTH halves current: agent
+    (`cursorCapture` + `'cursor'` channel) AND controller (`trackCursorChannel` + CSS); a stale
+    build on either side = no shapes even though the channel opens (scroll/pinch ride a different
+    channel, so they mask it). Fix = relaunch `start-controller.command` on the latest checkout
+    (the Mac controller is dev-run, not a versioned install). Debug order: badge=NATIVE first,
+    then confirm both sides' code, THEN the agent log line `data channel "cursor" open`, and only
+    then FFI.
 - **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
   high-resolution signal — controller sent only `deltaY/40`, the agent did
   `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then
