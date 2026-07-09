@@ -108,9 +108,16 @@ function checkCgnat() {
     ? run('tracert -d -h 4 -w 1000 8.8.8.8')
     : run('traceroute -n -m 4 -w 2 8.8.8.8')
   const ips = out.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || []
-  const cgnat = ips.find((ip) => {
+  // A PRIVATE hop right after the home router = the ISP is NATing you (carrier NAT).
+  // Standard CGNAT is 100.64/10, but ISPs also use 10/8 or 172.16/12 internally
+  // (e.g. 3BB/TOT hops via 10.x). Any of these after hop 1 = can't host inbound.
+  // Skip the home router itself (hop 1, usually 192.168/16 or the LAN's 10.x).
+  const cgnat = ips.slice(1).find((ip) => {
     const [a, b] = ip.split('.').map(Number)
-    return a === 100 && b >= 64 && b <= 127 // 100.64.0.0/10
+    if (a === 100 && b >= 64 && b <= 127) return true // classic CGNAT
+    if (a === 10) return true // carrier NAT (3BB/TOT etc.)
+    if (a === 172 && b >= 16 && b <= 31) return true // carrier NAT
+    return false
   })
   return { cgnat: cgnat || null, hops: ips.slice(0, 6) }
 }
