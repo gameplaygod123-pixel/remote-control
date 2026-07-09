@@ -40,7 +40,7 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
       await window.api.input.mouseButton(message.button, message.t === 'down')
       break
     case 'wheel':
-      await window.api.input.scroll(message.dy)
+      await window.api.input.scroll(message.dy, message.dx ?? 0, message.px === true)
       break
     case 'keydown':
     case 'keyup':

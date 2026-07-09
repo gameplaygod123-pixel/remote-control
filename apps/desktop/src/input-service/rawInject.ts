@@ -36,6 +36,7 @@ const MOUSEEVENTF_RIGHTUP = 0x0010
 const MOUSEEVENTF_MIDDLEDOWN = 0x0020
 const MOUSEEVENTF_MIDDLEUP = 0x0040
 const MOUSEEVENTF_WHEEL = 0x0800
+const MOUSEEVENTF_HWHEEL = 0x01000
 const MOUSEEVENTF_ABSOLUTE = 0x8000
 const MOUSEEVENTF_VIRTUALDESK = 0x4000
 
@@ -153,15 +154,33 @@ export function injectMouseButton(button: 'left' | 'right' | 'middle', down: boo
   sendMouse({ dx: 0, dy: 0, mouseData: 0, dwFlags: flag })
 }
 
-export function injectWheel(dy: number): void {
-  // Windows: positive = wheel forward/away (scroll up); browser deltaY positive
-  // = scroll down, so negate. Magnitude is a feel knob (see WHEEL_DELTA note).
-  sendMouse({
-    dx: 0,
-    dy: 0,
-    mouseData: Math.round(-dy * WHEEL_DELTA),
-    dwFlags: MOUSEEVENTF_WHEEL
-  })
+// px->wheel-unit gain (wheel units per trackpad pixel); tune via INPUT_WHEEL_GAIN.
+// Mirrors injectorWin32.ts so the SYSTEM path scrolls identically.
+const WHEEL_GAIN = Number(process.env.INPUT_WHEEL_GAIN) || 1
+let wheelAccX = 0
+let wheelAccY = 0
+
+export function injectWheel(dy: number, dx = 0, px = false): void {
+  if (!px) {
+    // Legacy notch path: dy already in ~step units. Windows: positive = wheel
+    // forward/away (scroll up); browser deltaY positive = scroll down, so negate.
+    sendMouse({ dx: 0, dy: 0, mouseData: Math.round(-dy * WHEEL_DELTA), dwFlags: MOUSEEVENTF_WHEEL })
+    return
+  }
+  // Mac trackpad path: raw pixel deltas -> smooth high-resolution wheel with a
+  // fractional accumulator (mouseData can be < 120) + horizontal HWHEEL.
+  wheelAccY += -dy * WHEEL_GAIN
+  const outY = Math.trunc(wheelAccY)
+  if (outY !== 0) {
+    wheelAccY -= outY
+    sendMouse({ dx: 0, dy: 0, mouseData: outY, dwFlags: MOUSEEVENTF_WHEEL })
+  }
+  wheelAccX += dx * WHEEL_GAIN
+  const outX = Math.trunc(wheelAccX)
+  if (outX !== 0) {
+    wheelAccX -= outX
+    sendMouse({ dx: 0, dy: 0, mouseData: outX, dwFlags: MOUSEEVENTF_HWHEEL })
+  }
 }
 
 // Held-key semantics via real VK + scan code (needed for Ctrl+C etc. and any
@@ -204,7 +223,7 @@ export function injectRaw(message: RemoteInputMessage): void {
       injectMouseButton(message.button, message.t === 'down')
       break
     case 'wheel':
-      injectWheel(message.dy)
+      injectWheel(message.dy, message.dx ?? 0, message.px === true)
       break
     case 'keydown':
     case 'keyup':

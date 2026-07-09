@@ -63,7 +63,44 @@ either machine can resume without re-explaining anything.**
   (raw.githubusercontent.com, ~5-min CDN cache), re-resolved on every
   reconnect; the supervisor auto-publishes tunnel URL changes.
 
-## Current status (updated 2026-07-07)
+## Current status (updated 2026-07-09)
+
+IN PROGRESS (branch `feat/native-video`): **Mac-native control — smooth trackpad
+scroll → PRERELEASE v1.32.0-beta.1 (awaiting WC real-hardware verify).** Owner
+(2026-07-09): "โหมดเฉพาะแยกของ Mac ... ควบคุมผ่าน Mac ให้ใช้งานแบบ Mac 100% โดยเฉพาะ
+ทัชแพดต้องสมูสลื่นไหล". Full plan: [`docs/mac-trackpad-plan.md`](docs/mac-trackpad-plan.md).
+- **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
+  high-resolution signal — controller sent only `deltaY/40`, the agent did
+  `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then
+  `nut.js scrollDown` in whole 120-unit notches; no horizontal, no momentum, no
+  pinch. Windows itself is fine — `SendInput` `mouseData` < WHEEL_DELTA(120) = real
+  high-res smooth scroll that modern apps honor; the bottleneck was nut.js + our
+  rounding.
+- **Phase 1 DONE (Mac-side code, this session):** high-resolution scroll end-to-end,
+  **auto-gated to Mac controllers (no toggle)** so a Windows controller is
+  BYTE-IDENTICAL to before (owner's explicit concern — "อย่าให้ผู้ใช้ผ่าน Windows
+  มีปัญหา"). Design: new protocol `px?` flag on `wheel` (+`dx?`) —
+  `px:true` = RAW pixel deltas (Mac path); absent = legacy notch path (Windows/old
+  controller, unchanged). Controller (`ControllerSession.tsx`): `IS_MAC_CONTROLLER`
+  (UA) gates `handleWheel` to forward raw deltaX/deltaY (deltaMode-normalized) via
+  `sendWheel` (sums pending delta under channel backlog — never drops scroll travel).
+  Agent: new koffi **`injectWheelWin32(dx,dy)`** (`injectorWin32.ts`, MOUSEINPUT +
+  fractional accumulator + `MOUSEEVENTF_HWHEEL` horizontal) bypasses nut.js — same
+  move the keyboard made; `scrollMouse(dy,dx,px)` routes to it only when `px` +
+  win32; `input-helper` dispatch passes dx/px + coalesces queued wheels by SUMMING;
+  renderer path threaded (AgentView/preload/main `input:scroll`); SYSTEM injector
+  (`rawInject.ts`) got the same accumulator + HWHEEL. Feel knob `INPUT_WHEEL_GAIN`
+  (default 1, tune on hw → bake). typecheck clean; lint clean (only the 2 pre-existing
+  AgentView ref errors + the pre-existing ControllerSession sendInput deps warning).
+- **Golden rule #1:** koffi SendInput wheel = native FFI → shipped as PRERELEASE
+  v1.32.0-beta.1, WC verifies on the real Windows agent BEFORE promoting. NEXT (WC):
+  Mac trackpad two-finger scroll = smooth + no dead-zone on slow flicks; momentum
+  continues after lift; horizontal scroll works (HWHEEL); no runaway under load;
+  a real USB mouse wheel still feels notchy/normal; tune `INPUT_WHEEL_GAIN` to ~1:1
+  then bake the default. Windows-controller regression check = scroll unchanged.
+- **Deferred (Phase 2/3, after Phase 1 feels right):** pinch-to-zoom (Chromium
+  pinch = wheel+ctrlKey → wrap Ctrl on the agent); local 0-latency Mac cursor overlay
+  (reuse dormant `PR_CURSOR_OVERLAY`) for the true "glued to the mouse" pointer feel.
 
 IN PROGRESS (branch `feat/native-video`): **native-video polish — HUD latency
 telemetry (SHIPPED to the branch) + a 120fps/60Mbps PRERELEASE awaiting real-

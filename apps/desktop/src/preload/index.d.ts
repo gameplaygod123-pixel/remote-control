@@ -17,7 +17,7 @@ declare global {
         type: (text: string) => Promise<void>
         getPosition: () => Promise<{ x: number; y: number }>
         mouseButton: (button: 'left' | 'right' | 'middle', down: boolean) => Promise<void>
-        scroll: (deltaY: number) => Promise<void>
+        scroll: (deltaY: number, deltaX?: number, px?: boolean) => Promise<void>
         key: (code: string, down: boolean, scan?: boolean) => Promise<void>
         getScreenSize: () => Promise<{ width: number; height: number }>
       }

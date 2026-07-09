@@ -19,11 +19,23 @@ export type MouseButton = 'left' | 'right' | 'middle'
 // invisible to most games. Absent/false keeps the byte-identical VK path used
 // for normal typing and shortcuts (no regression). Optional so an older agent
 // (no scan handling) still injects the key via the VK path -- graceful.
+//
+// `wheel`: `dy`/`dx` and the `px` flag pick the scroll semantics.
+//   - `px: true`  (MAC TRACKPAD PATH): dy/dx are RAW pixel deltas (floats, never
+//     rounded). The agent scrolls smoothly via a fractional accumulator ->
+//     SendInput with mouseData that can be < WHEEL_DELTA (120), and maps dx to a
+//     horizontal wheel (MOUSEEVENTF_HWHEEL). Momentum comes for free (macOS keeps
+//     firing decaying wheel events after the finger lifts).
+//   - `px` absent/false (LEGACY NOTCH PATH): dy is already in ~nut.js "step"
+//     units (browser deltaY / 40); dx is ignored. This is what a NON-Mac
+//     controller sends, so a Windows controller stays byte-identical to before.
+//   Only a Mac controller sets `px:true`, and only a new agent honors it -- an
+//   older agent ignores `px`/`dx` and scrolls vertically (graceful downgrade).
 export type RemoteInputMessage =
   | { t: 'move'; x: number; y: number; seq?: number }
   | { t: 'down'; button: MouseButton }
   | { t: 'up'; button: MouseButton }
-  | { t: 'wheel'; dy: number }
+  | { t: 'wheel'; dy: number; dx?: number; px?: boolean }
   | { t: 'keydown'; code: string; scan?: boolean }
   | { t: 'keyup'; code: string; scan?: boolean }
   | { t: 'text'; text: string }

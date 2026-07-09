@@ -698,7 +698,9 @@ app.whenReady().then(async () => {
     'input:mouse-button',
     (_event, button: 'left' | 'right' | 'middle', down: boolean) => mouseButtonToggle(button, down)
   )
-  ipcMain.handle('input:scroll', (_event, deltaY: number) => scrollMouse(deltaY))
+  ipcMain.handle('input:scroll', (_event, deltaY: number, deltaX?: number, px?: boolean) =>
+    scrollMouse(deltaY, deltaX ?? 0, px === true)
+  )
   ipcMain.handle('input:key', (_event, code: string, down: boolean, scan?: boolean) =>
     keyToggle(code, down, scan === true)
   )

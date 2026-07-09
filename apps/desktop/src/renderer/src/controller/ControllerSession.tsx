@@ -27,6 +27,14 @@ import { NATIVE_VIDEO_CAP, type NativeVideoStats } from '../../../video-native/s
 // responsiveness now that the video itself can keep up at that rate.
 const MOUSE_MOVE_THROTTLE_MS = 16
 
+// Smooth-trackpad scroll (Mac controllers only). A Mac trackpad emits fine
+// high-resolution pixel wheel deltas with momentum; forwarding them raw (px:true)
+// lets the agent scroll smoothly via a fractional accumulator + horizontal wheel.
+// A non-Mac controller (e.g. a Windows machine driving the session) keeps the
+// legacy notch path, so it is byte-identical to before -- no regression for
+// controllers on other platforms. Detected from the Electron renderer UA.
+const IS_MAC_CONTROLLER = /Macintosh|Mac OS X/.test(navigator.userAgent)
+
 // After a network drop -- or the agent machine being restarted by hand,
 // which can take an arbitrarily long time -- the controller and agent
 // reconnect independently with no ordering guarantee. Retry indefinitely on
@@ -121,6 +129,7 @@ export default function ControllerSession({
   const inputChannelRef = useRef<RTCDataChannel | null>(null)
   const moveChannelRef = useRef<RTCDataChannel | null>(null)
   const lastMoveSentRef = useRef(0)
+  const pendingWheelRef = useRef({ dx: 0, dy: 0 })
   const moveSeqRef = useRef(0)
   const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
     useFileTransferChannel()
@@ -310,8 +319,35 @@ export default function ControllerSession({
 
   function handleWheel(e: React.WheelEvent<HTMLVideoElement>): void {
     e.preventDefault()
-    // Normalize a raw pixel delta down to roughly nut.js's "step" unit.
+    if (IS_MAC_CONTROLLER) {
+      // Forward the RAW high-resolution pixel delta (deltaMode normalized to px)
+      // with px:true, so the agent scrolls smoothly. Momentum arrives for free
+      // as more decaying wheel events. deltaMode 1=line (~16px), 2=page.
+      const scale =
+        e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? e.currentTarget.clientHeight || 800 : 1
+      sendWheel(e.deltaY * scale, e.deltaX * scale)
+      return
+    }
+    // Legacy notch path (non-Mac controller): normalize a raw pixel delta down
+    // to roughly nut.js's "step" unit. Byte-identical to the prior behavior.
     sendInput({ t: 'wheel', dy: e.deltaY / 40 })
+  }
+
+  // Smooth-scroll sender: rides the reliable/ordered input channel (a lost
+  // scroll delta would jump the page), but under backlog it SUMS the pending
+  // delta instead of queuing many stale messages -- never dropping scroll
+  // travel, unlike moves (a newer position supersedes an old one, but scroll
+  // is cumulative). Flushes the accumulated total once the channel drains.
+  function sendWheel(dy: number, dx: number): void {
+    const channel = inputChannelRef.current
+    if (!channel || channel.readyState !== 'open') return
+    const pending = pendingWheelRef.current
+    pending.dy += dy
+    pending.dx += dx
+    if (channel.bufferedAmount > INPUT_BUFFERED_AMOUNT_THRESHOLD) return
+    channel.send(JSON.stringify({ t: 'wheel', dy: pending.dy, dx: pending.dx, px: true }))
+    pending.dy = 0
+    pending.dx = 0
   }
 
   // Forwards key events to the agent while the session is mounted. PARSEC-STYLE:

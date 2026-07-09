@@ -145,7 +145,7 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
       await mouseButtonToggle(message.button, message.t === 'down')
       break
     case 'wheel':
-      await scrollMouse(message.dy)
+      await scrollMouse(message.dy, message.dx ?? 0, message.px === true)
       break
     case 'keydown':
     case 'keyup':
@@ -204,6 +204,22 @@ function enqueueRemoteInput(message: RemoteInputMessage): void {
     const last = inputQueue[inputQueue.length - 1]
     if (last?.t === 'move') {
       inputQueue[inputQueue.length - 1] = message // newest position supersedes
+    } else {
+      inputQueue.push(message)
+    }
+  } else if (message.t === 'wheel') {
+    // Scroll is cumulative, so a queued wheel burst collapses by SUMMING (not
+    // superseding like moves) -- keeps the total travel while preventing a
+    // backlog of stale deltas under jitter. Only merge same-semantics wheels
+    // (both px or both legacy) so the accumulator scales don't cross.
+    const last = inputQueue[inputQueue.length - 1]
+    if (last?.t === 'wheel' && (last.px === true) === (message.px === true)) {
+      inputQueue[inputQueue.length - 1] = {
+        t: 'wheel',
+        dy: last.dy + message.dy,
+        dx: (last.dx ?? 0) + (message.dx ?? 0),
+        px: message.px
+      }
     } else {
       inputQueue.push(message)
     }
