@@ -65,6 +65,34 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-09)
 
+IN PROGRESS (branch `feat/native-video`): **B1 — productize the streaming stack to
+DEFAULT-ON so a fresh install "just works" without manually-set env → PRERELEASE
+v1.34.0-beta.1 (awaiting WC no-env fresh-install verify).** Owner (2026-07-09): "ตอน
+เครื่องใหม่ๆ ติดตั้งต้องเรียบร้อยใช้งาน". The good experience was gated behind persisted env
+vars (`VIDEO_CAPTURER=1` / `VIDEO_CODEC=hevc` / `VIDEO_NACK_BUFFER=1`) that a reinstall or a
+registry wipe ([[agent-env-overrides-must-be-persisted]]) would lose → a fresh machine fell
+back to plain ffmpeg/H.264. Flipped all from opt-in to **opt-out (default ON, disable with
+`=0`/`h264`)**, reproducing the owner's exact verified stack out of the box:
+- `sender/index.ts` `capturerEnabled()` → `VIDEO_CAPTURER !== '0'` (capturer default-on; SILENT
+  ffmpeg fallback if it can't run, so default-on can't black-screen). `resolveCodec()` → default
+  **HEVC** (`VIDEO_CODEC=h264` forces H.264) — matches the owner's pair (agent encodes HEVC, the
+  M4 Pro Mac HW-decodes it; a non-Mac controller uses WebRTC anyway, so no new risk). `VIDEO_LTR`
+  stays default-OFF (LTR is worse on blackout loss, [[ltr-worse-than-idr-on-blackout-loss]]).
+- `receiver/index.ts` `nackBufferEnabled()` → `VIDEO_NACK_BUFFER !== '0'` (patched darwin ndc ships
+  committed + postinstall-reapplied; without it, no NACKs arrive → the buffer just times out each
+  small gap = a hair more delay, never a break).
+- `input-helper/index.ts` `cursorOverlayEnabled()` follow → `VIDEO_CAPTURER !== '0'` (cursor overlay
+  tracks the capturer default; ffmpeg fallback still auto-disables it = no double cursor).
+- Safety bar INTACT: the native pipeline still only engages when both peers advertise native caps +
+  NVIDIA + binaries present; else total WebRTC fallback. These flips only change which codec/capture
+  runs WITHIN the native path. typecheck + lint clean (no committed unit-test suite / test script;
+  build relies on typecheck+lint). Golden rule #1/#7: native/FFI in the default path → PRERELEASE
+  first. **NEXT (WC): on a truly-fresh agent install with NO `VIDEO_*` env set, confirm the HUD/logs
+  show `spawn capturer` + `codec=hevc` + smooth Parsec-like feel + cursor shapes; on the Mac with no
+  `VIDEO_NACK_BUFFER`, confirm the NACK buffer engages; verify the `=0`/`h264` escape hatches still
+  fall back. If clean → promote full v1.34.0.**
+
+
 DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1.32.0
 (WC-VERIFIED on real hardware, owner-confirmed feel).** Owner (2026-07-09):
 "โหมดเฉพาะแยกของ Mac ... ควบคุมผ่าน Mac ให้ใช้งานแบบ Mac 100% โดยเฉพาะทัชแพดต้องสมูส
@@ -1461,8 +1489,9 @@ Lessons:
        Parsec-100% keyboard works — control a game + switch TH/EN at the same time with no mode
        button. Backlog 0b is DONE. (kernel-anticheat games block ALL injected input = a known,
        unfixable caveat, not a bug.)
-1. Verify file transfer with the agent window actually hidden (works via the
-   renderer video pc, which is subject to throttling — needs a real test).
+1. ✅ DONE (owner-verified 2026-07-09): file transfer with the agent window actually
+   hidden works normally (was a concern because it rides the renderer video pc, which
+   Chromium throttles when hidden — confirmed fine in real use).
 2. Computers-page search/sort; per-controller device visibility (family use).
 3. Known limitation: helper crash mid-session recovers input only at re-pair.
 4. No TURN relay (only matters for CGNAT↔CGNAT pairs).

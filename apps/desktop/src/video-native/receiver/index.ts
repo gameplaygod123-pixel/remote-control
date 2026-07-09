@@ -32,10 +32,12 @@ import { SeqReorderBuffer } from './reorderBuffer'
 // Phase C of the NACK endgame (docs/step-nack-retransmit.md): with the patched ndc
 // (native/ndc-nack) emitting NACKs, hold RTP packets in a shallow seq-ordered buffer so
 // a ~1-RTT retransmit fills a gap before the frame is presented -> silent loss repair
-// (no PLI/IDR/fps-dip). OPT-IN (VIDEO_NACK_BUFFER=1) + needs the patched ndc; default
-// OFF = today's immediate-PLI path, byte-identical. Enabled together for the Phase D e2e.
+// (no PLI/IDR/fps-dip). DEFAULT ON (B1: the owner's verified stack; the patched
+// darwin-arm64 ndc ships committed + is auto-reapplied by postinstall). VIDEO_NACK_BUFFER=0
+// forces today's immediate-PLI path. Without the patched ndc no NACKs arrive, so the buffer
+// just releases each small gap on its short timeout -> at worst a hair more delay, never a break.
 function nackBufferEnabled(): boolean {
-  return process.env.VIDEO_NACK_BUFFER === '1'
+  return process.env.VIDEO_NACK_BUFFER !== '0'
 }
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 

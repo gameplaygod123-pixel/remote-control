@@ -279,17 +279,17 @@ let clipboardStop: (() => void) | null = null
 // below): stopped before each new attempt so no stale interval keeps polling.
 let cursorStop: (() => void) | null = null
 
-// Whether to run the native cursor-SHAPE overlay (Phase 3). Default-on with the
-// DXGI capturer, because only then is the video guaranteed cursor-free (the
-// capturer never composites the cursor) so the CSS overlay is the ONE cursor. The
-// ffmpeg fallback composites the cursor (draw_mouse=1), so overlaying there would
-// DOUBLE it -- hence off unless forced. PR_CURSOR_OVERLAY overrides: '1' forces on,
-// '0' forces off (the cancel switch).
+// Whether to run the native cursor-SHAPE overlay (Phase 3). Follows the capturer,
+// because only then is the video guaranteed cursor-free (the capturer never
+// composites the cursor) so the CSS overlay is the ONE cursor. The ffmpeg fallback
+// composites the cursor (draw_mouse=1), so overlaying there would DOUBLE it -- hence
+// off when the capturer is disabled. Mirrors capturerEnabled()'s VIDEO_CAPTURER!='0'
+// (B1 default-on). PR_CURSOR_OVERLAY overrides: '1' forces on, '0' forces off (cancel).
 function cursorOverlayEnabled(): boolean {
   const override = process.env.PR_CURSOR_OVERLAY
   if (override === '0') return false
   if (override === '1') return true
-  return process.env.VIDEO_CAPTURER === '1'
+  return process.env.VIDEO_CAPTURER !== '0'
 }
 
 function clearConnectTimeout(): void {

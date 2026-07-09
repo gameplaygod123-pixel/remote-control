@@ -111,27 +111,31 @@ function resolveFfmpegTuning(): { preset?: string; bitrateKbps?: number } {
   return tuning
 }
 
-// ── Step 3: custom DXGI capturer (opt-in) ─────────────────────────────────────
+// ── Step 3: custom DXGI capturer (default ON) ─────────────────────────────────
 // The capturer replaces ffmpeg/ddagrab with a change-detecting DXGI capturer
-// (skips pointer-only frames -> Parsec-level GPU). OPT-IN (VIDEO_CAPTURER=1) and
-// default OFF so a plain build is byte-identical to the ffmpeg path; if it's
-// enabled but can't run (non-NVIDIA / missing / fails), we silently fall back to
-// ffmpeg. Prefer an explicit path (dev), else the bundled binary under resources.
+// (skips pointer-only frames -> Parsec-level GPU) + locked-60 cadence. DEFAULT ON
+// (B1: a fresh install gets the good stack out of the box) with a SILENT fallback:
+// if it can't run (non-NVIDIA / missing / fails) we transparently drop to ffmpeg,
+// so default-on can't black-screen. VIDEO_CAPTURER=0 forces the plain ffmpeg path.
+// Prefer an explicit path (dev), else the bundled binary under resources.
 function capturerEnabled(): boolean {
-  return process.env.VIDEO_CAPTURER === '1'
+  return process.env.VIDEO_CAPTURER !== '0'
 }
 
-// ── Step: H.265 (HEVC) opt-in ─────────────────────────────────────────────────
+// ── Step: H.265 (HEVC) default ────────────────────────────────────────────────
 // HEVC is ~1.6x more efficient than H.264 (Parsec runs 1440p60 HEVC at ~half the
-// bitrate). OPT-IN via VIDEO_CODEC=hevc and default OFF so a plain agent is
-// byte-identical H.264. The Mac receiver auto-detects the codec from the offer SDP
-// (H265/90000 in the rtpmap), so nothing needs configuring on the controller. All
-// three encode paths honour it coherently (capturer --codec h265, ffmpeg hevc_nvenc,
-// -f hevc); the h264_mf fallback stays H.264 but hevc_nvenc never falls back to it
-// (frameSource only MF-fallbacks the h264_nvenc encoder), so the SDP codec can never
-// disagree with the bitstream. VideoToolbox on the Mac decodes HEVC in hardware.
-function resolveCodec(config: VideoConfig): VideoCodec {
-  return process.env.VIDEO_CODEC === 'hevc' ? 'hevc' : config.codec
+// bitrate -> the real Parsec-parity codec). DEFAULT (B1: matches the owner's verified
+// stack); VIDEO_CODEC=h264 forces the rock-solid H.264 path. The Mac receiver
+// auto-detects the codec from the offer SDP (H265/90000 in the rtpmap), so nothing
+// needs configuring on the controller. All three encode paths honour it coherently
+// (capturer --codec h265, ffmpeg hevc_nvenc, -f hevc); the h264_mf fallback stays
+// H.264 but hevc_nvenc never falls back to it (frameSource only MF-fallbacks the
+// h264_nvenc encoder), so the SDP codec can never disagree with the bitstream.
+// VideoToolbox on the Mac decodes HEVC in hardware.
+function resolveCodec(): VideoCodec {
+  if (process.env.VIDEO_CODEC === 'h264') return 'h264'
+  if (process.env.VIDEO_CODEC === 'hevc') return 'hevc'
+  return 'hevc'
 }
 
 // ── LTR (Long-Term Reference) recovery opt-in ─────────────────────────────────
@@ -207,7 +211,7 @@ function startSession(rawConfig: VideoConfig): void {
   // Resolve the codec (VIDEO_CODEC=hevc opt-in) once and thread it through the whole
   // session via config.codec: the RTP track/packetizer, capturer/ffmpeg args, the AU
   // assembler NAL layout, and the reported stats all read it, so they can't disagree.
-  const config: VideoConfig = { ...rawConfig, codec: resolveCodec(rawConfig) }
+  const config: VideoConfig = { ...rawConfig, codec: resolveCodec() }
   log(
     `startSession id=${id} ${config.width}x${config.height}@${config.fps} codec=${config.codec} startBr=${config.startBitrateKbps}kbps cursor=${config.cursor}`
   )
