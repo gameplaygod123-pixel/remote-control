@@ -65,6 +65,28 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-09)
 
+IN PROGRESS (branch `feat/native-video`): **cursor-shape overlay dies after a
+lid-close re-pair → FIX in PRERELEASE v1.35.0-beta.1 (awaiting WC lid-close verify).**
+Owner reproduced: after พับจอ (lid-close) + auto-reconnect, the native cursor SHAPES
+(I-beam/hand/resize) stop showing while scroll/pinch/keyboard keep working. NOT the
+earlier version-mismatch ([[cursor-shape-needs-both-sides-current-code]]) — both sides
+are on current code this time.
+- **ROOT CAUSE (found in code):** `input-helper/index.ts` the `'cursor'` channel's
+  `onopen` guarded with `if (pc !== conn) return`. On a re-pair the **input channel
+  usually opens BEFORE the cursor channel on the same conn**; if another negotiation
+  attempt starts in that gap, module-level `pc` moves to the newer conn, so when the
+  (still live) cursor channel finally opens `pc !== conn` → **`startCursorCapture`
+  never runs** → shapes go silent while input/scroll/pinch keep working on that same
+  conn. Exactly the reported symptom.
+- **FIX:** guard on the CHANNEL's own state instead — `if (cursor.readyState !== 'open')
+  return` (the real signal that we can capture+send; still bails on a stale onopen after
+  close). Also `cursorStop?.()` before starting so only one capture runs. Agent-side
+  input-helper only; typecheck + lint clean. Golden rule #7 → PRERELEASE. **NEXT (WC):
+  install v1.35.0-beta.1, พับจอ (or force a re-pair) 2-3×, confirm the cursor SHAPES
+  come back every time (I-beam/hand/resize), input still fine, `data channel "cursor"
+  open` logs on each re-pair. If clean → promote full v1.35.0.**
+
+
 DONE — **B1: productize the streaming stack to DEFAULT-ON so a fresh install "just
 works" without manually-set env → VERIFIED + PROMOTED to full v1.34.0.** WC simulated a
 fresh machine (deleted all `VIDEO_*` User env) → agent log showed `startSession codec=hevc`

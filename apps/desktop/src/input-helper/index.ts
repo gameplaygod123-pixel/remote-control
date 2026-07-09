@@ -459,10 +459,19 @@ function attemptNegotiation(): void {
   if (cursorOverlayEnabled()) {
     const cursor = conn.createDataChannel('cursor')
     cursor.onopen = () => {
-      if (pc !== conn) return
+      // Guard on THIS CHANNEL's own state, NOT `pc === conn`. On a re-pair after a
+      // lid-close/network blip, the input channel usually opens BEFORE the cursor
+      // channel on the same conn; if another negotiation attempt starts in that gap,
+      // `pc` moves to the newer conn, so a `pc !== conn` guard here would bail when
+      // the (still perfectly live) cursor channel finally opens -> startCursorCapture
+      // never runs -> shapes go silent while input/scroll/pinch keep working on the
+      // same conn (the exact reported bug). The channel being open is the real signal
+      // that we can capture+send; a stale onopen after close still bails on readyState.
+      if (cursor.readyState !== 'open') return
       log(mySession, 'data channel "cursor" open')
+      cursorStop?.() // stop any prior session's capture (closeSession also does)
       const capture = startCursorCapture((shape) => {
-        if (pc !== conn || cursor.readyState !== 'open') return
+        if (cursor.readyState !== 'open') return
         try {
           cursor.send(JSON.stringify({ shape }))
         } catch {
