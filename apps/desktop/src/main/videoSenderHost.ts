@@ -7,7 +7,7 @@ import type {
   VideoSenderHost,
   VideoSenderToMain
 } from '../video-native/shared/ipc'
-import type { VideoConfig } from '../video-native/shared/contract'
+import type { IceServerConfig, VideoConfig } from '../video-native/shared/contract'
 
 // Spawns and supervises the agent's native VIDEO SENDER helper -- a pure-Node
 // child (ELECTRON_RUN_AS_NODE=1, no Chromium) that owns DXGI capture + ffmpeg
@@ -35,6 +35,8 @@ export function startVideoSenderHost(callbacks: VideoSenderCallbacks): VideoSend
   // Remember the last requested config so a mid-session respawn can restart
   // capture without waiting for the caller to re-issue start-session.
   let activeConfig: VideoConfig | null = null
+  // Delivered TURN/STUN (from the signaling server) so a respawn re-applies it too.
+  let activeIceServers: IceServerConfig[] | undefined
 
   function clearTimers(): void {
     if (pingTimer) clearInterval(pingTimer)
@@ -84,7 +86,11 @@ export function startVideoSenderHost(callbacks: VideoSenderCallbacks): VideoSend
           // stream self-heals (the caller sees continuity via the same host).
           if (activeConfig) {
             log('respawn: re-issuing start-session with the last config')
-            sendToChild({ cmd: 'start-session', config: activeConfig })
+            sendToChild({
+              cmd: 'start-session',
+              config: activeConfig,
+              iceServers: activeIceServers
+            })
           }
           break
         case 'pong':
@@ -119,10 +125,14 @@ export function startVideoSenderHost(callbacks: VideoSenderCallbacks): VideoSend
 
   return {
     isReady: () => ready,
-    startSession: (config: VideoConfig) => {
-      log(`startSession() ${config.width}x${config.height}@${config.fps} codec=${config.codec}`)
+    startSession: (config: VideoConfig, iceServers?: IceServerConfig[]) => {
+      log(
+        `startSession() ${config.width}x${config.height}@${config.fps} codec=${config.codec}` +
+          ` iceServers=${iceServers?.length ?? 0}`
+      )
       activeConfig = config
-      sendToChild({ cmd: 'start-session', config })
+      activeIceServers = iceServers
+      sendToChild({ cmd: 'start-session', config, iceServers })
     },
     remoteAnswer: (sdp) => {
       log(`remoteAnswer() sdp length=${sdp.length}`)

@@ -36,6 +36,15 @@ export const VIDEO_PIPELINE_ENV = 'VIDEO_PIPELINE'
  */
 export type VideoCodec = 'h264' | 'hevc'
 
+// A single ICE server (browser-RTCIceServer-shaped). Delivered by the signaling
+// server so short-lived TURN creds are minted centrally; the ndc paths convert
+// the turn: entries to their `turn:user:cred@host:port` string form.
+export interface IceServerConfig {
+  urls: string[]
+  username?: string
+  credential?: string
+}
+
 /**
  * Capture + encode parameters the controller requests and the agent's sender
  * applies. Defaults deliberately mirror the tuned WebRTC values proven in

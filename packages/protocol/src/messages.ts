@@ -247,6 +247,31 @@ export const ServerErrorMessage = z.object({
   reason: z.string(),
 });
 
+// A single ICE server entry, browser-RTCIceServer-shaped so the renderer can use
+// it directly and the node/ndc paths can convert it. Delivered by the server so
+// short-lived TURN credentials (Cloudflare) can be minted centrally and refreshed
+// without any client holding the TURN API token.
+export const IceServerConfig = z.object({
+  urls: z.array(z.string()),
+  username: z.string().optional(),
+  credential: z.string().optional(),
+});
+export type IceServerConfig = z.infer<typeof IceServerConfig>;
+
+// Client asks the server for the current ICE servers (STUN + freshly-minted TURN).
+// Token-gated like every other privileged request.
+export const GetIceServersMessage = z.object({
+  type: z.literal("get-ice-servers"),
+  token: z.string(),
+});
+
+// Server's reply: the ICE servers to use. Empty/absent TURN (server has no TURN
+// configured) just leaves clients on their baked-in STUN -- graceful, no break.
+export const IceServersMessage = z.object({
+  type: z.literal("ice-servers"),
+  iceServers: z.array(IceServerConfig),
+});
+
 export const SignalingMessage = z.discriminatedUnion("type", [
   ServerErrorMessage,
   RegisterAgentMessage,
@@ -270,6 +295,8 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   PairingPendingMessage,
   RemoveDeviceMessage,
   DeviceRemovedMessage,
+  GetIceServersMessage,
+  IceServersMessage,
 ]);
 
 export type SignalingMessage = z.infer<typeof SignalingMessage>;

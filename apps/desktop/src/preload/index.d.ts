@@ -105,7 +105,8 @@ declare global {
       videoSender: {
         isReady: () => Promise<boolean>
         startSession: (
-          config: import('../video-native/shared/contract').VideoConfig
+          config: import('../video-native/shared/contract').VideoConfig,
+          iceServers?: import('../video-native/shared/contract').IceServerConfig[]
         ) => Promise<void>
         stopSession: () => Promise<void>
         remoteAnswer: (sdp: string) => Promise<void>

@@ -59,7 +59,7 @@ import {
   nativeSurfaceAvailable
 } from './nativeRenderSurface'
 import type { VideoSenderHost, VideoReceiverHost } from '../video-native/shared/ipc'
-import type { VideoConfig } from '../video-native/shared/contract'
+import type { IceServerConfig, VideoConfig } from '../video-native/shared/contract'
 import { getVideoPipeline, saveVideoPipeline, nativePipelineEnabled } from './pipelineConfig'
 import type { VideoPipeline } from '../video-native/shared/contract'
 
@@ -678,8 +678,10 @@ app.whenReady().then(async () => {
   // spawned the host above, so a default build reports not-ready and AgentView
   // never engages the native path -- the WebRTC default stands.
   ipcMain.handle('video-sender:is-ready', (): boolean => videoSenderHost?.isReady() ?? false)
-  ipcMain.handle('video-sender:start-session', (_event, config: VideoConfig): void =>
-    videoSenderHost?.startSession(config)
+  ipcMain.handle(
+    'video-sender:start-session',
+    (_event, config: VideoConfig, iceServers?: IceServerConfig[]): void =>
+      videoSenderHost?.startSession(config, iceServers)
   )
   ipcMain.handle('video-sender:stop-session', (): void => videoSenderHost?.stopSession())
   ipcMain.handle('video-sender:remote-answer', (_event, sdp: string): void =>

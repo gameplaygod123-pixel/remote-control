@@ -43,6 +43,65 @@ function logWarn(msg: string): void {
 const PENDING_APPROVAL_TIMEOUT_MS = 30_000;
 const pendingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
+// ── TURN credentials (Cloudflare Realtime), minted centrally ────────────────
+// A symmetric-NAT / CGNAT peer can't be reached by STUN hole-punching; it needs a
+// relay. Cloudflare TURN creds are short-lived, so we mint them HERE (the one
+// trusted, always-on box) and hand them to clients over the token-gated WS -- no
+// client ever holds the TURN API token, and creds refresh automatically. Unset
+// env (no CF_TURN_*) -> clients just get STUN = byte-identical to before.
+const CF_TURN_KEY_ID = process.env.CF_TURN_KEY_ID ?? "";
+const CF_TURN_API_TOKEN = process.env.CF_TURN_API_TOKEN ?? "";
+const TURN_TTL_SECONDS = 86400; // Cloudflare max; we re-mint well before expiry
+const TURN_CACHE_MS = 12 * 60 * 60 * 1000; // re-mint every 12h (creds live 24h)
+
+type IceServerConfig = { urls: string[]; username?: string; credential?: string };
+let turnCache: { servers: IceServerConfig[]; at: number } | null = null;
+
+async function getIceServers(): Promise<IceServerConfig[]> {
+  // STUN baseline matches the clients' baked-in pair (a direct-connectable pair
+  // never touches TURN, so this stays free/zero-relay for the common case).
+  const stun: IceServerConfig = {
+    urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"],
+  };
+  if (!CF_TURN_KEY_ID || !CF_TURN_API_TOKEN) return [stun];
+  if (turnCache && Date.now() - turnCache.at < TURN_CACHE_MS) return turnCache.servers;
+  try {
+    const resp = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${CF_TURN_KEY_ID}/credentials/generate-ice-servers`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${CF_TURN_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ttl: TURN_TTL_SECONDS }),
+      },
+    );
+    const data = (await resp.json()) as { iceServers?: unknown };
+    const raw = Array.isArray(data.iceServers) ? data.iceServers : [data.iceServers];
+    let turn: IceServerConfig | null = null;
+    for (const s of raw as IceServerConfig[]) {
+      if (s && s.username && s.credential) {
+        // Normalize to the single UDP endpoint + creds (matches the ndc/browser
+        // consumers; extra transports/ports aren't needed on this path).
+        turn = {
+          urls: ["turn:turn.cloudflare.com:3478"],
+          username: s.username,
+          credential: s.credential,
+        };
+        break;
+      }
+    }
+    const servers = turn ? [stun, turn] : [stun];
+    turnCache = { servers, at: Date.now() };
+    log(`minted TURN credential (ttl ${TURN_TTL_SECONDS}s)`);
+    return servers;
+  } catch (e) {
+    logWarn(`TURN mint failed: ${(e as Error).message} -- STUN only`);
+    return [stun];
+  }
+}
+
 function clearPendingTimeout(deviceId: string): void {
   const timeout = pendingTimeouts.get(deviceId);
   if (timeout) {
@@ -233,6 +292,18 @@ wss.on("connection", (socket) => {
         send(socket, { type: "pong" });
         break;
 
+      case "get-ice-servers": {
+        // Token-gated (same house token as everything else). Hands back STUN +
+        // freshly-minted TURN so a symmetric-NAT/CGNAT peer can relay.
+        if (!isValidAgentToken(message.token)) {
+          send(socket, { type: "server-error", reason: "invalid token" });
+          break;
+        }
+        const iceServers = await getIceServers();
+        send(socket, { type: "ice-servers", iceServers });
+        break;
+      }
+
       case "server-error":
       case "register-result":
       case "pair-result":
@@ -242,6 +313,7 @@ wss.on("connection", (socket) => {
       case "connection-request":
       case "pairing-pending":
       case "device-removed":
+      case "ice-servers":
         // Server-to-client only; ignore if a client somehow sends one.
         break;
     }

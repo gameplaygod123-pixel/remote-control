@@ -18,7 +18,7 @@ import { attachClipboardChannel } from '../shared/clipboard/clipboardSync'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
 import { INPUT_HELPER_CAP } from '../shared/input/capabilities'
 import { NATIVE_VIDEO_CAP, DEFAULT_VIDEO_CONFIG } from '../../../video-native/shared/contract'
-import type { NativeVideoStats } from '../../../video-native/shared/contract'
+import type { IceServerConfig, NativeVideoStats } from '../../../video-native/shared/contract'
 
 // Cached after the first remote input message -- the agent's screen doesn't
 // resize mid-session, and re-querying nut.js on every mousemove would add
@@ -130,6 +130,10 @@ function AgentView(): React.JSX.Element {
   // read activePc state directly without going stale -- same rationale as
   // clientRef/deviceIdRef just below.
   const pcRef = useRef<RTCPeerConnection | null>(null)
+  // TURN/STUN delivered by the signaling server (get-ice-servers). Passed to the
+  // native video sender so a symmetric-NAT/CGNAT controller can relay. Undefined
+  // until the reply lands; the sender falls back to its baked STUN meanwhile.
+  const iceServersRef = useRef<IceServerConfig[] | undefined>(undefined)
   const [incomingRequest, setIncomingRequest] = useState(false)
   // The server rejected our saved house token (someone rotated it, or it was
   // mistyped on setup). Routes back to the token screen -- without this the
@@ -482,7 +486,10 @@ function AgentView(): React.JSX.Element {
         if (!parsed.success) return
         const message = parsed.data
 
-        if (message.type === 'register-result') {
+        if (message.type === 'ice-servers') {
+          // Cache the delivered STUN+TURN for the next sender start-session.
+          iceServersRef.current = message.iceServers
+        } else if (message.type === 'register-result') {
           setStatus(
             message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`
           )
@@ -574,7 +581,7 @@ function AgentView(): React.JSX.Element {
             // clears any stale capture from a previous pairing, then startSession
             // makes the helper create its own offer (relayed on 'video-native').
             void window.api.videoSender.stopSession()
-            window.api.videoSender.startSession(DEFAULT_VIDEO_CONFIG)
+            window.api.videoSender.startSession(DEFAULT_VIDEO_CONFIG, iceServersRef.current)
           } else {
             // frameRate: without an explicit ask, Chromium's screen-capture
             // default can be quite conservative (sometimes ~5fps), which reads
@@ -725,6 +732,9 @@ function AgentView(): React.JSX.Element {
         name: nameRef.current,
         os: AGENT_OS
       })
+      // Fetch TURN early (before any pairing) so it's cached by the time the
+      // sender starts. Old servers don't know this message -> no reply -> STUN.
+      transport.send({ type: 'get-ice-servers', token: houseToken })
     }
 
     start().catch((error) => setStatus(`error: ${String(error)}`))

@@ -1,7 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { UpdaterStatus } from '../main/updater'
-import type { NativeVideoStats, VideoConfig } from '../video-native/shared/contract'
+import type {
+  IceServerConfig,
+  NativeVideoStats,
+  VideoConfig
+} from '../video-native/shared/contract'
 
 type AppMode = 'agent' | 'controller'
 
@@ -155,8 +159,8 @@ const api = {
   // spawned the host; controller mode never calls these.
   videoSender: {
     isReady: (): Promise<boolean> => ipcRenderer.invoke('video-sender:is-ready'),
-    startSession: (config: VideoConfig): Promise<void> =>
-      ipcRenderer.invoke('video-sender:start-session', config),
+    startSession: (config: VideoConfig, iceServers?: IceServerConfig[]): Promise<void> =>
+      ipcRenderer.invoke('video-sender:start-session', config, iceServers),
     stopSession: (): Promise<void> => ipcRenderer.invoke('video-sender:stop-session'),
     remoteAnswer: (sdp: string): Promise<void> =>
       ipcRenderer.invoke('video-sender:remote-answer', sdp),

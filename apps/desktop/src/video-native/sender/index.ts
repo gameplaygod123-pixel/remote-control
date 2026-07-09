@@ -32,7 +32,7 @@ import {
   type LogLevel
 } from 'node-datachannel'
 import type { MainToVideoSender, VideoSenderToMain } from '../shared/ipc'
-import type { NativeVideoStats, VideoCodec, VideoConfig } from '../shared/contract'
+import type { IceServerConfig, NativeVideoStats, VideoCodec, VideoConfig } from '../shared/contract'
 import {
   FfmpegFrameSource,
   CapturerFrameSource,
@@ -84,6 +84,27 @@ function buildIceServers(): string[] {
   return servers
 }
 const ICE_SERVERS = buildIceServers()
+
+// Convert server-delivered ICE servers (browser-shaped {urls,username,credential})
+// to ndc's string form: STUN urls pass through; a turn:/turns: url with creds
+// becomes `scheme:user:cred@host:port` (query params like ?transport=udp stripped,
+// which ndc doesn't need on this path). Falls back to the baked STUN+env list when
+// nothing was delivered (old signaling server / TURN unconfigured).
+function iceServersToNdc(delivered: IceServerConfig[]): string[] {
+  const out: string[] = []
+  for (const s of delivered) {
+    for (const url of s.urls) {
+      const turn = /^(turns?):(.+)$/.exec(url)
+      if (turn && s.username && s.credential) {
+        const hostPort = turn[2].split('?')[0]
+        out.push(`${turn[1]}:${s.username}:${s.credential}@${hostPort}`)
+      } else {
+        out.push(url)
+      }
+    }
+  }
+  return out.length ? out : ICE_SERVERS
+}
 
 function log(message: string): void {
   logVideoSender('HELPER', message)
@@ -222,10 +243,13 @@ function closeSession(): void {
   }
 }
 
-function startSession(rawConfig: VideoConfig): void {
+function startSession(rawConfig: VideoConfig, deliveredIce?: IceServerConfig[]): void {
   closeSession()
   sessionCounter += 1
   const id = sessionCounter
+  // Server-delivered STUN+TURN (relay for symmetric-NAT/CGNAT peers) if present,
+  // else the baked STUN (+ any PR_TURN_* env). Logged so we can see TURN engaged.
+  const iceServers = deliveredIce?.length ? iceServersToNdc(deliveredIce) : ICE_SERVERS
   // Resolve the codec (VIDEO_CODEC=hevc opt-in) once and thread it through the whole
   // session via config.codec: the RTP track/packetizer, capturer/ffmpeg args, the AU
   // assembler NAL layout, and the reported stats all read it, so they can't disagree.
@@ -234,7 +258,10 @@ function startSession(rawConfig: VideoConfig): void {
     `startSession id=${id} ${config.width}x${config.height}@${config.fps} codec=${config.codec} startBr=${config.startBitrateKbps}kbps cursor=${config.cursor}`
   )
 
-  const pc = new PeerConnection(`video-sender-${id}`, { iceServers: ICE_SERVERS })
+  log(
+    `iceServers: ${iceServers.length} (${deliveredIce?.length ? 'delivered incl TURN' : 'baked STUN'})`
+  )
+  const pc = new PeerConnection(`video-sender-${id}`, { iceServers })
 
   // SendOnly video track + SR reporter + NACK responder (auto-retransmit lost
   // packets from a send buffer, zero JS involvement -- item A first line of defence).
@@ -468,7 +495,7 @@ function reportStats(session: Session): void {
 process.on('message', (raw: MainToVideoSender) => {
   switch (raw.cmd) {
     case 'start-session':
-      startSession(raw.config)
+      startSession(raw.config, raw.iceServers)
       break
     case 'remote-answer':
       if (!current) {
