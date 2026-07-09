@@ -1739,5 +1739,20 @@ Lessons:
      is down (`signalingOpenRef`, set/cleared in onReconnect/onDisconnect — signaling's own
      reconnect handles that). 6s > a healthy direct-link negotiation (~1-2s) so it only nudges
      genuinely-stuck sessions; cleared on unmount. typecheck(web) clean, lint = only the
-     pre-existing exhaustive-deps warning. NEXT: owner relaunches the controller, repeats the
-     lid-close test, confirms a re-pair never hangs (recovers within ~6s even if a message drops).
+     pre-existing exhaustive-deps warning.
+   - **AUTO-TEST (2026-07-09, owner asked "ลองทำระบบมาเช็ค ขี้เกียจพับจอไปมา"):** the watchdog
+     logic + loop were EXTRACTED into a pure module
+     [`repairWatchdog.ts`](apps/desktop/src/renderer/src/controller/repairWatchdog.ts)
+     (`shouldNudgeRepair()` predicate + `startRepairWatchdog()` with injectable timers) so
+     ControllerSession just wires live refs into it. Test:
+     `node src/renderer/src/controller/dev/verify-repair-watchdog.mjs` (from apps/desktop; esbuild-
+     bundles the TS + a fake clock, ~1s, **14/14 PASS**). It reproduces THE BUG deterministically
+     with NO lid cycling: a pair-request lost during a flap (agent registered but no reactive
+     trigger) → the watchdog keeps nudging while the agent is offline → recovers on the first nudge
+     after the agent returns → quiesces (no runaway). Also covers the predicate truth table + the
+     approval/WS-down gating + stop(). Verifies the fix works even though the SERVER log can't show
+     watchdog nudges (unknown-device pair-requests aren't logged there). Live lid-close log
+     (2026-07-09 15:35Z) confirmed a normal re-pair still connects fine (~19s, no regression); the
+     multi-minute strand was captured pre-fix at 14:50Z (agent online 14:51 → paired 14:56 = 5m43s).
+     NEXT (optional): if a real strand ever recurs, owner relaunches + retests — but the auto-test
+     already proves the recovery path.

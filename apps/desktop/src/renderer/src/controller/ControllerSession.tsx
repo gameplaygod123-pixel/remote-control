@@ -19,6 +19,11 @@ import {
 } from '../shared/input/inputProtocol'
 import { INPUT_HELPER_CAP } from '../shared/input/capabilities'
 import { NATIVE_VIDEO_CAP, type NativeVideoStats } from '../../../video-native/shared/contract'
+import {
+  startRepairWatchdog,
+  REPAIR_WATCHDOG_INTERVAL_MS,
+  type RepairWatchdogHandle
+} from './repairWatchdog'
 
 // Mousemove fires far more often than the remote side needs to react to --
 // this caps how frequently position updates cross the data channel without
@@ -48,19 +53,9 @@ const PINCH_IDLE_MS = 140
 // virtually always just the agent not being back yet.
 const PAIR_RETRY_DELAY_MS = 3000
 
-// Proactive re-pair watchdog. The reactive retries above only fire when a
-// SPECIFIC message is RECEIVED (a 'pair-result: unknown device id', or a pc
-// 'failed' event). During the reconnect FLAPPING after a lid-close wake (agent +
-// controller + tunnel all reconnecting at once), a pair-request OR its
-// pair-result can simply be LOST -- then no reactive retry is ever scheduled and
-// the session strands "connected to signaling but never paired" indefinitely
-// (the ~4-min hang the owner saw). This timer ticks the whole session and, while
-// no peer connection is actually 'connected', keeps re-sending pair-request
-// (idempotent server-side) so a lost message can't wedge us. Skipped while a
-// human approval is pending (don't spam that) or signaling itself is down (its
-// own reconnect handles that). 6s is comfortably longer than a healthy direct-
-// link negotiation (~1-2s), so it only nudges genuinely-stuck sessions.
-const REPAIR_WATCHDOG_INTERVAL_MS = 6000
+// The proactive re-pair watchdog (fixes the "connected to signaling but never
+// paired" strand after a lid-close flap) lives in ./repairWatchdog, extracted so
+// its decision + loop are unit-testable (dev/verify-repair-watchdog.mjs).
 
 export default function ControllerSession({
   deviceId,
@@ -163,7 +158,7 @@ export default function ControllerSession({
   // tracks whether our WS is up (nudging while it's down is pointless);
   // pendingApprovalRef is true only while a human must approve on the other
   // machine (don't re-send pair-request into that wait).
-  const repairWatchdogRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const repairWatchdogRef = useRef<RepairWatchdogHandle | null>(null)
   const signalingOpenRef = useRef(false)
   const pendingApprovalRef = useRef(false)
   const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
@@ -878,25 +873,30 @@ export default function ControllerSession({
 
       // Proactive re-pair watchdog: while nothing is actually 'connected', keep
       // nudging pair-request so a message lost during reconnect flapping can't
-      // strand the session (see REPAIR_WATCHDOG_INTERVAL_MS). A live pc on either
+      // strand the session. Reads LIVE state each tick -- a live pc on either
       // path (pcRef for webrtc / non-helper input; inputPcRef for helper input)
-      // reaching 'connected' means we're paired -- then this does nothing.
-      repairWatchdogRef.current = setInterval(() => {
-        if (cancelled) return
-        const pcConnected = pcRef.current?.connectionState === 'connected'
-        const inputConnected = inputPcRef.current?.connectionState === 'connected'
-        if (pcConnected || inputConnected) return // healthy -- no nudge
-        if (!signalingOpenRef.current) return // WS down -> its own reconnect handles it
-        if (pendingApprovalRef.current) return // human approving on the other end -- don't spam
-        transport.send({
-          type: 'pair-request',
-          token: houseToken,
-          deviceId,
-          pin,
-          controllerId,
-          caps: sessionCaps()
-        })
-      }, REPAIR_WATCHDOG_INTERVAL_MS)
+      // reaching 'connected' means we're paired, then it does nothing. Logic +
+      // test in ./repairWatchdog (dev/verify-repair-watchdog.mjs).
+      repairWatchdogRef.current = startRepairWatchdog({
+        intervalMs: REPAIR_WATCHDOG_INTERVAL_MS,
+        getState: () => ({
+          pcConnected: pcRef.current?.connectionState === 'connected',
+          inputConnected: inputPcRef.current?.connectionState === 'connected',
+          signalingOpen: signalingOpenRef.current,
+          pendingApproval: pendingApprovalRef.current
+        }),
+        sendPairRequest: () => {
+          if (cancelled) return
+          transport.send({
+            type: 'pair-request',
+            token: houseToken,
+            deviceId,
+            pin,
+            controllerId,
+            caps: sessionCaps()
+          })
+        }
+      })
     }
 
     connect().catch((error) => setStatus(`error: ${String(error)}`))
@@ -904,7 +904,7 @@ export default function ControllerSession({
     return () => {
       cancelled = true
       if (repairWatchdogRef.current) {
-        clearInterval(repairWatchdogRef.current)
+        repairWatchdogRef.current.stop()
         repairWatchdogRef.current = null
       }
       clientRef.current?.close()
