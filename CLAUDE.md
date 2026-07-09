@@ -584,23 +584,27 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.30.0-beta.1 (PRERELEASE, off `feat/native-video @ 099ded5`)** —
-**game-mode keyboard + NACK silent loss repair.** Rolls up everything since v1.28.0.
-- **Game-mode keyboard (NEW, the reason it's a prerelease — native key-injection FFI,
-  golden rule #1):** Text⇄Game toggle; Game mode routes keys as raw scancodes
-  (`KEYEVENTF_SCANCODE`) so DirectInput/RawInput games see holdable WASD; Text mode keeps
-  Unicode (Thai) + Backspace-repeat. Protocol `scan?` flag, all 3 inject paths.
-  **WC to verify on real hardware with a real game before promotion** (WASD move/hold,
-  shortcuts, Thai in Text mode, no stuck keys).
-- **NACK silent loss repair (v1.29.0 work, controller-side):** patched darwin ndc emits
-  NACK + `receiver/reorderBuffer.ts` (`VIDEO_NACK_BUFFER=1`) holds a gap ~1 RTT for the
-  retransmit → scattered losses repaired silently (~66%, no PLI/hitch); blackouts >64 →
-  fast PLI. Windows agent unchanged (stock ndc retransmits). See
-  [`docs/step-nack-retransmit.md`](docs/step-nack-retransmit.md) + `native/ndc-nack/`.
-- Built via `build-win.sh` (all 4 packed checks pass), published as PRERELEASE (owner's
-  parallel session). Also carries v1.28.0 (H.265 opt-in + PLI-on-loss) + v1.29.0
-  (NACK/vbv-ms/LTR-off). **NEXT: WC installs the prerelease → verifies game-mode → promote
-  full v1.30.0.**
+Latest release: **v1.31.0** — **Parsec-100% keyboard (always scancode, no mode).** Off
+`feat/native-video`; verified on real hardware (owner: "ใช้งานได้") before this full release,
+via prereleases v1.30.0-beta.1 (Text/Game toggle, scancode injection proven) → v1.31.0-beta.1
+(retire the toggle, always scancode). The controller now forwards EVERY key as a physical
+scancode (`{t:'keydown'/'keyup', scan:true}`, `KEYEVENTF_SCANCODE`, wVk=0) — no Unicode `text`
+path, no Text/Game button. The remote HOST does Scancode→VK→its-active-layout→character, so
+gaming (holdable WASD) and TH/EN typing coexist with no mode switch (Grave ` / Alt+Shift toggle
+the host layout, forwarded as real keys). OS auto-repeat forwarded; panic-release covers all
+keys; Escape stays local (disconnect); Thai paste via clipboard-sync + physical Ctrl+V; Cmd maps
+to Ctrl VK for shortcut parity. New protocol `scan?` flag; scancode inject added to all 3 agent
+paths (input-helper / AgentView IPC / SYSTEM injector), agent otherwise unchanged. Golden rules
+#1/#7 honored (native key-injection FFI → prerelease + real-hw verify first). See backlog 0b.
+**Rolls up v1.29.0 (NACK silent loss repair) + v1.28.0 (H.265 opt-in + PLI-on-loss).**
+
+Prior release: **v1.29.0** — **NACK silent loss repair (controller-side, `VIDEO_NACK_BUFFER=1`).**
+A patched darwin-arm64 ndc emits Generic NACK on a tracked seq gap + `receiver/reorderBuffer.ts`
+holds a small gap ~1 RTT for the retransmit → scattered losses repaired SILENTLY (~66%, no
+PLI/hitch); blackouts >64 pkt → fast PLI. Windows agent = stock ndc (RtcpNackResponder
+retransmits, untouched). Patched binary committed at `native/ndc-nack/bin/`, auto-reapplied by
+the desktop `postinstall`. Also: `--vbv-ms` capturer knob (default 250 unchanged), LTR off by
+default. See [`docs/step-nack-retransmit.md`](docs/step-nack-retransmit.md).
 
 Prior release: **v1.27.0** — **BWE auto-bitrate + HUD encode telemetry** (off
 `feat/native-video`). The native capturer path (`VIDEO_CAPTURER=1`) now adapts its
@@ -1321,12 +1325,10 @@ Lessons:
        maps to Ctrl VK in `keyMapWin32` so Cmd+C = Ctrl+C shortcut parity. Mac verified:
        typecheck (node+web) + controller lint clean (only the pre-existing `sendInput`
        exhaustive-deps warning).
-     - **NEXT (WC, real hardware via PRERELEASE v1.31.0-beta.1):** open a real game (NO mode
-       button) → (1) WASD walk + HOLD continuous, (2) Space/Shift/action hold, (3) type English
-       + hold = repeat, (4) press Grave ` → Thai (Kedmanee) → ` back to English, (5) Ctrl/Cmd+C
-       shortcut works, (6) Alt-Tab out mid-hold → no stuck key, (7) `%TEMP%\input-helper.log`:
-       every key is `keydown code=... scan`, NO `text len=` anymore. All pass → promote full
-       v1.31.0. (kernel-anticheat games block ALL injected input = not a fail.)
+     - **VERIFIED on real hardware + PROMOTED to full v1.31.0 (owner, 2026-07-09: "ใช้งานได้"):**
+       Parsec-100% keyboard works — control a game + switch TH/EN at the same time with no mode
+       button. Backlog 0b is DONE. (kernel-anticheat games block ALL injected input = a known,
+       unfixable caveat, not a bug.)
 1. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
 2. Computers-page search/sort; per-controller device visibility (family use).
