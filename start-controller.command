@@ -24,6 +24,15 @@ export APP_MODE=controller
 # retransmit arrives; on the rare chance it isn't, a gap just PLIs after the 30ms hold.
 export VIDEO_NACK_BUFFER=1
 
+# TURN relay for peers behind symmetric NAT / CGNAT (this home is AIS CGNAT, so
+# any pair where the other side also has a hard NAT can't STUN-hole-punch and
+# needs a relay). Sources a gitignored local secret that mints a fresh short-lived
+# Cloudflare TURN credential per launch and exports PR_TURN_* (the forked native/
+# input helpers inherit it). Absent file -> STUN-only = byte-identical (no TURN).
+if [ -f "../../turn-creds.sh" ]; then
+  source ../../turn-creds.sh
+fi
+
 # Prep the native render surface so the in-app video toggle (PipelineToggle) can
 # engage Native without a second launcher. We deliberately DON'T set
 # VIDEO_PIPELINE here -- the saved per-machine preference (video-pipeline.txt,
