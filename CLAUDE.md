@@ -65,9 +65,13 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-09)
 
-IN PROGRESS (branch `feat/native-video`): **B1 — productize the streaming stack to
-DEFAULT-ON so a fresh install "just works" without manually-set env → PRERELEASE
-v1.34.0-beta.1 (awaiting WC no-env fresh-install verify).** Owner (2026-07-09): "ตอน
+DONE — **B1: productize the streaming stack to DEFAULT-ON so a fresh install "just
+works" without manually-set env → VERIFIED + PROMOTED to full v1.34.0.** WC simulated a
+fresh machine (deleted all `VIDEO_*` User env) → agent log showed `startSession codec=hevc`
++ `capturer: nvenc HEVC P1/ULL` (~60fps, enc_ms 4-8ms) + `data channel "cursor" open`, all
+from the baked defaults; owner confirmed "ใช้งานได้เหมือนเดิม". Escape hatches
+(`VIDEO_CAPTURER=0`→ffmpeg+cursor-off, `VIDEO_CODEC=h264`→H.264) verified from code. Owner
+(2026-07-09): "ตอน
 เครื่องใหม่ๆ ติดตั้งต้องเรียบร้อยใช้งาน". The good experience was gated behind persisted env
 vars (`VIDEO_CAPTURER=1` / `VIDEO_CODEC=hevc` / `VIDEO_NACK_BUFFER=1`) that a reinstall or a
 registry wipe ([[agent-env-overrides-must-be-persisted]]) would lose → a fresh machine fell
@@ -90,7 +94,7 @@ back to plain ffmpeg/H.264. Flipped all from opt-in to **opt-out (default ON, di
   first. **NEXT (WC): on a truly-fresh agent install with NO `VIDEO_*` env set, confirm the HUD/logs
   show `spawn capturer` + `codec=hevc` + smooth Parsec-like feel + cursor shapes; on the Mac with no
   `VIDEO_NACK_BUFFER`, confirm the NACK buffer engages; verify the `=0`/`h264` escape hatches still
-  fall back. If clean → promote full v1.34.0.**
+  fall back. If clean → promote full v1.34.0.** → **DONE: promoted to full v1.34.0.**
 
 
 DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1.32.0
@@ -714,7 +718,20 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.33.0** — **Mac-native trackpad complete: native 0-latency cursor
+Latest release: **v1.34.0** — **default-on streaming stack (fresh install just works).**
+Off `feat/native-video`; WC-verified on a simulated fresh machine (all `VIDEO_*` env deleted)
++ owner-confirmed before this full release. The Parsec-like stack was gated behind persisted
+env vars that a reinstall/registry-wipe would lose; now flipped from opt-in to **opt-out** so a
+plain install reproduces the owner's verified stack: **capturer** default-on (`VIDEO_CAPTURER=0`
+disables; silent ffmpeg fallback if it can't run), **HEVC** default (`VIDEO_CODEC=h264` forces
+H.264), **NACK buffer** default-on (`VIDEO_NACK_BUFFER=0` disables; patched darwin ndc ships
+committed + postinstall-reapplied), **cursor overlay** follows the capturer default. Safety bar
+intact: the native pipeline still only engages with both native caps + NVIDIA + binaries present,
+else total WebRTC fallback — the flips only change which codec/capture runs WITHIN the native
+path. Golden rules #1/#7 honored (native/FFI in the default path → prerelease + real-hw verify).
+**Rolls up v1.33.0 (native cursor shape) + v1.32.0 (smooth scroll).**
+
+Prior release: **v1.33.0** — **Mac-native trackpad complete: native 0-latency cursor
 shape.** Off `feat/native-video`; WC-verified (agent) + owner-verified (Mac) via prerelease
 v1.33.0-beta.1 before this full release. The DXGI capturer encodes NO cursor (the Mac already
 shows its own 0-latency cursor), so the agent now streams the remote's semantic cursor SHAPE
