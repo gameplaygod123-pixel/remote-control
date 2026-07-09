@@ -621,32 +621,22 @@ function AgentView(): React.JSX.Element {
               const params = sender.getParameters()
               if (!params.encodings?.length) params.encodings = [{}]
               params.encodings[0].maxBitrate = 30_000_000
-              // WebRTC's BWE was collapsing the stream to ~0.1 Mbps / 480x270 on
-              // a flawless 10ms/0%-loss path (Parsec pushes 30 Mbps / 1440p on
-              // the SAME path) -- it starts conservative and never probes back up
-              // when the link is quiet, so the picture stayed a blurry postage
-              // stamp for no reason. Forbid the encoder from scaling resolution
-              // down; combined with the SDP min/start bitrate floor below (and
-              // maintain-resolution) this holds full capture resolution.
-              params.encodings[0].scaleResolutionDownBy = 1
-              // Real test showed only ~25fps actually achieved despite the
-              // 60fps capture request and plenty of unused bitrate headroom
-              // (bitrate was sitting right at the ceiling) -- the encoder was
-              // evidently choosing fewer, higher-quality frames over more
-              // frequent ones. `degradationPreference` alone is only a hint
-              // about what to sacrifice *under bandwidth pressure*; it
-              // doesn't set an actual frame rate target. `maxFramerate` is
-              // the direct way to tell the encoder what it should be aiming
-              // for regardless of how much bitrate headroom it thinks it has.
+              // The WebRTC path is the FALLBACK for hard-NAT pairs that native
+              // (node-datachannel/libjuice) can't traverse but Chromium can (e.g. a
+              // cross-carrier-NAT pair). On those, BWE settles low (~3 Mbps) on a
+              // jittery link, so the priority flips vs the old good-link tuning:
+              // SMOOTH 60fps first, resolution second.
+              // - maxFramerate 60: aim for 60fps.
               params.encodings[0].maxFramerate = 60
-              // Even with a 30Mbps ceiling + bitrate floor, 'maintain-framerate'
-              // still let WebRTC's quality scaler downscale to 720p to protect
-              // 60fps -- on a flawless 10ms/0%-loss path that trade is pure lost
-              // sharpness. 'maintain-resolution' holds full 1080p and flexes
-              // frame rate only if it ever genuinely can't keep up (which, given
-              // ~4.5ms hardware encode + 30Mbps headroom, it shouldn't need to).
-              // Verified against Parsec on the same machines: 1920x1080 @ 37Mbps.
-              params.degradationPreference = 'maintain-resolution'
+              // - 'maintain-framerate': under bandwidth pressure keep 60fps and let
+              //   resolution drop (a soft-but-smooth 720p@60 beats a sharp-but-choppy
+              //   1080p@19 -- the exact stuck-at-19fps case the owner saw). On a good
+              //   link there's no pressure, so it stays full 1080p60 anyway.
+              params.degradationPreference = 'maintain-framerate'
+              // - NO scaleResolutionDownBy lock: maintain-framerate MUST be allowed
+              //   to scale resolution down to hold fps. The old `=1` lock forbade
+              //   that, which is why the fallback jammed at 1080p/19fps instead of
+              //   dropping res to reach 60. (Native is the path that holds full res.)
               sender.setParameters(params).catch(() => {})
             })
 
@@ -681,7 +671,7 @@ function AgentView(): React.JSX.Element {
             (line) =>
               line.includes('x-google-min-bitrate')
                 ? line
-                : `${line};x-google-min-bitrate=6000;x-google-start-bitrate=20000;x-google-max-bitrate=30000`
+                : `${line};x-google-min-bitrate=6000;x-google-start-bitrate=30000;x-google-max-bitrate=30000`
           )
           await pc.setLocalDescription({ type: 'offer', sdp: tunedSdp })
           transport.send({
