@@ -12,7 +12,7 @@ import {
   dialog
 } from 'electron'
 import { join, basename } from 'path'
-import { statSync, existsSync, writeFileSync } from 'fs'
+import { statSync, existsSync, writeFileSync, readFileSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { execSync } from 'child_process'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -97,20 +97,38 @@ if (envMode) {
 // a packaged install, on Windows, NOT elevated, and the elevated task exists,
 // hand off to that task and exit -- its elevated instance takes over.
 //
-// Gated on the task's existence (not the saved app mode): the task is only ever
-// registered on an agent machine that ran the Track 1 installer, so its presence
-// already implies "this is the agent." We deliberately DON'T call getSavedMode()
-// here -- this runs at module scope, before `app` is ready, where
-// app.getPath('userData') still resolves to the default ...\Electron dir instead
-// of ...\desktop, so the saved-mode file (and any userData-relative path) reads
-// empty. The handoff marker therefore lives under getPath('temp'), which is the
-// OS temp dir and is stable before ready. Runs BEFORE requestSingleInstanceLock
-// so we never hold the lock the elevated instance needs (no race: we exit
-// without ever taking it). A 30s mtime guard breaks any loop if the task somehow
-// can't elevate (e.g. UAC policy) -- worst case we fall through and run medium.
+// Only the AGENT should auto-elevate. Earlier this gated purely on the task's
+// existence, which mis-fired on a machine that is BOTH agent and controller:
+// EVERY packaged medium launch (the choose-mode picker, and any controller
+// launch) bounced to the agent task and exited, so the picker/controller never
+// appeared -- clicking in-app "Switch mode" (which clears app-mode.json and
+// relaunches) left a hidden stub = "the app won't open", and
+// `APP_MODE=controller` never started. So also require this launch to actually
+// be the agent: not an explicit controller launch, and the SAVED mode is agent
+// (a fresh install with no saved mode must fall through so the picker can show).
+// We still can't call getSavedMode() here -- at module scope, before `app` is
+// ready, app.getPath('userData') resolves to the default ...\Electron dir, so a
+// userData-relative read comes back empty. Read the saved-mode file from a path
+// that IS stable pre-ready instead: %APPDATA%\<productName>\app-mode.json. The
+// handoff marker likewise lives under getPath('temp') (stable pre-ready). The
+// two cheap guards run first so the whoami/schtasks execSync calls below are
+// skipped entirely for non-agent launches. Runs BEFORE requestSingleInstanceLock
+// so we never hold the lock the elevated instance needs. A 30s mtime guard
+// breaks any loop if the task somehow can't elevate (e.g. UAC policy).
+function savedModeIsAgentAtBoot(): boolean {
+  try {
+    // productName is "desktop", so packaged userData = %APPDATA%\desktop.
+    const p = join(process.env.APPDATA ?? '', 'desktop', 'app-mode.json')
+    return (JSON.parse(readFileSync(p, 'utf-8')) as { mode?: string }).mode === 'agent'
+  } catch {
+    return false
+  }
+}
 if (
   app.isPackaged &&
   process.platform === 'win32' &&
+  process.env.APP_MODE !== 'controller' &&
+  savedModeIsAgentAtBoot() &&
   !isElevatedWindows() &&
   elevatedAgentTaskExists()
 ) {
