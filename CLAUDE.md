@@ -1297,13 +1297,36 @@ Lessons:
      - Mac verified: typecheck (node+web) clean, lint clean on all touched files (the only
        remaining lint errors are PRE-EXISTING `react-hooks/refs` in AgentView, untouched).
        Can't unit-test the koffi SendInput path on macOS (that's the golden-rule-#1 handoff).
-     - **NEXT (WC, real hardware — install v1.30.0-beta.1 over v1.29.0/v1.28.0):** flip to
-       🎮 Game (button in the floating panel) → open a real game →
-       (1) WASD MOVE + HOLD works (walk continuously), (2) game shortcuts/space/shift hold,
-       (3) switch to ⌨ Text → Thai/English still types + Backspace-hold repeat-deletes,
-       (4) no stuck key when Alt-Tabbing out mid-hold. If clean → promote. NB the toggle
-       button is in the floating panel (expand the pill to reach it) — a global hotkey to
-       flip mode mid-game is an easy follow-up if the owner wants it.
+     - **v1.30.0-beta.1 VERIFIED on real hardware (WC):** scancode injection correct in the
+       build (`wVk:0, wScan=scancode` on the game path, `wVk:entry.vk` VK on the default path),
+       helper log showed `keydown code=KeyW scan` in Game vs `text len=...` in Text, WASD
+       held-walk worked, TH/EN typing worked. The 🎮 toggle mechanism is PROVEN.
+   - **PIVOT → PARSEC-100% keyboard (owner, 2026-07-09: "แบบ Parsec 100%" — คุมเกม + สลับ
+     ไทย/อังกฤษพร้อมกัน โดยไม่ต้องกดปุ่มโหมด). The Text/Game toggle is RETIRED: keyboard is now
+     ALWAYS scancode.** Parsec sends physical scancodes only (no Unicode); the HOST does
+     Scancode→VK→its-own-active-layout→character, so typing follows the HOST's layout and the
+     language toggle (Grave/Alt+Shift) is a real key the host's layout switcher sees — gaming
+     (holdable WASD) and TH/EN typing then coexist with NO mode. Windows agent + host already
+     ready (scancode inject verified in beta.1; host has th 041E Kedmanee + en-US 0409, Grave
+     toggles) — **no agent/FFI change.**
+     - **MAC SIDE DONE (`ControllerSession.tsx`):** every key (printable included) now forwards
+       as `{t:'keydown'/'keyup', code:e.code, scan:true}` — the `{t:'text'}` Unicode path is
+       GONE. OS auto-repeat is now FORWARDED (real-keyboard feel: text fields repeat the char;
+       games hold until keyup regardless). `held` back to a `Set` (uniform scancode) covering
+       ALL keys so panic-release (blur/Alt-Tab) can't leave a stuck key — printables included.
+       Escape stays LOCAL (disconnect), never forwarded. Removed the 🎮 Text/Game button +
+       `keyboardMode` state/persist/ref/sync-effect + its CSS + the `isPrintableKey` import.
+       Thai PASTE still works with no text path: clipboard sync mirrors Mac→Windows clipboard,
+       and a physical Ctrl+V (scancode) pastes it on the host (the Parsec model). Cmd already
+       maps to Ctrl VK in `keyMapWin32` so Cmd+C = Ctrl+C shortcut parity. Mac verified:
+       typecheck (node+web) + controller lint clean (only the pre-existing `sendInput`
+       exhaustive-deps warning).
+     - **NEXT (WC, real hardware via PRERELEASE v1.31.0-beta.1):** open a real game (NO mode
+       button) → (1) WASD walk + HOLD continuous, (2) Space/Shift/action hold, (3) type English
+       + hold = repeat, (4) press Grave ` → Thai (Kedmanee) → ` back to English, (5) Ctrl/Cmd+C
+       shortcut works, (6) Alt-Tab out mid-hold → no stuck key, (7) `%TEMP%\input-helper.log`:
+       every key is `keydown code=... scan`, NO `text len=` anymore. All pass → promote full
+       v1.31.0. (kernel-anticheat games block ALL injected input = not a fail.)
 1. Verify file transfer with the agent window actually hidden (works via the
    renderer video pc, which is subject to throttling — needs a real test).
 2. Computers-page search/sort; per-controller device visibility (family use).

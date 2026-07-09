@@ -14,7 +14,6 @@ import {
   RemoteInputMessage,
   type CursorShape,
   type RemoteCursorMessage,
-  isPrintableKey,
   isEditableTarget,
   videoRelativePosition
 } from '../shared/input/inputProtocol'
@@ -110,16 +109,6 @@ export default function ControllerSession({
   // the exact "mouse+keyboard die but the screen streams fine" symptom. Surface
   // it in the HUD so that state is visible at a glance instead of guessed.
   const [inputReady, setInputReady] = useState(false)
-  // Keyboard mode. 'text' (default) = printable keys go through the Unicode
-  // `text` path (types Thai/any layout, atomic press+release); 'game' = EVERY
-  // key goes through the physical scancode keydown/keyup path so games see a
-  // real, HOLDABLE key press (WASD movement) -- Unicode text can't express a
-  // hold and is invisible to games. Persisted per controller; a stale mode in
-  // the keyboard effect (deps []) is read via keyboardModeRef.
-  const [keyboardMode, setKeyboardMode] = useState<'text' | 'game'>(() =>
-    localStorage.getItem('pr-keyboard-mode') === 'game' ? 'game' : 'text'
-  )
-  const keyboardModeRef = useRef(keyboardMode)
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -325,80 +314,52 @@ export default function ControllerSession({
     sendInput({ t: 'wheel', dy: e.deltaY / 40 })
   }
 
-  // Forwards key events to the agent while the session is mounted. Escape is
-  // deliberately excluded -- it's reserved locally for disconnecting (see
-  // the effect below), not meant to reach the remote machine.
-  // preventDefault stops browser-native side effects (Backspace navigating
-  // back, Tab shifting focus, F5 reloading, arrow keys scrolling) that
-  // would otherwise fire alongside the forwarded key.
+  // Forwards key events to the agent while the session is mounted. PARSEC-STYLE:
+  // EVERY key is sent as a physical SCANCODE (t:'keydown'/'keyup', scan:true) --
+  // there is no Unicode `text` path and no Text/Game mode. The remote HOST does
+  // Scancode -> VK -> its own ACTIVE layout -> character, so typing follows the
+  // host's layout and the language toggle (Grave / Alt+Shift) is a real key the
+  // host's layout switcher sees. Result: holdable WASD (games) and TH/EN typing
+  // work at the same time with no mode switch, exactly like Parsec.
   //
-  // Printable characters (including non-Latin text like Thai) go through
-  // `text` + nut.js's Unicode-aware type() -- see isPrintableKey. Repeat is
-  // allowed through for these so holding a key retypes it, like a real
-  // keyboard. Everything else (modifiers, arrows, function keys, and any
-  // Ctrl/Alt/Meta shortcut) goes through the physical-key hold path so
-  // combos and held state are real on the agent's OS.
-  // Keep the ref in sync so the key handlers (effect deps []) read the live
-  // mode without re-subscribing the window listeners on every toggle.
+  // Escape is the one exception -- reserved locally for disconnecting (see the
+  // effect below), so it is never forwarded. preventDefault stops browser-native
+  // side effects (Backspace navigating back, Tab shifting focus, F5 reloading,
+  // arrows scrolling) that would otherwise fire alongside the forwarded key.
   useEffect(() => {
-    keyboardModeRef.current = keyboardMode
-  }, [keyboardMode])
-
-  useEffect(() => {
-    // Physical keys currently held down on the agent (the keydown-path codes:
-    // modifiers, arrows, shortcuts, and -- in game mode -- every key; NOT the
-    // printable `text` path, which presses+releases atomically). The value is
-    // whether the key was pressed as a game SCANCODE, so the matching keyup
-    // (incl. panic-release on focus loss) releases it the same way. Used to
-    // panic-release on focus loss.
-    const held = new Map<string, boolean>()
+    // Every physical key currently held down on the agent, so focus loss can
+    // panic-release all of them (printable keys included, now that they take
+    // the same scancode hold path as everything else).
+    const held = new Set<string>()
     function releaseAllHeld(): void {
-      for (const [code, scan] of held) sendInput({ t: 'keyup', code, scan })
+      for (const code of held) sendInput({ t: 'keyup', code, scan: true })
       held.clear()
     }
     function handleKeyDown(e: KeyboardEvent): void {
-      // The device-name field is a real local <input> in this same
-      // window -- without this check, typing into it (or into any future
-      // local field) gets hijacked and forwarded to the remote machine
-      // instead, making local text entry look completely broken.
+      // The device-name field is a real local <input> in this same window --
+      // without this check, typing into it gets hijacked and forwarded to the
+      // remote machine instead, making local text entry look completely broken.
       if (isEditableTarget(e.target)) return
       if (e.code === 'Escape') return
       e.preventDefault()
-      const game = keyboardModeRef.current === 'game'
-      // Text mode: printable chars type via the Unicode path (Thai/any layout).
-      // Game mode: skip it -- every key must be a real, holdable key press.
-      if (!game && isPrintableKey(e)) {
-        sendInput({ t: 'text', text: e.key })
-        return
-      }
-      if (e.repeat) {
-        // Game: a hold is a SINGLE keydown (the game reads held state), so
-        // swallow the OS auto-repeat. Text: forward the repeat so Backspace/
-        // arrows auto-repeat (hold-to-delete) like a local keyboard.
-        if (!game) sendInput({ t: 'keydown', code: e.code, scan: false })
-        return
-      }
-      held.set(e.code, game)
-      sendInput({ t: 'keydown', code: e.code, scan: game })
+      // Forward OS auto-repeat too: in a text field the host repeats the char
+      // (like a real keyboard); a game holds the key until keyup regardless of
+      // the extra keydowns. held is a Set, so re-adding on repeat is harmless.
+      held.add(e.code)
+      sendInput({ t: 'keydown', code: e.code, scan: true })
     }
     function handleKeyUp(e: KeyboardEvent): void {
       if (isEditableTarget(e.target)) return
       if (e.code === 'Escape') return
-      // A key we registered as held (physical path) must always be released,
-      // even if the mode flipped while it was down. Otherwise fall through: in
-      // text mode a printable key had no keydown to release.
-      const heldScan = held.get(e.code)
-      if (heldScan === undefined && keyboardModeRef.current !== 'game' && isPrintableKey(e)) return
       e.preventDefault()
-      const scan = heldScan ?? keyboardModeRef.current === 'game'
       held.delete(e.code)
-      sendInput({ t: 'keyup', code: e.code, scan })
+      sendInput({ t: 'keyup', code: e.code, scan: true })
     }
     // When our window loses focus (Alt-Tab, clicking into Parsec, minimizing),
     // the OS delivers the physical keyup to the NEW foreground window, not us --
     // so any key held at that instant sticks "down" on the agent forever (the
-    // classic "Shift stuck" -- Thai still typed via Unicode, but shortcuts broke).
-    // Panic-release everything on blur / tab-hide / pagehide.
+    // classic "Shift stuck"). Panic-release everything on blur / tab-hide /
+    // pagehide.
     function handleVisibility(): void {
       if (document.visibilityState === 'hidden') releaseAllHeld()
     }
@@ -942,25 +903,6 @@ export default function ControllerSession({
                 ⌨ {inputReady ? 'input ✓' : 'input ✕'}
               </span>
             )}
-            {/* Text <-> Game keyboard mode. Game routes every key as a raw
-                scancode press so games (WASD) register a real, holdable key;
-                Text keeps Thai/any-layout Unicode typing. Persisted per
-                controller. */}
-            <button
-              className={`session-float__btn session-float__kbmode is-${keyboardMode}`}
-              onClick={() => {
-                const next = keyboardMode === 'game' ? 'text' : 'game'
-                setKeyboardMode(next)
-                localStorage.setItem('pr-keyboard-mode', next)
-              }}
-              title={
-                keyboardMode === 'game'
-                  ? 'โหมดเกม: ทุกปุ่มส่งเป็น scancode กดค้างได้ (เดินในเกม WASD) — พิมพ์ไทยไม่ได้ คลิกเพื่อกลับโหมดพิมพ์'
-                  : 'โหมดพิมพ์: พิมพ์ไทย/อังกฤษปกติ — คลิกเพื่อสลับเป็นโหมดเกม (กดปุ่มค้างเดินในเกมได้)'
-              }
-            >
-              {keyboardMode === 'game' ? '🎮 Game' : '⌨ Text'}
-            </button>
             <StatusPill status={status} />
             <button
               className="session-float__btn session-float__collapse"
