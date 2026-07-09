@@ -125,9 +125,15 @@ DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1
     UNSET → **on automatically when `VIDEO_CAPTURER=1`** (the ONLY state where the video is
     guaranteed cursor-free, so the overlay can't double). ffmpeg fallback (composites the
     cursor) → overlay stays OFF = no double, per WC's requirement 2. Owner no longer needs
-    the env var. typecheck + lint clean. **NEXT (WC): install beta.1, REMOVE the
-    `PR_CURSOR_OVERLAY` env (keep VIDEO_CAPTURER=1), reconnect → confirm shapes still work
-    from the baked default. If clean → promote full v1.33.0.**
+    the env var. typecheck + lint clean.
+  - **VERIFIED + PROMOTED to full v1.33.0 (WC agent-side + owner Mac-side, 2026-07-09):**
+    with `PR_CURSOR_OVERLAY` REMOVED (only `VIDEO_CAPTURER=1`), the helper log shows
+    `data channel "cursor" open` from the baked default, and the owner confirmed the shapes
+    on the Mac (text→I-beam, link→hand, edge→resize, normal→arrow, no double, 0-latency).
+    The ffmpeg-fallback gate (no channel when `VIDEO_CAPTURER!=1`) is proven from code (live
+    test skipped — would disrupt the session; logic is unambiguous). **Mac-native trackpad
+    is COMPLETE: Phase 1 (v1.32.0 smooth scroll+HWHEEL) + Phase 2 (pinch-zoom) + Phase 3
+    (v1.33.0 native 0-latency cursor shape).**
 - **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
   high-resolution signal — controller sent only `deltaY/40`, the agent did
   `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then
@@ -680,7 +686,22 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.32.0** — **Mac-native smooth trackpad scroll.** Off
+Latest release: **v1.33.0** — **Mac-native trackpad complete: native 0-latency cursor
+shape.** Off `feat/native-video`; WC-verified (agent) + owner-verified (Mac) via prerelease
+v1.33.0-beta.1 before this full release. The DXGI capturer encodes NO cursor (the Mac already
+shows its own 0-latency cursor), so the agent now streams the remote's semantic cursor SHAPE
+over a `'cursor'` data channel (`cursorCapture.ts` koffi `GetCursorInfo` → 13 shapes + `none`,
+on change ~16Hz) and the controller applies it as a CSS `cursor` → the cursor shows the correct
+native glyph (I-beam on text, hand on links, resize on edges) at 0 latency, no double cursor.
+**Default-on when `VIDEO_CAPTURER=1`** (`cursorOverlayEnabled()`; the only cursor-free-video
+state — ffmpeg fallback composites the cursor so the overlay auto-disables there); override
+`PR_CURSOR_OVERLAY=0/1`. Controller render is OS-agnostic so a Windows controller (v1.32.0+)
+gets it too. Golden rules #1/#7 honored (koffi in the default path → prerelease + real-hw verify).
+This completes the Mac-native trackpad arc (Phase 1 smooth scroll + HWHEEL, Phase 2 pinch-zoom,
+Phase 3 cursor shape). Plan: [`docs/mac-trackpad-plan.md`](docs/mac-trackpad-plan.md).
+**Rolls up v1.32.0 (smooth scroll) + v1.31.0 (Parsec-100% keyboard).**
+
+Prior release: **v1.32.0** — **Mac-native smooth trackpad scroll.** Off
 `feat/native-video`; WC-verified on real hardware (owner-confirmed feel) via prerelease
 v1.32.0-beta.1 before this full release. Controlling the Windows agent **from a Mac** now
 scrolls with real trackpad resolution + momentum + horizontal wheel (HWHEEL) instead of chunky
