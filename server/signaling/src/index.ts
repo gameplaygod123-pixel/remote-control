@@ -27,6 +27,16 @@ function send(ws: WebSocket, message: SignalingMessage): void {
   ws.send(JSON.stringify(message));
 }
 
+// Timestamped logging so the connection lifecycle (connect/disconnect/register/
+// pair) can be correlated with real time -- e.g. to measure how long a client
+// takes to auto-reconnect after a Mac lid-close / half-open socket.
+function log(msg: string): void {
+  console.log(`${new Date().toISOString()} ${msg}`);
+}
+function logWarn(msg: string): void {
+  console.warn(`${new Date().toISOString()} ${msg}`);
+}
+
 // How long a controller waits for a human at the agent to accept/reject
 // before giving up -- covers the agent operator being away, not just a
 // slow response.
@@ -61,12 +71,12 @@ function broadcastDeviceUpdate(deviceId: string): void {
 }
 
 wss.on("connection", (socket) => {
-  console.log("client connected");
+  log("client connected");
 
   socket.on("message", async (data) => {
     const parsed = SignalingMessage.safeParse(JSON.parse(data.toString()));
     if (!parsed.success) {
-      console.warn("dropped invalid message:", parsed.error.message);
+      logWarn(`dropped invalid message: ${parsed.error.message}`);
       return;
     }
     const message = parsed.data;
@@ -82,7 +92,7 @@ wss.on("connection", (socket) => {
         registerAgent(message.deviceId, socket, pinHash, message.name, message.os);
         send(socket, { type: "register-result", ok: true });
         broadcastDeviceUpdate(message.deviceId);
-        console.log(`agent registered: ${message.deviceId}`);
+        log(`agent registered: ${message.deviceId}`);
         break;
       }
 
@@ -154,7 +164,7 @@ wss.on("connection", (socket) => {
           caps: message.caps,
         });
         send(socket, { type: "pairing-pending" });
-        console.log(`connection request pending approval: ${message.deviceId}`);
+        log(`connection request pending approval: ${message.deviceId}`);
         break;
       }
 
@@ -168,10 +178,10 @@ wss.on("connection", (socket) => {
           pairController(message.deviceId, pendingWs);
           send(pendingWs, { type: "pair-result", ok: true, caps: message.caps });
           send(agent.ws, { type: "pair-result", ok: true });
-          console.log(`controller paired with agent: ${message.deviceId}`);
+          log(`controller paired with agent: ${message.deviceId}`);
         } else {
           send(pendingWs, { type: "pair-result", ok: false, reason: "rejected by agent" });
-          console.log(`connection request rejected: ${message.deviceId}`);
+          log(`connection request rejected: ${message.deviceId}`);
         }
         break;
       }
@@ -250,8 +260,8 @@ wss.on("connection", (socket) => {
         reason: "agent disconnected",
       });
     }
-    console.log("client disconnected");
+    log("client disconnected");
   });
 });
 
-console.log(`signaling server listening on ws://localhost:${port}`);
+log(`signaling server listening on ws://localhost:${port}`);
