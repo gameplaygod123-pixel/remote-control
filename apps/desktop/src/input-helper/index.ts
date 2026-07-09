@@ -81,10 +81,33 @@ initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Warning', (le
 // Binding Request from this machine and confirming a valid Binding Success
 // Response came back (6/6 across 3 separate runs), the same verification
 // openrelay never got before it was originally added.
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' }
-]
+// TURN relay is appended ONLY when configured via env (default: STUN-only =
+// byte-identical). A symmetric-NAT / CGNAT peer can't be reached by STUN
+// hole-punching at all -- it needs a relay in the middle. Opt-in and MUST be a
+// verified-working server before enabling (golden rule #4): a dead TURN wastes
+// gathering time and makes things worse. Env (inherited by this forked helper
+// from the app process): PR_TURN_URLS (comma list, e.g.
+// "turn:relay.host:3478,turns:relay.host:5349") + PR_TURN_USERNAME +
+// PR_TURN_CREDENTIAL.
+function buildIceServers(): RTCIceServer[] {
+  const servers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' }
+  ]
+  const urls = (process.env.PR_TURN_URLS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (urls.length) {
+    servers.push({
+      urls,
+      username: process.env.PR_TURN_USERNAME,
+      credential: process.env.PR_TURN_CREDENTIAL
+    })
+  }
+  return servers
+}
+const ICE_SERVERS: RTCIceServer[] = buildIceServers()
 
 // TEMP diagnostic: pulls the `typ host|srflx|relay` suffix out of a raw ICE
 // candidate string so the log says outright whether a server-reflexive/relay

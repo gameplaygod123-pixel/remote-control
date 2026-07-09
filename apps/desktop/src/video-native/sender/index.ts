@@ -64,8 +64,26 @@ const KEYFRAME_COOLDOWN_MS = 400
 
 // Same verified STUN pair as the input helper (input-helper/index.ts): a single
 // STUN server is a single point of failure, both of these are RFC 5389-verified.
-// No unverified ICE servers -- golden rule #4.
-const ICE_SERVERS = ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478']
+// No unverified ICE servers -- golden rule #4. TURN is appended ONLY when
+// configured via env (default STUN-only = byte-identical) for symmetric-NAT/CGNAT
+// peers that STUN can't reach; opt-in + must be a verified server. Env (inherited
+// from the agent process): PR_TURN_URLS (comma list) + PR_TURN_USERNAME +
+// PR_TURN_CREDENTIAL. ndc string form embeds creds: turn:USER:CRED@host:port.
+function buildIceServers(): string[] {
+  const servers = ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478']
+  const urls = (process.env.PR_TURN_URLS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const user = process.env.PR_TURN_USERNAME ?? ''
+  const cred = process.env.PR_TURN_CREDENTIAL ?? ''
+  for (const url of urls) {
+    const m = /^(turns?):(.+)$/.exec(url)
+    servers.push(m && user && cred ? `${m[1]}:${user}:${cred}@${m[2]}` : url)
+  }
+  return servers
+}
+const ICE_SERVERS = buildIceServers()
 
 function log(message: string): void {
   logVideoSender('HELPER', message)

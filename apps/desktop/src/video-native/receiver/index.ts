@@ -42,8 +42,26 @@ function nackBufferEnabled(): boolean {
 import { logVideoReceiver } from '../../main/videoReceiverLog'
 
 // Must match the sender (sender/index.ts): same STUN pair (golden rule #4), same
-// verified servers -- a single STUN server is a single point of failure.
-const ICE_SERVERS = ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478']
+// verified servers -- a single STUN server is a single point of failure. TURN is
+// appended ONLY when configured via env (default STUN-only = byte-identical), for
+// symmetric-NAT/CGNAT peers STUN can't reach; opt-in + must be a verified server.
+// Env (inherited from the controller process): PR_TURN_URLS (comma list) +
+// PR_TURN_USERNAME + PR_TURN_CREDENTIAL. ndc string form: turn:USER:CRED@host:port.
+function buildIceServers(): string[] {
+  const servers = ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478']
+  const urls = (process.env.PR_TURN_URLS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const user = process.env.PR_TURN_USERNAME ?? ''
+  const cred = process.env.PR_TURN_CREDENTIAL ?? ''
+  for (const url of urls) {
+    const m = /^(turns?):(.+)$/.exec(url)
+    servers.push(m && user && cred ? `${m[1]}:${user}:${cred}@${m[2]}` : url)
+  }
+  return servers
+}
+const ICE_SERVERS = buildIceServers()
 const STATS_INTERVAL_MS = 1_000
 // Rate-limit our PLI to the agreed <=1/s (two-sided design: sender debounces
 // forced IDRs at 400ms, receiver never storms it) -- see sender/index.ts item A.
