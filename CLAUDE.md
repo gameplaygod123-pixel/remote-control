@@ -65,10 +65,20 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-09)
 
-IN PROGRESS (branch `feat/native-video`): **Mac-native control — smooth trackpad
-scroll → PRERELEASE v1.32.0-beta.1 (awaiting WC real-hardware verify).** Owner
-(2026-07-09): "โหมดเฉพาะแยกของ Mac ... ควบคุมผ่าน Mac ให้ใช้งานแบบ Mac 100% โดยเฉพาะ
-ทัชแพดต้องสมูสลื่นไหล". Full plan: [`docs/mac-trackpad-plan.md`](docs/mac-trackpad-plan.md).
+DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1.32.0
+(WC-VERIFIED on real hardware, owner-confirmed feel).** Owner (2026-07-09):
+"โหมดเฉพาะแยกของ Mac ... ควบคุมผ่าน Mac ให้ใช้งานแบบ Mac 100% โดยเฉพาะทัชแพดต้องสมูส
+ลื่นไหล". Full plan: [`docs/mac-trackpad-plan.md`](docs/mac-trackpad-plan.md).
+- **VERIFIED (WC + owner, real hardware, v1.32.0-beta.1):** two-finger up/down +
+  left/right (HWHEEL) = smooth continuous, NO dead-zone on slow flicks; momentum
+  works. Feel: `INPUT_WHEEL_GAIN=1` was "ช้าไปนิดเดียว" → **1.5 = "พอดีเลย กำลังดี"
+  = 1:1 with the Mac trackpad** → **baked `WHEEL_GAIN` default 1→1.5** in both
+  `injectorWin32.ts` + `rawInject.ts` (env `INPUT_WHEEL_GAIN` still overrides) and
+  cut full **v1.32.0** (rebuilt so the value ships IN the app, not via a temp setx).
+  non-px path (USB mouse / Windows controller) untouched = no regression; coalesce
+  guards runaway; wheel isn't logged (verified by feel — add a log line at case
+  'wheel' later if observability is wanted). Phase 2 (pinch-zoom) / Phase 3 (local
+  0-latency cursor overlay) remain deferred.
 - **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
   high-resolution signal — controller sent only `deltaY/40`, the agent did
   `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then
@@ -621,7 +631,22 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.31.0** — **Parsec-100% keyboard (always scancode, no mode).** Off
+Latest release: **v1.32.0** — **Mac-native smooth trackpad scroll.** Off
+`feat/native-video`; WC-verified on real hardware (owner-confirmed feel) via prerelease
+v1.32.0-beta.1 before this full release. Controlling the Windows agent **from a Mac** now
+scrolls with real trackpad resolution + momentum + horizontal wheel (HWHEEL) instead of chunky
+notch scroll. **Auto, no toggle** — gated to Mac controllers by UA (`px:true` wheel path); a
+**Windows controller is byte-identical to before** (legacy notch path). The agent scrolls via a
+new koffi `injectWheelWin32` (MOUSEINPUT + fractional accumulator that emits `mouseData` < 120 =
+true high-res smooth scroll + `MOUSEEVENTF_HWHEEL`), bypassing nut.js; controller coalesces queued
+wheels by SUMMING under channel backlog (never drops scroll travel). `WHEEL_GAIN` default **1.5**
+(owner-verified 1:1 with the Mac trackpad; env `INPUT_WHEEL_GAIN` overrides). New protocol
+`wheel.px?`/`dx?` flags; threaded through all 3 agent paths (input-helper / AgentView IPC / SYSTEM
+injector). Golden rules #1/#7 honored (koffi SendInput wheel = native FFI → prerelease + real-hw
+verify first). Plan: [`docs/mac-trackpad-plan.md`](docs/mac-trackpad-plan.md); Phase 2 (pinch-zoom)
+/ Phase 3 (local 0-latency cursor overlay) deferred. **Rolls up v1.31.0 (Parsec-100% keyboard).**
+
+Prior release: **v1.31.0** — **Parsec-100% keyboard (always scancode, no mode).** Off
 `feat/native-video`; verified on real hardware (owner: "ใช้งานได้") before this full release,
 via prereleases v1.30.0-beta.1 (Text/Game toggle, scancode injection proven) → v1.31.0-beta.1
 (retire the toggle, always scancode). The controller now forwards EVERY key as a physical

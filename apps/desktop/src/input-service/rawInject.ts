@@ -154,9 +154,10 @@ export function injectMouseButton(button: 'left' | 'right' | 'middle', down: boo
   sendMouse({ dx: 0, dy: 0, mouseData: 0, dwFlags: flag })
 }
 
-// px->wheel-unit gain (wheel units per trackpad pixel); tune via INPUT_WHEEL_GAIN.
+// px->wheel-unit gain (wheel units per trackpad pixel); default 1.5 =
+// owner-verified 1:1 (see injectorWin32.ts). Override via INPUT_WHEEL_GAIN.
 // Mirrors injectorWin32.ts so the SYSTEM path scrolls identically.
-const WHEEL_GAIN = Number(process.env.INPUT_WHEEL_GAIN) || 1
+const WHEEL_GAIN = Number(process.env.INPUT_WHEEL_GAIN) || 1.5
 let wheelAccX = 0
 let wheelAccY = 0
 

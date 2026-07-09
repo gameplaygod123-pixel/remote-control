@@ -163,11 +163,10 @@ function sendMouseData(mouseData: number, dwFlags: number): void {
   sendInputFn!(1, buf, inputSize)
 }
 
-// px->wheel-unit gain (wheel units per trackpad pixel). A FEEL knob: tune on
-// real hardware via INPUT_WHEEL_GAIN, then bake the winning default. Windows
-// scrolls ~3 lines per WHEEL_DELTA(120), so ~120 units ≈ 48px -> ~2.5 units/px
-// is roughly 1:1; start at 1 (conservative) and raise if it feels slow.
-const WHEEL_GAIN = Number(process.env.INPUT_WHEEL_GAIN) || 1
+// px->wheel-unit gain (wheel units per trackpad pixel). Default 1.5 =
+// owner-verified 1:1 with the Mac trackpad on real hardware (v1.32.0-beta.1: 1
+// felt slightly slow, 1.5 "พอดีเลย กำลังดี"). Override live via INPUT_WHEEL_GAIN.
+const WHEEL_GAIN = Number(process.env.INPUT_WHEEL_GAIN) || 1.5
 
 // Fractional remainders kept across events so sub-notch scrolls aren't lost and
 // fast flicks stay smooth (mouseData can be < 120 -- true high-resolution wheel,
