@@ -35,6 +35,11 @@ const MOUSE_MOVE_THROTTLE_MS = 16
 // controllers on other platforms. Detected from the Electron renderer UA.
 const IS_MAC_CONTROLLER = /Macintosh|Mac OS X/.test(navigator.userAgent)
 
+// Pinch-to-zoom: macOS delivers a trackpad pinch as a `wheel` event with
+// ctrlKey=true (no physical key). We hold a synthetic Ctrl on the agent for the
+// pinch, then release it this many ms after the last pinch wheel (the burst end).
+const PINCH_IDLE_MS = 140
+
 // After a network drop -- or the agent machine being restarted by hand,
 // which can take an arbitrarily long time -- the controller and agent
 // reconnect independently with no ordering guarantee. Retry indefinitely on
@@ -130,6 +135,15 @@ export default function ControllerSession({
   const moveChannelRef = useRef<RTCDataChannel | null>(null)
   const lastMoveSentRef = useRef(0)
   const pendingWheelRef = useRef({ dx: 0, dy: 0 })
+  // Physically-held key codes, shared between the keyboard effect (panic-release)
+  // and the wheel handler (so pinch-zoom can tell a real Ctrl+scroll from a
+  // synthetic pinch -- see handlePinchZoom).
+  const heldKeysRef = useRef<Set<string>>(new Set())
+  // Pinch-to-zoom (Mac trackpad): whether we currently hold a SYNTHETIC Ctrl on
+  // the agent for an in-progress pinch, + the idle timer that releases it once
+  // the pinch burst ends.
+  const pinchCtrlRef = useRef(false)
+  const pinchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const moveSeqRef = useRef(0)
   const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
     useFileTransferChannel()
@@ -320,6 +334,10 @@ export default function ControllerSession({
   function handleWheel(e: React.WheelEvent<HTMLVideoElement>): void {
     e.preventDefault()
     if (IS_MAC_CONTROLLER) {
+      // Pinch-to-zoom: a trackpad pinch arrives as a wheel with ctrlKey set, so
+      // wrapping it in a synthetic Ctrl makes the remote treat it as Ctrl+wheel
+      // (= zoom). The wheel itself is still forwarded below as a normal scroll.
+      handlePinchZoom(e)
       // Forward the RAW high-resolution pixel delta (deltaMode normalized to px)
       // with px:true, so the agent scrolls smoothly. Momentum arrives for free
       // as more decaying wheel events. deltaMode 1=line (~16px), 2=page.
@@ -350,6 +368,39 @@ export default function ControllerSession({
     pending.dx = 0
   }
 
+  // Pinch-to-zoom (Mac trackpad, Mac controller only). macOS surfaces a pinch as
+  // a `wheel` with ctrlKey=true and NO physical key event, so the agent never
+  // sees Ctrl and just scrolls. We synthesize a real Ctrl (scancode, the same
+  // path normal keys use) held for the duration of the pinch burst, so the
+  // remote reads it as Ctrl+wheel = zoom.
+  function handlePinchZoom(e: React.WheelEvent<HTMLVideoElement>): void {
+    // A genuine physical Ctrl+scroll also sets ctrlKey -- but there the key path
+    // already forwarded a real Ctrl, so we must NOT add a second synthetic one
+    // (its idle-release would fight the real key). Only synthesize for a pinch
+    // (ctrlKey set with no physical Ctrl held).
+    const physicalCtrl =
+      heldKeysRef.current.has('ControlLeft') || heldKeysRef.current.has('ControlRight')
+    if (!e.ctrlKey || physicalCtrl) return
+    if (!pinchCtrlRef.current) {
+      pinchCtrlRef.current = true
+      sendInput({ t: 'keydown', code: 'ControlLeft', scan: true })
+    }
+    if (pinchTimerRef.current !== null) clearTimeout(pinchTimerRef.current)
+    pinchTimerRef.current = setTimeout(releasePinchCtrl, PINCH_IDLE_MS)
+  }
+
+  // Drop the synthetic pinch Ctrl (burst ended, or focus loss / panic-release).
+  function releasePinchCtrl(): void {
+    if (pinchTimerRef.current !== null) {
+      clearTimeout(pinchTimerRef.current)
+      pinchTimerRef.current = null
+    }
+    if (pinchCtrlRef.current) {
+      pinchCtrlRef.current = false
+      sendInput({ t: 'keyup', code: 'ControlLeft', scan: true })
+    }
+  }
+
   // Forwards key events to the agent while the session is mounted. PARSEC-STYLE:
   // EVERY key is sent as a physical SCANCODE (t:'keydown'/'keyup', scan:true) --
   // there is no Unicode `text` path and no Text/Game mode. The remote HOST does
@@ -365,11 +416,14 @@ export default function ControllerSession({
   useEffect(() => {
     // Every physical key currently held down on the agent, so focus loss can
     // panic-release all of them (printable keys included, now that they take
-    // the same scancode hold path as everything else).
-    const held = new Set<string>()
+    // the same scancode hold path as everything else). Shared via a ref so the
+    // wheel handler can read physical-Ctrl state for pinch-zoom detection.
+    const held = heldKeysRef.current
     function releaseAllHeld(): void {
       for (const code of held) sendInput({ t: 'keyup', code, scan: true })
       held.clear()
+      // Also drop any synthetic pinch-zoom Ctrl so it can't stick across a blur.
+      releasePinchCtrl()
     }
     function handleKeyDown(e: KeyboardEvent): void {
       // The device-name field is a real local <input> in this same window --

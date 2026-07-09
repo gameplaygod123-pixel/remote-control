@@ -77,8 +77,24 @@ DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1
   cut full **v1.32.0** (rebuilt so the value ships IN the app, not via a temp setx).
   non-px path (USB mouse / Windows controller) untouched = no regression; coalesce
   guards runaway; wheel isn't logged (verified by feel — add a log line at case
-  'wheel' later if observability is wanted). Phase 2 (pinch-zoom) / Phase 3 (local
-  0-latency cursor overlay) remain deferred.
+  'wheel' later if observability is wanted).
+- **Phase 2 — pinch-to-zoom DONE (committed, CONTROLLER-ONLY, no agent/FFI/protocol
+  change → no installer needed; owner relaunches `start-controller.command` to use
+  it, agent stays on v1.32.0).** macOS delivers a trackpad pinch as a `wheel` with
+  `ctrlKey=true` and NO physical key, so today it just scrolls. `handlePinchZoom`
+  (`ControllerSession.tsx`, inside `handleWheel`'s Mac branch only) synthesizes a real
+  **Ctrl (scancode, the already-verified key path)** held for the pinch burst, released
+  `PINCH_IDLE_MS`=140ms after the last pinch wheel → the agent reads Ctrl+wheel = zoom.
+  Guard: a genuine physical Ctrl+scroll already forwards a real Ctrl via the key path,
+  so we synthesize ONLY when `ctrlKey` is set AND no physical Ctrl is held
+  (`heldKeysRef`, now shared between the keyboard effect + wheel handler); panic-release
+  (blur/hide) drops the synthetic Ctrl too. Reuses verified scancode-key + px-wheel
+  paths (no koffi, golden rule #1 N/A); Windows controller never enters the Mac branch
+  = byte-identical. typecheck clean; lint = the one pre-existing `[]`-deps effect
+  warning (now also names releasePinchCtrl). **Owner to feel-test: pinch out/in on the
+  trackpad zooms a browser/photo; verify direction (knob = flip if inverted) + that
+  normal scroll and real Ctrl+scroll still behave.** Phase 3 (local 0-latency cursor
+  overlay) remains deferred.
 - **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
   high-resolution signal — controller sent only `deltaY/40`, the agent did
   `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then

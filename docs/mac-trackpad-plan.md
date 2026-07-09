@@ -86,12 +86,18 @@ scrolls (just chunkier).
 (e.g. `INPUT_WHEEL_GAIN`) so we can dial it on real hardware without a rebuild;
 bake the winning value as the default.
 
-### Phase 2 — trackpad gestures (nice-to-have, after Phase 1 feels right)
+### Phase 2 — trackpad gestures
 
-- **Pinch-to-zoom**: Chromium sends a pinch as `wheel` + `ctrlKey=true`. When we
-  see a wheel whose `ctrlKey` is set but no physical Ctrl is held, wrap it as
-  Ctrl-down → wheel → Ctrl-up on the agent (Ctrl+wheel = zoom in browsers/maps/
-  Office). Real Ctrl+scroll already forwards Ctrl via the key path → same result.
+- **Pinch-to-zoom — DONE (controller-only, Mac-gated).** Chromium sends a pinch as
+  `wheel` + `ctrlKey=true` with no physical key. `handlePinchZoom` (in `handleWheel`,
+  Mac branch only) synthesizes a real **Ctrl (scancode)** held for the pinch burst
+  and releases it `PINCH_IDLE_MS`(140ms) after the last pinch wheel → the agent reads
+  Ctrl+wheel = zoom. Guard: a genuine physical Ctrl+scroll already forwards a real
+  Ctrl via the key path, so we only synthesize when `ctrlKey` is set AND no physical
+  Ctrl is held (`heldKeysRef`, now shared between the keyboard effect and the wheel
+  handler). Panic-release (blur/hide) drops the synthetic Ctrl too. **No agent/FFI or
+  protocol change** — reuses the verified scancode-key + px-wheel paths. A Windows
+  controller never enters the Mac branch → byte-identical (no regression).
 - **Two-finger swipe navigation** (optional): map horizontal swipe-nav to
   Back/Forward. Lower value; most horizontal intent is covered by HWHEEL. Skip
   unless asked.
