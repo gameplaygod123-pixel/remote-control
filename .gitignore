@@ -13,4 +13,4 @@ build/Release/
 /token
 
 # Local TURN secret (Cloudflare API token) -- never commit
-/turn-creds.sh
+/turn-creds.sh*
