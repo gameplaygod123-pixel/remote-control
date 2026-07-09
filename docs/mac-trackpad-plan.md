@@ -102,15 +102,35 @@ bake the winning value as the default.
   Back/Forward. Lower value; most horizontal intent is covered by HWHEEL. Skip
   unless asked.
 
-### Phase 3 — 0-latency pointer (the real "glued to the mouse" feel; optional, big)
+### Phase 3 — 0-latency native cursor SHAPE (mostly already built)
 
-The remaining non-scroll gap is pointer latency: the remote cursor lives inside
-the 60fps video + network, so it trails the Mac. The fix is the **dormant local
-cursor overlay** (`PR_CURSOR_OVERLAY`, built in beta.4, kept behind a flag):
-draw the **local Mac cursor** over the video (0 latency, native shape via the
-`cursor` data channel) and hide the composited remote one. This is a larger,
-separate effort (interacts with `draw_mouse` compositing + the cursor channel) —
-list it, don't bundle it into the trackpad work.
+**Key finding (2026-07-09):** with the shipping DXGI capturer (`VIDEO_CAPTURER=1`)
+the encoded video carries **NO cursor** — DXGI Desktop Duplication excludes the HW
+cursor and `main.cpp` never composites it (it only reads pointer metadata for
+change-detection/logging). So the pointer the owner sees is **already the local Mac
+cursor at 0 latency** — the "glued" latency goal is effectively met on the capturer
+path. The only gap is that it's **always an arrow** (wrong shape on text fields /
+links / resize edges).
+
+Phase 3 = give that local cursor the **correct shape**, which the **dormant
+`PR_CURSOR_OVERLAY` plumbing already does end-to-end** (built + koffi-verified in
+beta.4, shipped dormant in v1.32.0):
+- Agent (`input-helper/index.ts` + `cursorCapture.ts`): `GetCursorInfo` polls the
+  remote cursor, maps the handle to a semantic `CursorShape` (13 standard cursors +
+  `none`), sends it on a dedicated `'cursor'` data channel on change (~16 Hz, tiny).
+- Controller (`ControllerSession.tsx`, already wired with **no gate**): applies the
+  shape as a CSS `cursor` on the video element (`nativeActive && remoteCursor`), so
+  macOS renders the real native cursor at 0 latency + correct hotspot; degrades to
+  the local arrow if the channel never opens.
+
+**Enabling = set `PR_CURSOR_OVERLAY=1` on the agent** (no rebuild — it's in v1.32.0),
+persisted (registry, per [[agent-env-overrides-must-be-persisted]]), relaunch agent +
+reconnect. Coherent ONLY with the capturer (no composited cursor); with the ffmpeg
+fallback (`draw_mouse=1`) it would double the cursor, so it stays **opt-in and
+real-hardware-verified before any default-on** (golden rule #1). The flag is also the
+built-in cancel switch. **Verify:** correct shapes (I-beam/hand/resize), 0-latency,
+**no double cursor**. If clean → make it default-on when the capturer is active
+(tie to `VIDEO_CAPTURER`) in a follow-up prerelease.
 
 ## Safety / process
 

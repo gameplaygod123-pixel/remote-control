@@ -433,15 +433,19 @@ function attemptNegotiation(): void {
     write: writeClipboardText
   })
 
-  // Cursor SHAPE side-channel (agent -> controller). DORMANT by default: it only
-  // pays off paired with a capture layer that skips pointer-only frames (Step 3
-  // of docs/streaming-improvements-plan.md) -- on the current ddagrab pipeline
-  // (cursor:'composited', draw_mouse=1) the cursor is in the video, so a second
-  // CSS cursor on the Mac would just double it (the beta.4 regression). Gated
-  // behind PR_CURSOR_OVERLAY so the plumbing stays present + verified (koffi
-  // harness passed) and gets un-gated wholesale in Step 3d, sourcing the shape
-  // from DXGI metadata instead of GetCursorInfo. Reports only the semantic shape,
-  // on change; Windows-only + fully guarded (see cursorCapture.ts).
+  // Cursor SHAPE side-channel (agent -> controller) = Mac-native trackpad Phase 3.
+  // Opt-in via PR_CURSOR_OVERLAY. The DXGI capturer (VIDEO_CAPTURER=1, the shipping
+  // path) encodes the desktop WITHOUT the HW cursor (DDA excludes it; the capturer
+  // never composites it), so the Mac shows only its OWN cursor over the video --
+  // already 0-latency, but always an arrow. This channel reports the remote's
+  // semantic cursor SHAPE (GetCursorInfo, on change) so the controller applies it
+  // as a CSS `cursor` -> the local Mac cursor gets the RIGHT shape (I-beam on text,
+  // hand on links, resize on edges) at 0 latency. Only coherent when the video has
+  // no composited cursor: with the ffmpeg fallback (draw_mouse=1) the cursor IS in
+  // the frame, so a CSS cursor would DOUBLE it (the beta.4 regression) -- hence
+  // opt-in, verified on real hardware with the capturer before any default-on.
+  // Windows-only + fully guarded (see cursorCapture.ts); the controller degrades to
+  // the plain local arrow if the channel never opens.
   if (process.env.PR_CURSOR_OVERLAY === '1') {
     const cursor = conn.createDataChannel('cursor')
     cursor.onopen = () => {

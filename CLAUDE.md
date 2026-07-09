@@ -93,8 +93,27 @@ DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1
   = byte-identical. typecheck clean; lint = the one pre-existing `[]`-deps effect
   warning (now also names releasePinchCtrl). **OWNER-VERIFIED (2026-07-09): pinch
   in/out zooms correctly ("ใช้ได้ ซูมเข้าออก") — direction correct, no regression.**
-  Phase 2 DONE. Phase 3 (local 0-latency cursor overlay for the "glued to the mouse"
-  pointer feel — reuse dormant `PR_CURSOR_OVERLAY`) remains deferred.
+  Phase 2 DONE.
+- **Phase 3 — native 0-latency cursor SHAPE → READY TO ENABLE (awaiting real-hw
+  verify). KEY FINDING: it's MOSTLY ALREADY BUILT + the latency goal is already met.**
+  The shipping DXGI capturer (`VIDEO_CAPTURER=1`) encodes the desktop **with NO cursor**
+  (DDA excludes the HW cursor; `main.cpp` only reads pointer metadata, never composites
+  it — confirmed by reading the source), so the pointer the owner sees is **already the
+  local Mac cursor at 0 latency** — the "glued" goal is effectively done on the capturer
+  path. The ONLY gap = it's always an ARROW (wrong shape on text fields / links / resize).
+  Phase 3 fills that via the **dormant `PR_CURSOR_OVERLAY` plumbing (built + koffi-verified
+  in beta.4, shipped dormant in v1.32.0)**: agent `cursorCapture.ts` (`GetCursorInfo` →
+  13 semantic `CursorShape`s + `none`, on change, ~16Hz) sends over a `'cursor'` data
+  channel → controller applies it as a CSS `cursor` (already wired, NO gate) → macOS draws
+  the correct native shape at 0 latency. **Enabling = `PR_CURSOR_OVERLAY=1` on the agent
+  (NO rebuild — it's in v1.32.0), persisted in the registry
+  ([[agent-env-overrides-must-be-persisted]]), relaunch agent + reconnect.** Coherent ONLY
+  with the capturer (no composited cursor); the ffmpeg fallback (`draw_mouse=1`) would
+  double the cursor → stays **opt-in + real-hw-verified before any default-on** (golden
+  rule #1); the flag is also the built-in cancel switch ("เผื่อไม่ดีค่อยยกเลิก"). **NEXT
+  (owner/WC): set the persisted env, reconnect, verify correct shapes (I-beam/hand/resize),
+  0-latency, NO double cursor. If clean → make it default-on when `VIDEO_CAPTURER=1` in a
+  follow-up prerelease.** (Comment in `input-helper/index.ts` updated to this reality.)
 - **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
   high-resolution signal — controller sent only `deltaY/40`, the agent did
   `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then
