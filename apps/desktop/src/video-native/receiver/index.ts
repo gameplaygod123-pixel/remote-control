@@ -94,6 +94,12 @@ interface Session {
   // signaling via evt:'bitrate'). Media-only pc has no built-in BWE -- see bwe.ts.
   bwe: BandwidthEstimator
   firstFrameSeen: boolean
+  // Whether an offer has already been applied to THIS pc. A SECOND offer (from a
+  // re-pair / sender restart during flapping) carries fresh ICE creds, which
+  // ndc/libjuice can't apply as an ICE restart -- setRemoteDescription throws and
+  // the pc wedges forever (the recurring "connected but fps=0 then dies" bug). So a
+  // second offer rebuilds a fresh session instead of dying. See the remote-offer handler.
+  offerApplied: boolean
   lastKeyframeRequestAt: number
   // Real-time packet-loss detector (reorder-tolerant). A confirmed lost packet breaks
   // the current frame, and since inter frames reference it the decoder (VideoToolbox)
@@ -190,6 +196,7 @@ function startSession(): void {
     depacketizer: createDepacketizer('h264'),
     bwe: new BandwidthEstimator(),
     firstFrameSeen: false,
+    offerApplied: false,
     lastKeyframeRequestAt: 0,
     lossDetector: new LossDetector(),
     reorder: null,
@@ -405,6 +412,14 @@ process.on('message', (raw: MainToVideoReceiver) => {
         log('remote-offer with no active session -- ignored')
         break
       }
+      // A second offer on a live pc (re-pair / sender restart) has fresh ICE creds;
+      // ndc can't ICE-restart, so applying it to the existing pc throws and wedges
+      // the connection forever. Rebuild a fresh pc for it instead so a re-pair
+      // recovers (this is the fix for the recurring "connected -> 2nd offer -> dies").
+      if (current.offerApplied) {
+        log('second offer -> rebuilding session (ndc has no ICE restart)')
+        startSession() // closes the old session, opens a fresh pc (current = new)
+      }
       log(`remote-offer (${raw.sdp.length} bytes)`)
       // Auto-detect the codec from the offer's rtpmap (the agent advertises H265 only
       // when it opted into VIDEO_CODEC=hevc). Swap the depacketizer to the matching
@@ -426,6 +441,7 @@ process.on('message', (raw: MainToVideoReceiver) => {
       }
       try {
         current.pc.setRemoteDescription(raw.sdp, 'offer')
+        current.offerApplied = true
       } catch (e) {
         log(`setRemoteDescription threw: ${(e as Error).message}`)
       }
