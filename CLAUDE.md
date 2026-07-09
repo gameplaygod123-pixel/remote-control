@@ -91,10 +91,10 @@ DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1
   (blur/hide) drops the synthetic Ctrl too. Reuses verified scancode-key + px-wheel
   paths (no koffi, golden rule #1 N/A); Windows controller never enters the Mac branch
   = byte-identical. typecheck clean; lint = the one pre-existing `[]`-deps effect
-  warning (now also names releasePinchCtrl). **Owner to feel-test: pinch out/in on the
-  trackpad zooms a browser/photo; verify direction (knob = flip if inverted) + that
-  normal scroll and real Ctrl+scroll still behave.** Phase 3 (local 0-latency cursor
-  overlay) remains deferred.
+  warning (now also names releasePinchCtrl). **OWNER-VERIFIED (2026-07-09): pinch
+  in/out zooms correctly ("ใช้ได้ ซูมเข้าออก") — direction correct, no regression.**
+  Phase 2 DONE. Phase 3 (local 0-latency cursor overlay for the "glued to the mouse"
+  pointer feel — reuse dormant `PR_CURSOR_OVERLAY`) remains deferred.
 - **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
   high-resolution signal — controller sent only `deltaY/40`, the agent did
   `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then
