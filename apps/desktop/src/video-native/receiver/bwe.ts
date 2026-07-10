@@ -34,7 +34,15 @@ export const BWE_FLOOR_KBPS = 5_000
  * runs 1440p60 at ~3 Mbps" win is H.265 (Feature B, 1.6× efficiency), NOT pushing
  * H.264 higher. See docs/bwe-hevc-plan.md + the WC bufferbloat diagnosis.
  */
-export const BWE_CEIL_KBPS = 25_000
+// RAISED to 50 Mbps (owner, 2026-07-10: "auto to max 50Mbps"). The old 25/15 caps
+// were set after v1.27/v1.28-beta.1 BUFFERBLOATED at 60 on the ~40 Mbps link. Since
+// then NACK retransmit + reorder buffer shipped (v1.29) so scattered loss self-repairs,
+// and the owner wants headroom to 50. RISK: bufferbloat is DELAY (not loss) so NACK does
+// NOT prevent it — 50 on a ~40 Mbps link can still bloat. Mitigation: START stays low
+// (25) and AIMD probes UP toward 50 only while loss<2% AND jitter<18ms, backing off on a
+// jitter spike BEFORE overflow. MUST re-verify on real hardware (analyze-session.mjs:
+// no bufferbloat/freeze) — drop back to ~35-40 if the ~40 link bloats.
+export const BWE_CEIL_KBPS = 50_000
 /**
  * HEVC ceiling — **15 Mbps**, LOWER than H.264's 25 on purpose. HEVC is ~1.6×
  * more efficient, so HEVC@15 ≈ H.264@25 in quality; capping HEVC at 25 wastes its
@@ -48,10 +56,16 @@ export const BWE_CEIL_KBPS = 25_000
  * was too high for HEVC on this link. Codec-aware because the same 25 stays right
  * for H.264. See docs/bwe-hevc-plan.md + the beta.1 WC diagnosis.
  */
-export const BWE_HEVC_CEIL_KBPS = 15_000
-/** Start AT the ceiling (= the proven-good point + the capturer's launch bitrate)
- *  so there's no cold-start ramp; BWE only ever backs OFF from here when the link
- *  is congested, then probes back up toward the cap when it clears. */
+// RAISED 15→50 alongside H.264 (owner, 2026-07-10: "auto to max 50Mbps"). HEVC@50 is a
+// LOT of headroom (≈H.264@80) — expect it to sit far below 50 in practice (HEVC is
+// efficient), but the cap no longer artificially throttles it. Same bufferbloat caveat +
+// re-verify requirement as BWE_CEIL_KBPS above.
+export const BWE_HEVC_CEIL_KBPS = 50_000
+/** Start at 25 Mbps (= v1.26.0's proven-smooth point + the capturer's launch bitrate).
+ *  Now BELOW the 50 ceiling on purpose: BWE probes UP from the known-good 25 toward 50
+ *  only while the link stays healthy, and backs off on the first jitter/loss sign — a
+ *  safer approach to the higher cap than starting at 50 (which is what bufferbloated
+ *  before). */
 export const BWE_START_KBPS = 25_000
 
 /** The AIMD ceiling for a codec: HEVC gets the lower 15 Mbps cap (see above). */
