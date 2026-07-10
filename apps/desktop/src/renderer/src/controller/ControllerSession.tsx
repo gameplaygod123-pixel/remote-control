@@ -57,6 +57,31 @@ const PAIR_RETRY_DELAY_MS = 3000
 // paired" strand after a lid-close flap) lives in ./repairWatchdog, extracted so
 // its decision + loop are unit-testable (dev/verify-repair-watchdog.mjs).
 
+// Maps a live link-quality metric to a health tint class for the HUD (good/warn/
+// crit -> green/amber/red; '' = no tint). Only the metrics that actually reflect
+// link health are colored (Encode/Network/Jitter/Loss/Bitrate); Res/FPS/Codec stay
+// neutral. Thresholds are deliberately generous so green = genuinely fine.
+type StatKind = 'encode' | 'net' | 'jitter' | 'loss' | 'bitrate'
+function statHealth(kind: StatKind, v: number, fps = 60): '' | 'is-good' | 'is-warn' | 'is-crit' {
+  switch (kind) {
+    case 'encode': {
+      // Green while encode fits the per-frame budget (1000/fps); amber up to 2×.
+      const budget = 1000 / (fps || 60)
+      return v <= budget ? 'is-good' : v <= budget * 2 ? 'is-warn' : 'is-crit'
+    }
+    case 'net':
+      return v < 40 ? 'is-good' : v < 80 ? 'is-warn' : 'is-crit'
+    case 'jitter':
+      return v < 15 ? 'is-good' : v < 30 ? 'is-warn' : 'is-crit'
+    case 'loss':
+      return v < 1 ? 'is-good' : v < 3 ? 'is-warn' : 'is-crit'
+    case 'bitrate':
+      // High bitrate isn't "broken", just worth watching for bufferbloat on a
+      // slow link -> amber >= 35 Mbps, no crit.
+      return v >= 35 ? 'is-warn' : 'is-good'
+  }
+}
+
 export default function ControllerSession({
   deviceId,
   pin,
@@ -976,7 +1001,13 @@ export default function ControllerSession({
                 {nativeActive && (
                   <span className="stat">
                     <span className="stat__k">Encode</span>
-                    <span className="stat__v">
+                    <span
+                      className={`stat__v ${
+                        senderEncodeMs != null
+                          ? statHealth('encode', senderEncodeMs, displayStats.fps)
+                          : ''
+                      }`}
+                    >
                       {senderEncodeMs != null ? `${senderEncodeMs.toFixed(1)}ms` : '—'}
                     </span>
                   </span>
@@ -989,18 +1020,28 @@ export default function ControllerSession({
                 )}
                 <span className="stat">
                   <span className="stat__k">Network</span>
-                  <span className="stat__v">{displayStats.rttMs ?? '?'}ms</span>
+                  <span
+                    className={`stat__v ${
+                      displayStats.rttMs != null ? statHealth('net', displayStats.rttMs) : ''
+                    }`}
+                  >
+                    {displayStats.rttMs ?? '?'}ms
+                  </span>
                 </span>
                 {displayStats.jitterMs != null && (
                   <span className="stat">
                     <span className="stat__k">Jitter</span>
-                    <span className="stat__v">{displayStats.jitterMs}ms</span>
+                    <span className={`stat__v ${statHealth('jitter', displayStats.jitterMs)}`}>
+                      {displayStats.jitterMs}ms
+                    </span>
                   </span>
                 )}
                 {displayStats.lossPct != null && (
                   <span className="stat">
                     <span className="stat__k">Loss</span>
-                    <span className="stat__v">{displayStats.lossPct.toFixed(1)}%</span>
+                    <span className={`stat__v ${statHealth('loss', displayStats.lossPct)}`}>
+                      {displayStats.lossPct.toFixed(1)}%
+                    </span>
                   </span>
                 )}
                 <span className="stat">
@@ -1015,8 +1056,9 @@ export default function ControllerSession({
                 </span>
                 <span className="stat">
                   <span className="stat__k">Bitrate</span>
-                  {/* actual → BWE target: watch auto-bitrate adapt to the link. */}
-                  <span className="stat__v">
+                  {/* actual → BWE target: watch auto-bitrate adapt to the link.
+                      Amber tint when it climbs high (bufferbloat watch on a slow link). */}
+                  <span className={`stat__v ${statHealth('bitrate', displayStats.kbps / 1000)}`}>
                     {(displayStats.kbps / 1000).toFixed(1)}
                     {bweTargetKbps != null ? ` → ${(bweTargetKbps / 1000).toFixed(0)}` : ''} Mbps
                   </span>
