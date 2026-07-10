@@ -550,7 +550,7 @@
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
-  opacity: 0.45;
+  opacity: 0.5; /* status bar sits at 50% until hovered/opened (owner request) */
   transition: opacity 0.15s ease;
 }
 
@@ -569,6 +569,10 @@
   left: 12px;
   right: 12px;
   transform: none; /* stretch edge-to-edge instead of centered-auto width */
+  /* Center the child: the collapsed two-dot toggle sits top-CENTER (was left) while
+     the expanded panel is width:100% so it's unaffected. */
+  display: flex;
+  justify-content: center;
 }
 .session-float.is-fullscreen .session-float__panel {
   width: 100%;
