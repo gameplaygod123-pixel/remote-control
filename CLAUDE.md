@@ -798,6 +798,38 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
+IN PROGRESS (branch `feat/native-video`, PRERELEASE line v1.37.0-beta.x — NOT promoted):
+**120fps lever + auto-bitrate "max 50" + session-HUD redesign + titlebar-no-longer-covers-video.**
+- **`VIDEO_FPS` lever (beta.1):** `VIDEO_FPS=120` on the agent locks the native capturer to 120fps
+  (config.fps is a cap; GOP auto-scales as fps×2 to keep IDR ~2s). WC verified the capturer emits
+  120/121 steady @1440p, enc ~6ms. NOT baked (owner keeps it as an env lever). Real limiter at 120 =
+  LINK bandwidth, not GPU.
+- **Auto-bitrate "max 50" — the bufferbloat trap + fix (beta.2→beta.4):** owner asked "auto max 50".
+  FIRST set `BWE_CEIL`/`BWE_HEVC_CEIL` = 50 → WRONG: the capturer sets VBR **maxrate = target × the
+  launch maxrate:bitrate ratio (2.0)**, so BWE probing the target to ~49 drove the PEAK to ~98 Mbps
+  (WC saw ~98 live) = bufferbloat on the ~40 Mbps link. FIX (WC `987198c`, cherry-picked `652b4b5`):
+  **BWE ceiling = 25 (safe AVERAGE), `contract.maxBitrateKbps` = 50 (BURST cap)** → 25 avg × 2.0 =
+  50 peak = "max 50" done right. Rule saved: peak N ⇒ ceiling N÷ratio, never N.
+  [[loss-only-bwe-misses-bufferbloat]]. Agent stopgap for an old Mac build: capturer tune-file
+  maxrate=25000 (ratio 1:1) so the peak can't double.
+- **Session HUD redesign (controller, safe):** frosted glass (0.92→0.5 + blur), two-tier layout
+  (nav+connection-status top row via CSS `order`, telemetry bottom row), **health-colored** values
+  (`statHealth()`: Encode/Network/Jitter/Loss/Bitrate → green/amber/red; Res/FPS/Codec neutral),
+  amber left accent when NATIVE. Fullscreen: collapsed toggle centered; float 50% opacity at rest.
+  Owner picked "design 2 (two-tier) + design 4 (health color)" from a 5-option artifact.
+- **Titlebar no longer covers the remote screen (controller, native surface change):** the drag
+  titlebar was an absolute overlay over a full-window native video, so the top 34px of the remote
+  screen sat behind it. Now it's a real top strip and the video is INSET below it — `embed.swift`
+  reserves a top strip (`rvr_set_top_inset` C ABI + `setNativeTopInset` koffi binding, guarded),
+  main sets the inset on attach + fullscreen enter/leave (titlebar-px windowed / 0 fullscreen) and
+  `setAspectRatio(16/9, {height:34})` so the area UNDER the bar is exactly 16:9 (no letterbox, mouse
+  still 1:1). Title centered. dylib rebuilt by `start-controller.command` (Mac dev). Verified: Swift
+  compiles + `_rvr_set_top_inset` exported.
+- **STATUS:** shipped as prereleases beta.1–beta.4 (golden rule #1/#7 — 120fps/BWE touch the native
+  streaming path). **NEXT: owner/WC verify BWE-25 (no bufferbloat/freeze via `analyze-session.mjs`)
+  + 120fps feel → then promote full v1.37.0.** The UI changes are controller-only (Mac sees them on
+  relaunch); the agent installer only carries VIDEO_FPS + the corrected BWE ceiling.
+
 Latest release: **v1.36.0** — **Parsec-style controller X/tray + no orphaned processes +
 TURN relay + WebRTC-60fps fallback + elevation-handoff mode guard.** Off `feat/native-video`;
 WC-verified on real hardware (post-stress: `PersonalRemote.exe`=6 / `capturer.exe`=1 steady —
