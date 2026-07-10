@@ -79,8 +79,10 @@ export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   minBitrateKbps: 10_000,
   startBitrateKbps: 25_000,
   // maxBitrateKbps 40→50 (owner, 2026-07-10: "auto to max 50Mbps"). This is the capturer's
-  // VBR --maxrate (burst cap); raised to match the new BWE_CEIL 50 so the auto target can
-  // actually reach 50. Same ~40 Mbps-link bufferbloat caveat as receiver/bwe.ts — re-verify.
+  // VBR --maxrate = the BURST/peak cap. With startBitrateKbps 25 it makes a 2.0 target:max
+  // ratio, so the AIMD average (BWE_CEIL_KBPS 25) bursts to 50 on motion while the average
+  // stays a link-safe 25. NB: raising this to 50 while ALSO raising BWE_CEIL to 50 double-
+  // stacks to a 100 Mbps maxrate (WC saw it live) — keep BWE_CEIL at 25.
   maxBitrateKbps: 50_000,
   // 'composited' (reverted from the beta.4 'separate' experiment): ddagrab bakes
   // the OS cursor into the frame. beta.4 tried 'separate' (draw_mouse=0 + a native
