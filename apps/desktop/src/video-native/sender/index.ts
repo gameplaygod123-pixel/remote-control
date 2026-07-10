@@ -40,7 +40,6 @@ import {
   type FrameSource,
   type FrameSourceCallbacks
 } from './frameSource'
-import { NVENC_KEYFRAME_GOP } from './ffmpegArgs'
 import { isKeyframeRequest, parseRtcpFeedback } from './rtcpFeedback'
 import { logVideoSender } from '../../main/videoSenderLog'
 
@@ -252,6 +251,17 @@ function closeSession(): void {
   }
 }
 
+// VIDEO_FPS override — a test lever for a higher locked framerate (e.g. 120 on a
+// 120Hz+ display like the owner's ProMotion Mac + 144Hz source). config.fps is a CAP
+// the capturer/encoder honor (change-detection makes the real rate variable ≤ cap).
+// Unset / out-of-range => the baked DEFAULT_VIDEO_CONFIG value (60), so byte-identical
+// by default. Clamped to [30,144]. NB the real limiter at 120 is usually LINK bandwidth,
+// not the GPU — 120fps wants ~2× bits for equal per-frame quality (see BWE caps).
+function resolveFps(baseFps: number): number {
+  const v = Number(process.env.VIDEO_FPS)
+  return Number.isFinite(v) && v >= 30 && v <= 144 ? Math.round(v) : baseFps
+}
+
 function startSession(rawConfig: VideoConfig, deliveredIce?: IceServerConfig[]): void {
   closeSession()
   sessionCounter += 1
@@ -262,7 +272,11 @@ function startSession(rawConfig: VideoConfig, deliveredIce?: IceServerConfig[]):
   // Resolve the codec (VIDEO_CODEC=hevc opt-in) once and thread it through the whole
   // session via config.codec: the RTP track/packetizer, capturer/ffmpeg args, the AU
   // assembler NAL layout, and the reported stats all read it, so they can't disagree.
-  const config: VideoConfig = { ...rawConfig, codec: resolveCodec() }
+  const config: VideoConfig = {
+    ...rawConfig,
+    codec: resolveCodec(),
+    fps: resolveFps(rawConfig.fps)
+  }
   log(
     `startSession id=${id} ${config.width}x${config.height}@${config.fps} codec=${config.codec} startBr=${config.startBitrateKbps}kbps cursor=${config.cursor}`
   )
@@ -391,8 +405,10 @@ function startFrameSource(session: Session): void {
   // intra-refresh was reverted -- VideoToolbox can't decode the rolling-intra
   // P-frame structure (froze at every GOP length; WC, real hardware, beta.2/beta.3).
   // 2s halves v1.25.0's 1s (config.fps) keyframe-spike frequency and decodes fine.
-  // Harmless to the MF fallback (its argv has no -g).
-  const gop = NVENC_KEYFRAME_GOP
+  // Harmless to the MF fallback (its argv has no -g). Derived from fps (= fps*2) so the
+  // IDR interval stays ~2s at ANY framerate (VIDEO_FPS=120 => gop 240, still 2s, not 1s);
+  // byte-identical at 60 (60*2 = 120 = NVENC_KEYFRAME_GOP).
+  const gop = session.config.fps * 2
   const cb = {
     onAccessUnit: (au: { data: Buffer; keyframe: boolean }) => {
       if (current !== session) return
