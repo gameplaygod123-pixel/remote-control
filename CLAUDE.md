@@ -798,7 +798,44 @@ decodes + renders natively inside the Mac controller and feels like a normal app
   control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
   pref).
 
-Latest release: **v1.35.0** — **fix: native cursor SHAPE overlay dies after a re-pair
+Latest release: **v1.36.0** — **Parsec-style controller X/tray + no orphaned processes +
+TURN relay + WebRTC-60fps fallback + elevation-handoff mode guard.** Off `feat/native-video`;
+WC-verified on real hardware (post-stress: `PersonalRemote.exe`=6 / `capturer.exe`=1 steady —
+one root instance, tree collapses clean after Switch-mode/re-pair/lid-close, capturer never
+orphans) before this full release. Shipped via prereleases beta.1–beta.5 (golden rules #1/#7):
+- **beta.1 — controller X → background/tray (Parsec-style).** X during a live session → drop to
+  the main page; X on the main page → hide to tray (re-summonable via tray/dock/relaunch), keeps
+  running. Cross-platform. `setupControllerTray` mirrors the agent tray; `before-quit` sets
+  `isQuitting` so Cmd+Q/tray-Quit still really quit.
+- **beta.2 — TURN relay** for symmetric-NAT/CGNAT peers where native (libjuice/ndc) can't
+  hole-punch. ICE servers minted by the signaling server + delivered to the native
+  sender/receiver/input-helper (opt-in TURN via `PR_TURN_*`; default STUN-only). NB Cloudflare
+  TURN is INCOMPATIBLE with ndc/libjuice (omits ERROR-CODE on CreatePermission → `error code=0`)
+  — removed; a real coturn on a public-IP VM (owner pursuing Oracle Always Free) is the plan.
+  Also: receiver rebuilds the pc on a 2nd offer (ndc has no ICE restart).
+- **beta.3 — WebRTC fallback tuned for smooth 60fps** (`maintain-framerate`, unlock res,
+  start-bitrate 30 Mbps). Fallback only; native path unchanged. (WebRTC capture is
+  content-adaptive so it can't LOCK 60 like the native capturer — expected.)
+- **beta.4 — elevation-handoff app-mode guard** (WC fix `6a69572`, cherry-picked). On a box that
+  is BOTH agent+controller, every packaged medium launch bounced to the elevated agent task and
+  exited → picker/controller never showed ("app won't open"). Fix: only auto-elevate when
+  `APP_MODE !== 'controller'` AND saved mode is `agent` (read `%APPDATA%\desktop\app-mode.json`,
+  pre-`app.ready` safe).
+- **beta.5 — no orphaned "Personal Remote" processes.** On Windows a `fork()`ed child doesn't
+  auto-die when its parent (Electron main) dies via crash/force-kill/app.exit (elevation bounce,
+  relaunch, Switch-mode) → input-helper/video-sender/video-receiver orphaned + piled up (+ stray
+  capturer.exe). Fix: `process.on('disconnect', () => process.exit(0))` on all three helpers (the
+  fork-IPC parent-death idiom) → exactly one generation alive; capturer dies with the sender
+  (stdin EOF). Electron is inherently multi-process (~6-7) so it can't be one process like
+  Parsec's native code — but it no longer ACCUMULATES. Owner asked "why not rewrite in C++?" →
+  answer: we already ARE hybrid (native hot path = capturer.exe DXGI+NVENC, koffi input,
+  librvr.dylib VideoToolbox; Electron for the cold path = UI/signaling/auto-update/WebRTC). Full
+  C++ = throw away libwebrtc NAT traversal + all UI + cross-platform + auto-update for a cosmetic
+  single-process win; latency already captured. Not worth it for a solo project.
+
+**Rolls up v1.35.0 (cursor-shape re-pair fix) + the whole native-video streaming arc.**
+
+Prior release: **v1.35.0** — **fix: native cursor SHAPE overlay dies after a re-pair
 (lid-close/reconnect).** Off `feat/native-video`; WC-verified on real hardware (5/5 sessions
 after re-pair show the shapes) via prereleases beta.1 (channel-state onopen guard) + beta.2
 (the real fix) before this full release. Root cause: `startCursorCapture()` ran once per
