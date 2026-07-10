@@ -879,15 +879,30 @@ body:has(.session-shell.native-video),
   padding-left: 82px; /* clear the traffic lights on the left */
   padding-right: 12px;
   -webkit-app-region: drag;
-  /* Neutral VS Code-style dark chrome (Light/Glass overrides below). */
-  background: linear-gradient(to bottom, rgba(30, 30, 30, 0.94), rgba(30, 30, 30, 0.7));
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  /* Frosted glass so the video shows THROUGH the bar instead of the old near-solid
+     strip clipping the top of the remote screen (owner: "ตอนย่อจอมันบังภาพข้างบน").
+     Light/Glass overrides below. */
+  background: rgba(22, 23, 28, 0.4);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px) saturate(1.2);
   user-select: none;
   z-index: 8;
 }
 /* Fullscreen: no traffic lights to clear, so the app name starts at the edge. */
 .session-titlebar.is-fullscreen {
   padding-left: 16px;
+}
+/* Window title centered in the WINDOW (macOS convention), independent of the
+   traffic-light padding -- absolute-centered so it sits mid-bar, not pushed right. */
+.session-titlebar__title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 180px); /* never collide with the traffic lights */
+  -webkit-app-region: drag;
 }
 .session-titlebar__app {
   font-size: 12px;
@@ -908,8 +923,9 @@ body:has(.session-shell.native-video),
    Light / Glass stays consistent into a live session -- matches deviceList.css's
    --dl-* palette. data-theme lives on <html>, set by ThemeToggle/main themeConfig. */
 :root[data-theme='light'] .session-titlebar {
-  background: linear-gradient(to bottom, rgba(244, 237, 227, 0.96), rgba(244, 237, 227, 0.74));
+  background: rgba(244, 237, 227, 0.42);
   border-bottom-color: rgba(60, 40, 25, 0.12);
+  backdrop-filter: blur(16px) saturate(1.2);
 }
 :root[data-theme='light'] .session-titlebar__app {
   color: #cf5f26;

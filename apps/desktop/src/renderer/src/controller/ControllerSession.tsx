@@ -1128,10 +1128,12 @@ export default function ControllerSession({
           fullscreen (the OS provides its own chrome there). */}
       {!fullscreen && (
         <div className="session-titlebar">
-          <span className="session-titlebar__app">Personal Remote</span>
-          {(nameDraft || deviceId) && (
-            <span className="session-titlebar__device">· {nameDraft || deviceId}</span>
-          )}
+          <span className="session-titlebar__title">
+            <span className="session-titlebar__app">Personal Remote</span>
+            {(nameDraft || deviceId) && (
+              <span className="session-titlebar__device">· {nameDraft || deviceId}</span>
+            )}
+          </span>
         </div>
       )}
 
