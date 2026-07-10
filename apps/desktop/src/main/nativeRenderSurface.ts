@@ -18,6 +18,7 @@ import type { VideoCodec } from '../video-native/shared/contract'
 type AttachFn = (viewPtr: bigint) => void
 type PushFn = (data: Buffer, len: number) => void
 type SetCodecFn = (codec: number) => void
+type SetTopInsetFn = (inset: number) => void
 type DetachFn = () => void
 
 let loaded = false
@@ -25,6 +26,7 @@ let available = false
 let attachFn: AttachFn | null = null
 let pushFn: PushFn | null = null
 let setCodecFn: SetCodecFn | null = null
+let setTopInsetFn: SetTopInsetFn | null = null
 let detachFn: DetachFn | null = null
 
 function resolveLibPath(): string | null {
@@ -61,6 +63,13 @@ function ensureLoaded(): boolean {
       setCodecFn = lib.func('void rvr_set_codec(int32_t codec)') as unknown as SetCodecFn
     } catch {
       setCodecFn = null
+    }
+    // Optional too (older dylibs predate it) -- a stale librvr.dylib without the
+    // symbol just draws full-window (video behind the titlebar, the old behavior).
+    try {
+      setTopInsetFn = lib.func('void rvr_set_top_inset(int32_t inset)') as unknown as SetTopInsetFn
+    } catch {
+      setTopInsetFn = null
     }
     detachFn = lib.func('void rvr_detach()') as unknown as DetachFn
     available = true
@@ -104,6 +113,17 @@ export function pushNativeAccessUnit(au: Buffer): void {
 export function setNativeCodec(codec: VideoCodec): void {
   if (!ensureLoaded() || !setCodecFn) return
   setCodecFn(codec === 'hevc' ? 1 : 0)
+}
+
+/**
+ * Reserve a top strip (CSS px == points) for the web session titlebar so the video
+ * draws BELOW it, not behind it. Pass the titlebar height when windowed, 0 in
+ * fullscreen. No-op if the dylib is unavailable or predates rvr_set_top_inset (it
+ * then draws full-window as before).
+ */
+export function setNativeTopInset(px: number): void {
+  if (!ensureLoaded() || !setTopInsetFn) return
+  setTopInsetFn(Math.max(0, Math.round(px)))
 }
 
 /** Remove the video subview (session end / receiver-down). No-op if unavailable. */

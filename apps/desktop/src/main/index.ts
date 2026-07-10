@@ -56,6 +56,7 @@ import {
   detachNativeSurface,
   pushNativeAccessUnit,
   setNativeCodec,
+  setNativeTopInset,
   nativeSurfaceAvailable
 } from './nativeRenderSurface'
 import type { VideoSenderHost, VideoReceiverHost } from '../video-native/shared/ipc'
@@ -64,6 +65,12 @@ import { getVideoPipeline, saveVideoPipeline, nativePipelineEnabled } from './pi
 import type { VideoPipeline } from '../video-native/shared/contract'
 
 export type { AppMode }
+
+// Height (px == macOS points) of the web session titlebar (.session-titlebar in
+// app.css). The native video surface + the window aspect lock reserve this strip at
+// the top (windowed) so the video sits BELOW the bar, not clipped behind it. Keep in
+// sync with the CSS height.
+const SESSION_TITLEBAR_PX = 34
 
 // Agent mode runs on the Windows target (captures screen, injects input).
 // Controller mode runs on the Mac (views the stream, sends input).
@@ -368,8 +375,16 @@ function createWindow(appMode: AppMode): void {
     // the native pipeline being enabled so the default WebRTC window is
     // byte-identical.
     if (nativePipelineEnabled()) {
-      win.on('enter-full-screen', () => win.webContents.send('window:fullscreen', true))
-      win.on('leave-full-screen', () => win.webContents.send('window:fullscreen', false))
+      // Fullscreen hides the web titlebar, so the video reclaims the whole window
+      // (inset 0); windowed reserves the titlebar strip so the bar doesn't clip it.
+      win.on('enter-full-screen', () => {
+        win.webContents.send('window:fullscreen', true)
+        setNativeTopInset(0)
+      })
+      win.on('leave-full-screen', () => {
+        win.webContents.send('window:fullscreen', false)
+        setNativeTopInset(SESSION_TITLEBAR_PX)
+      })
     }
   }
 }
@@ -611,15 +626,21 @@ app.whenReady().then(async () => {
         if (!surfaceAttached && controllerWindow && !controllerWindow.isDestroyed()) {
           surfaceAttached = attachNativeSurface(controllerWindow.getNativeWindowHandle())
           if (surfaceAttached) {
+            const fullscreen = controllerWindow.isFullScreen()
+            // Reserve the titlebar strip at the top so the native video draws below
+            // the bar (0 in fullscreen where there's no bar).
+            setNativeTopInset(fullscreen ? 0 : SESSION_TITLEBAR_PX)
             // Lock the session window to the remote's aspect (1920x1080 agent) so
-            // the in-window video fills it with no letterbox + the input mapping
-            // is pixel-exact. Released on detach. Also snap the CURRENT size to
-            // 16:9 once (setAspectRatio only constrains future user-resizes), so a
-            // windowed session isn't letterboxed with black bars on connect.
-            controllerWindow.setAspectRatio(16 / 9)
-            if (!controllerWindow.isFullScreen()) {
+            // the in-window video fills it with no letterbox + the input mapping is
+            // pixel-exact. extraSize tells Electron the titlebar strip is NOT video,
+            // so it locks (contentHeight - titlebar) to 16:9 -> the video area under
+            // the bar is exactly 16:9 (no letterbox). Released on detach. Also snap
+            // the CURRENT size once (setAspectRatio only constrains future resizes)
+            // so a windowed session isn't letterboxed with black bars on connect.
+            controllerWindow.setAspectRatio(16 / 9, { width: 0, height: SESSION_TITLEBAR_PX })
+            if (!fullscreen) {
               const [w, h] = controllerWindow.getContentSize()
-              const targetH = Math.round((w * 9) / 16)
+              const targetH = Math.round((w * 9) / 16) + SESSION_TITLEBAR_PX
               if (Math.abs(targetH - h) > 2) controllerWindow.setContentSize(w, targetH)
             }
           }
