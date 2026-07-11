@@ -143,6 +143,8 @@ public:
         lockedCadence_ = o.lockedCadence;
         lockedIdleMs_ = o.lockedIdleMs;
         desktopFollow_ = o.desktopFollow;
+        // --output pipe:<name>: same stdout/stdin contract moved onto one duplex named pipe.
+        if (o.output.rfind("pipe:", 0) == 0) { pipeOutput_ = true; pipeName_ = o.output.substr(5); }
     }
     ~DuplCapturer() { Release(); if (currentDesktop_) { CloseDesktop(currentDesktop_); currentDesktop_ = nullptr; } }
 
@@ -153,13 +155,29 @@ public:
             if (streamStdout_) {
                 _setmode(_fileno(stdout), _O_BINARY);  // raw bytes, no CRLF translation
                 encFile_ = stdout;
+            } else if (pipeOutput_) {
+                // Fix A: the user-session sender HOSTS the pipe; we (SYSTEM) CONNECT as client.
+                pipeHandle_ = connectPipe(pipeName_);
+                if (pipeHandle_ == INVALID_HANDLE_VALUE) return 5;  // logged inside
+                // Wrap the duplex handle as a FILE* so the encoder's fwrite/fflush path is
+                // byte-identical to stdout mode — only the sink handle changes. The control
+                // thread ReadFile's the SAME handle (opposite direction on the duplex pipe).
+                int fd = _open_osfhandle((intptr_t)pipeHandle_, _O_BINARY);
+                if (fd == -1) { CloseHandle(pipeHandle_); Log("fatal: _open_osfhandle failed"); return 5; }
+                encFile_ = _fdopen(fd, "wb");
+                if (!encFile_) { _close(fd); Log("fatal: _fdopen failed"); return 5; }
+                Log("pipe: connected -> %s", pipeName_.c_str());
             } else {
                 encFile_ = fopen(opt_.output.c_str(), "wb");
                 if (!encFile_) { Log("fatal: cannot open %s for writing", opt_.output.c_str()); return 3; }
             }
             if (!setupEncoder()) return 4;
             lastEncode_ = Clock::now();
-            if (streamStdout_) { std::thread(&DuplCapturer::stdinLoop, this).detach(); }
+            // Control reader (I / L / B<kbps>): stdin in stdout mode, the pipe handle in pipe mode.
+            // A failed/EOF read = the sender closed the pipe = our death signal (no parent-death,
+            // per the contract) -> shutdownRequested_ -> exit 0, so no orphaned capturer.
+            if (streamStdout_) { std::thread(&DuplCapturer::controlLoop, this, GetStdHandle(STD_INPUT_HANDLE), false).detach(); }
+            else if (pipeOutput_) { std::thread(&DuplCapturer::controlLoop, this, pipeHandle_, true).detach(); }
             std::string floorDesc = floorFps_ > 0
                 ? std::to_string(floorFps_) + "fps/" + std::to_string(floorDecayMs_) + "ms" : "off";
             Log("encoding -> %s  %dx%d  fps<=%d  VBR %d/%d kbps  vbv %dms  gop %d frames (~%.1fs)  no-intra-refresh  floor=%s",
@@ -182,6 +200,7 @@ public:
 
         for (;;) {
             if (shutdownRequested_.load()) { Log("stdin closed -> shutdown"); break; }
+            if (encFile_ && ferror(encFile_)) { Log("output write error (broken pipe?) -> shutdown"); break; }
             const auto now = Clock::now();
             if (opt_.durationSec > 0 &&
                 std::chrono::duration_cast<std::chrono::seconds>(now - startT).count() >= opt_.durationSec) break;
@@ -324,18 +343,35 @@ public:
 private:
     static constexpr UINT kAcquireTimeoutMs = 250;  // idle wakes ~4x/s to still log
 
-    // stdin control bytes (from the sender): 'I'/'i' = force IDR next frame (PLI, bare byte);
-    // 'L'/'l' = LTR-P recovery (cheap resync from an older long-term ref, no IDR burst);
-    // 'B'<ascii-kbps>'\n' = set the live VBR bitrate (BWE feedback). A tiny state machine
-    // handles ReadFile chunking: 'B' opens a digit-accumulate mode ended by any non-digit
+    // Control bytes (from the sender, over stdin OR the duplex pipe): 'I'/'i' = force IDR next
+    // frame (PLI, bare byte); 'L'/'l' = LTR-P recovery (cheap resync from an older long-term ref,
+    // no IDR burst); 'B'<ascii-kbps>'\n' = set the live VBR bitrate (BWE feedback). A tiny state
+    // machine handles read chunking: 'B' opens a digit-accumulate mode ended by any non-digit
     // (the '\n'); the terminator is re-scanned so a following 'I'/'L'/'B' still registers.
-    void stdinLoop() {
-        HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    //
+    // isPipe: the pipe is ONE synchronous duplex handle shared with the video WriteFile; a blocking
+    // ReadFile would serialize with (starve) the video writes. So peek non-blocking and only read
+    // when control bytes are actually waiting (control is low-rate). A broken pipe = the sender
+    // closed = our death signal (no parent-death, per the 2b contract) -> shutdown -> exit 0.
+    void controlLoop(HANDLE h, bool isPipe) {
         char buf[64]; DWORD n = 0;
         std::string num; bool inBitrate = false;
         for (;;) {
-            BOOL ok = ReadFile(h, buf, sizeof(buf), &n, nullptr);
-            if (!ok || n == 0) { shutdownRequested_.store(true); return; }  // EOF / closed pipe
+            if (isPipe) {
+                DWORD avail = 0;
+                if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) {
+                    DWORD e = GetLastError();
+                    if (e == ERROR_BROKEN_PIPE || e == ERROR_PIPE_NOT_CONNECTED || e == ERROR_INVALID_HANDLE) {
+                        shutdownRequested_.store(true); return;  // sender closed = death
+                    }
+                    Sleep(20); continue;
+                }
+                if (avail == 0) { Sleep(20); continue; }
+                DWORD toRead = avail > sizeof(buf) ? (DWORD)sizeof(buf) : avail;
+                if (!ReadFile(h, buf, toRead, &n, nullptr) || n == 0) { shutdownRequested_.store(true); return; }
+            } else {
+                if (!ReadFile(h, buf, sizeof(buf), &n, nullptr) || n == 0) { shutdownRequested_.store(true); return; }  // stdin EOF
+            }
             for (DWORD i = 0; i < n; ++i) {
                 char c = buf[i];
                 if (inBitrate && c >= '0' && c <= '9') { if (num.size() < 9) num.push_back(c); continue; }
@@ -401,6 +437,7 @@ private:
 
         for (;;) {
             if (shutdownRequested_.load()) { Log("stdin closed -> shutdown"); break; }
+            if (encFile_ && ferror(encFile_)) { Log("output write error (broken pipe?) -> shutdown"); break; }
             if (opt_.durationSec > 0 &&
                 duration_cast<seconds>(Clock::now() - startT).count() >= opt_.durationSec) break;
 
@@ -535,6 +572,30 @@ private:
         if (encoding_) setupEncoder();
     }
 
+    // Connect to the sender-hosted duplex named pipe as a CLIENT (Fix A). Retries ~200ms up to
+    // 10s (the sender may host slightly after the launcher spawns us — same race as the Track 2
+    // input pipe). Give-up -> INVALID + loud log; the sender then falls back to spawning the
+    // in-session capturer child so it can never black-screen.
+    HANDLE connectPipe(const std::string& name) {
+        const auto deadline = Clock::now() + std::chrono::seconds(10);
+        for (;;) {
+            HANDLE h = CreateFileA(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                   OPEN_EXISTING, 0, nullptr);
+            if (h != INVALID_HANDLE_VALUE) {
+                DWORD mode = PIPE_READMODE_BYTE;  // byte-stream both ways (matches the Node host)
+                SetNamedPipeHandleState(h, &mode, nullptr, nullptr);
+                return h;
+            }
+            DWORD e = GetLastError();
+            if (Clock::now() >= deadline) {
+                Log("fatal: pipe connect failed %lu (%s)", (unsigned long)e, name.c_str());
+                return INVALID_HANDLE_VALUE;
+            }
+            if (e == ERROR_PIPE_BUSY) WaitNamedPipeA(name.c_str(), 200);
+            else Sleep(200);
+        }
+    }
+
     // SECURE-DESKTOP follow (Part 2a): point THIS thread at the desktop currently receiving user
     // input (Default in normal use; Winlogon during UAC / lock / Ctrl+Alt+Del). DXGI Desktop
     // Duplication can only duplicate the desktop the calling thread is attached to, and attaching
@@ -602,7 +663,10 @@ private:
         hr = output1->DuplicateOutput(device_.Get(), &dupl_);
         if (FAILED(hr)) return fail("DuplicateOutput", hr);
 
-        Log("init: output=%u  %dx%d  (duplication ready)", outputIndex_, width_, height_);
+        // 2a: log the desktop on EVERY successful (re)init so Default<->Winlogon switches are
+        // visible in 2c, not only on a name change.
+        Log("init: output=%u  %dx%d  desktop=%s  (duplication ready)", outputIndex_, width_, height_,
+            desktopFollow_ ? (currentDesktopName_.empty() ? "?" : currentDesktopName_.c_str()) : "n/a");
         return true;
     }
 
@@ -655,6 +719,11 @@ private:
     bool desktopFollow_ = false;
     HDESK currentDesktop_ = nullptr;      // the input desktop this thread is attached to (owned)
     std::string currentDesktopName_;      // last-logged desktop name (Default / Winlogon)
+
+    // pipe output (Part 2b): --output pipe:<name>. The user-session sender HOSTS, we CONNECT.
+    bool pipeOutput_ = false;
+    std::string pipeName_;
+    HANDLE pipeHandle_ = INVALID_HANDLE_VALUE;  // owned by encFile_'s fd after _open_osfhandle
 
     // control channel (set from the stdin thread)
     std::atomic<bool> idrRequested_{false};
@@ -724,7 +793,9 @@ int main(int argc, char** argv) {
         else if (a == "--duration") next(o.durationSec);
         else if (a == "--help" || a == "-h") {
             printf("dxgi-capturer (Step 3 custom DXGI capturer)\n"
-                   "  --output stdout|<path>   H.264 Annex-B to stdout (default) or a file\n"
+                   "  --output stdout|<path>|pipe:<name>  H.264 Annex-B to stdout (default), a file,\n"
+                   "                           or a duplex named pipe the sender HOSTS (\\\\.\\pipe\\...);\n"
+                   "                           pipe carries video out + I/L/B control in (same contract)\n"
                    "  --monitor <idx>          DXGI output index (default 0)\n"
                    "  --fps <n>                framerate cap (default 60)\n"
                    "  --bitrate <kbps>         NVENC VBR target (default 25000)\n"
