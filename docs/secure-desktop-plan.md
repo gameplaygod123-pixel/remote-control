@@ -161,6 +161,57 @@ SECURE-DESKTOP CAPABLE (Track 2 installed + enabled):
   (spawn child) → the normal path can never black-screen because of this feature.
 - No receiver changes. No `contract.ts` codec change.
 
+### 2b — pipe/CLI contract (FROZEN — WC builds the capturer against this)
+
+`capturer.exe` already speaks a stdout/stdin contract (video on stdout, `I`/`L`/`B<kbps>`
+on stdin — see `capturerArgs.ts` + `CapturerFrameSource`). Pipe mode is the SAME contract
+with the sink/source moved from stdout/stdin to one duplex named pipe. Minimal change.
+
+**CLI:** add `--output pipe:<name>` alongside `stdout` / `<file>`. `<name>` is a full
+Windows pipe path the sender passes, e.g. `\\.\pipe\pr-capturer-<id>`. All other flags
+(`--monitor --codec --fps --bitrate --maxrate --gop --vbv-ms --desktop-follow`) unchanged.
+
+**Roles (Fix A — do not invert):** the **user-session sender HOSTS** the pipe
+(`CreateNamedPipe`), the **SYSTEM capturer CONNECTS** (`CreateFile`). SYSTEM can open a
+user-owned pipe; a SYSTEM-hosted pipe DACL-denies the medium sender (the proven Track 2
+lesson). Pipe type = **duplex, BYTE mode** (`PIPE_ACCESS_DUPLEX`,
+`PIPE_TYPE_BYTE|PIPE_READMODE_BYTE`), one instance.
+
+**Bytes on the connected pipe:**
+- **Capturer → sender (pipe WRITE) = today's stdout, byte-identical:** Annex-B, 4-byte
+  start codes, in-band SPS/PPS before every IDR, flush per frame, first frame IDR. Only
+  the sink handle changes.
+- **Sender → capturer (pipe READ) = today's stdin, byte-identical:** `I` (force IDR),
+  `B<kbps>\n` (set bitrate, newline-terminated), `L` (LTR, off by default). Point the
+  existing stdin-reader thread at the pipe handle.
+
+**Connect race / retry:** capturer retries `CreateFile` ~200ms×up-to-10s (the sender may
+host slightly after the launcher spawns it — same race as the Track 2 input pipe); on
+give-up → exit non-zero + `[capturer] pipe connect failed <GetLastError>`. Sender
+`ConnectNamedPipe` with ~10s timeout; no connect → close pipe → **fall back to spawning
+the in-session `CapturerFrameSource` child** (today's path) so the SYSTEM path can never
+black-screen.
+
+**No-orphan / die-with-parent:** the SYSTEM capturer is NOT the sender's child, so it gets
+no parent-death signal ([[forked-helpers-die-with-parent]]). **The broken pipe IS its
+death signal** — a WRITE/READ failing with `ERROR_BROKEN_PIPE`/`ERROR_NO_DATA` (sender
+closed the pipe = session end or sender crash) → capturer exits 0 promptly. This is what
+guarantees no orphaned `capturer.exe`; verify under a sender-kill in 2d.
+
+**Logging:** unchanged `[capturer]` to stderr; the launcher redirects it to
+`C:\Windows\Temp\pr-capturer-system.log` (SYSTEM's TEMP, no console). Per WC's 2a note:
+**log the desktop name on EVERY re-init (not just on change) + log `OpenInputDesktop`/
+`SetThreadDesktop` failures loudly** so the Default↔Winlogon switches are visible in 2c.
+
+**Open (joint, decide in 2b — not blocking the capturer's pipe I/O):** how the
+user-session sender triggers the SYSTEM launcher to spawn the capturer with `<name>`.
+Recommend **on-demand** (spawn per session, exit on pipe-broken) over an always-idle
+capturer; mechanism follows Fix A too (sender hosts a small request pipe, the SYSTEM
+launcher connects + reads spawn requests). For a **standalone 2b test** Mac-Claude will
+hand WC a tiny Node pipe-host harness (`dev/system-capturer-host.mjs`: hosts `<name>`,
+dumps the WRITE stream to `.h264`, lets you type `I`/`B`) so the pipe path is proven
+before the real sender is wired.
+
 ### Phasing (prerelease per substep, golden rule #1)
 - **2a** — capturer `--desktop-follow` + `OpenInputDesktop`/`SetThreadDesktop` on
   ACCESS_LOST; run it **standalone as SYSTEM** (via `PsExec -s -i 1` or the task) and
