@@ -40,6 +40,10 @@ import {
   type FrameSource,
   type FrameSourceCallbacks
 } from './frameSource'
+import {
+  SystemCapturerFrameSource,
+  type SystemCapturerCallbacks
+} from './systemCapturerFrameSource'
 import { isKeyframeRequest, parseRtcpFeedback } from './rtcpFeedback'
 import { logVideoSender } from '../../main/videoSenderLog'
 
@@ -167,6 +171,19 @@ function resolveFfmpegTuning(): { preset?: string; bitrateKbps?: number } {
 // Prefer an explicit path (dev), else the bundled binary under resources.
 function capturerEnabled(): boolean {
   return process.env.VIDEO_CAPTURER !== '0'
+}
+
+// ── Secure-desktop (SYSTEM capturer) opt-in ───────────────────────────────────
+// The secure desktop (UAC / lock / Ctrl+Alt+Del) can only be captured by a SYSTEM
+// process (DXGI Duplication of Winlogon needs SetThreadDesktop as SYSTEM). We can't
+// spawn that ourselves; the Track 2 SYSTEM launcher does. So when this is on, the
+// sender HOSTS the video + request pipes and the launcher spawns capturer.exe as
+// SYSTEM (see SystemCapturerFrameSource + docs/secure-desktop-plan.md).
+// OPT-IN, default OFF -> byte-identical (no pipes hosted; the launcher stays
+// input-only). If no SYSTEM capturer connects, we fall back to the in-session
+// capturer/ffmpeg chain, so the normal desktop can never black-screen because of this.
+function secureDesktopEnabled(): boolean {
+  return process.env.VIDEO_SECURE_DESKTOP === '1'
 }
 
 // ── Step: H.265 (HEVC) default ────────────────────────────────────────────────
@@ -465,31 +482,62 @@ function startFrameSource(session: Session): void {
 
   // Step 3: opt-in custom DXGI capturer with silent ffmpeg fallback (a capturer that
   // isn't present, or can't run, must never black-screen -- degrade to ffmpeg).
-  if (capturerEnabled()) {
-    const capturerPath = resolveCapturerPath()
-    if (capturerPath) {
-      log(`capturer: ${capturerPath}`)
-      const tuning = resolveFfmpegTuning() // shares VIDEO_NVENC_BITRATE_KBPS sweep
-      let fellBack = false
-      const wrapped: FrameSourceCallbacks = {
-        onAccessUnit: cb.onAccessUnit,
-        onLog: cb.onLog,
-        onFatal: (msg) => {
-          if (fellBack || current !== session) return
-          fellBack = true
-          log(`capturer failed (${msg}) -> falling back to ffmpeg`)
-          startFfmpeg()
+  const startCapturerOrFfmpeg = (): void => {
+    if (capturerEnabled()) {
+      const capturerPath = resolveCapturerPath()
+      if (capturerPath) {
+        log(`capturer: ${capturerPath}`)
+        const tuning = resolveFfmpegTuning() // shares VIDEO_NVENC_BITRATE_KBPS sweep
+        let fellBack = false
+        const wrapped: FrameSourceCallbacks = {
+          onAccessUnit: cb.onAccessUnit,
+          onLog: cb.onLog,
+          onFatal: (msg) => {
+            if (fellBack || current !== session) return
+            fellBack = true
+            log(`capturer failed (${msg}) -> falling back to ffmpeg`)
+            startFfmpeg()
+          }
         }
+        session.source = new CapturerFrameSource(capturerPath, session.config, gop, wrapped, {
+          bitrateKbps: tuning.bitrateKbps
+        })
+        session.source.start()
+        return
       }
-      session.source = new CapturerFrameSource(capturerPath, session.config, gop, wrapped, {
-        bitrateKbps: tuning.bitrateKbps
-      })
-      session.source.start()
-      return
+      log('VIDEO_CAPTURER=1 but capturer.exe not found -> using ffmpeg')
     }
-    log('VIDEO_CAPTURER=1 but capturer.exe not found -> using ffmpeg')
+    startFfmpeg()
   }
-  startFfmpeg()
+
+  // Secure-desktop path (opt-in): host the video + request pipes for the Track 2
+  // SYSTEM launcher, which spawns capturer.exe as SYSTEM so it can follow the desktop
+  // into Winlogon (UAC / lock). If no SYSTEM capturer connects (launcher absent /
+  // disabled) or a pipe can't be hosted, fall back to the in-session capturer/ffmpeg
+  // chain -- the normal desktop can never black-screen because of this.
+  if (secureDesktopEnabled()) {
+    log('VIDEO_SECURE_DESKTOP=1 -> hosting pipes for the SYSTEM (secure-desktop) capturer')
+    const tuning = resolveFfmpegTuning()
+    let fellBack = false
+    const wrapped: SystemCapturerCallbacks = {
+      onAccessUnit: cb.onAccessUnit,
+      onLog: cb.onLog,
+      onFatal: cb.onFatal,
+      onUnavailable: (reason) => {
+        if (fellBack || current !== session) return
+        fellBack = true
+        log(`system capturer unavailable (${reason}) -> in-session capturer/ffmpeg`)
+        startCapturerOrFfmpeg()
+      }
+    }
+    session.source = new SystemCapturerFrameSource(session.config, gop, wrapped, {
+      bitrateKbps: tuning.bitrateKbps
+    })
+    session.source.start()
+    return
+  }
+
+  startCapturerOrFfmpeg()
 }
 
 function reportStats(session: Session): void {
