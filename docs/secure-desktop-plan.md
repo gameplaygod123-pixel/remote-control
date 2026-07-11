@@ -212,6 +212,55 @@ hand WC a tiny Node pipe-host harness (`dev/system-capturer-host.mjs`: hosts `<n
 dumps the WRITE stream to `.h264`, lets you type `I`/`B`) so the pipe path is proven
 before the real sender is wired.
 
+### 2b — spawn-trigger contract (FROZEN 2026-07-11, WC's proposal + refinements)
+
+How the user-session sender asks the SYSTEM launcher to spawn the capturer. Reuses the
+Track 2 primitives (WC's proposal — accepted).
+
+**Request pipe (Fix A):** the **sender HOSTS** `\\.\pipe\personal-remote-capturer-spawn`,
+the **SYSTEM launcher CONNECTS** (polls on its existing ~2s `service.ts` tick). Framing =
+`input-service/protocol.ts` `encodeFrame`/`FrameDecoder` (4-byte LE length + UTF-8 JSON).
+**One frame = one spawn request.**
+
+**Request JSON (STRUCTURED — the launcher validates each field and builds the argv ITSELF;
+it must NOT accept a raw command string from the pipe):**
+```json
+{ "pipeName": "\\\\.\\pipe\\pr-capturer-<id>", "monitor": 0, "codec": "h264",
+  "fps": 60, "bitrate": 25000, "maxrate": 50000, "gop": 120, "desktopFollow": true }
+```
+- **Validation (launcher, before spawn — a same-user squatter could write this pipe):**
+  `pipeName` must match `^\\\\\.\\pipe\\pr-capturer-[A-Za-z0-9._-]+$`; `codec` ∈
+  `{"h264","h265"}`; `monitor`/`fps`/`bitrate`/`maxrate`/`gop` positive ints clamped to
+  sane ranges; `desktopFollow` bool. Invalid → log + skip, never spawn. The exe is always
+  the launcher's own resolved `capturer.exe`, never from the request.
+- **No arg drift:** the fields are 1:1 with `buildCapturerArgs`. Mac ships
+  `buildCapturerSpawnRequest(config, opts)` colocated with `capturerArgs.ts`, derived from
+  the SAME config/BWE values, so the SYSTEM path's argv == the user path's argv exactly.
+- **`<id>`:** the **sender** generates a unique `pipeName`, hosts the video pipe, and puts
+  it in the request. ✔
+
+**Launcher action:** `spawnCapturerInSession(activeSessionId, request)` →
+`createProcessInSession(capturerExe, "--output pipe:<pipeName> --desktop-follow --monitor N
+--codec X --fps N --bitrate N --maxrate N --gop N", activeSessionId)`. Capturer connects the
+video pipe → streams.
+
+**Logging:** capturer stderr → `C:\Users\Public\personal-remote-capturer-system.log`
+(world-readable so the medium helper/owner can read it — accepted over `C:\Windows\Temp`,
+which SYSTEM's DACL hides from the user).
+
+**Lifecycle / no-orphan (no kill message needed):** session end/crash → sender closes the
+VIDEO pipe → capturer hits broken pipe → exit 0 (WC verified ~45ms). Two refinements:
+- The **sender keeps the REQUEST pipe hosted for the whole session** (close at session end),
+  so a slow ~2s launcher poll can't miss the request via a write-then-close race.
+- The sender **hosts the request pipe + writes the request EARLY** (at session setup, in
+  parallel with ICE negotiation) so the ~2s poll overlaps negotiation instead of adding
+  ~2s to first-frame.
+
+**Active-session change re-honor = 2d (not in this freeze):** launcher caches the last
+valid request and re-spawns into the new active session on a session switch (rare for a
+solo user; Default↔Winlogon within one session is handled by the capturer's own
+desktop-follow, no re-spawn).
+
 ### Phasing (prerelease per substep, golden rule #1)
 - **2a** — capturer `--desktop-follow` + `OpenInputDesktop`/`SetThreadDesktop` on
   ACCESS_LOST; run it **standalone as SYSTEM** (via `PsExec -s -i 1` or the task) and
