@@ -208,6 +208,18 @@ public:
             if (opt_.durationSec > 0 &&
                 std::chrono::duration_cast<std::chrono::seconds>(now - startT).count() >= opt_.durationSec) break;
 
+            // 2d: proactive Default<->Winlogon switch detection (see lockedLoop) — re-init + IDR.
+            if (desktopFollow_ &&
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - lastDesktopProbe_).count() >= 200) {
+                lastDesktopProbe_ = now;
+                std::string cur = probeInputDesktopName();
+                if (!cur.empty() && cur != currentDesktopName_) {
+                    Log("desktop-follow: input desktop '%s' -> '%s' (proactive) -> re-init",
+                        currentDesktopName_.empty() ? "?" : currentDesktopName_.c_str(), cur.c_str());
+                    recover(); idrRequested_.store(true); continue;
+                }
+            }
+
             // BWE: apply a pending live bitrate change on THIS (encode) thread — NVENC session
             // calls aren't thread-safe, so the stdin thread only parks the value. maxrate keeps
             // the sender's original target:max ratio. No respawn, no IDR.
@@ -444,6 +456,24 @@ private:
             if (opt_.durationSec > 0 &&
                 duration_cast<seconds>(Clock::now() - startT).count() >= opt_.durationSec) break;
 
+            // 2d: proactively catch a Default<->Winlogon switch (lock / UAC) within ~200ms rather
+            // than waiting ~9s for DXGI to raise ACCESS_LOST on the now-hidden desktop (the gap
+            // measured in 2a). On a change: re-attach + re-duplicate NOW and force an IDR so the
+            // receiver re-syncs immediately (no wait for the ~2s periodic keyframe).
+            if (desktopFollow_) {
+                auto pnow = Clock::now();
+                if (duration_cast<milliseconds>(pnow - lastDesktopProbe_).count() >= 200) {
+                    lastDesktopProbe_ = pnow;
+                    std::string cur = probeInputDesktopName();
+                    if (!cur.empty() && cur != currentDesktopName_) {
+                        Log("desktop-follow: input desktop '%s' -> '%s' (proactive) -> re-init",
+                            currentDesktopName_.empty() ? "?" : currentDesktopName_.c_str(), cur.c_str());
+                        recover(); idrRequested_.store(true);
+                        haveStaged = false; nextTick = Clock::now() + tickDur; continue;
+                    }
+                }
+            }
+
             // BWE: apply a pending live bitrate change on THIS (encode) thread.
             { int pb = pendingBitrateKbps_.exchange(-1);
               if (pb > 0) { int newMax = (int)(pb * bitrateMaxRatio_ + 0.5); encoder_.SetBitrate(pb, newMax); } }
@@ -633,6 +663,19 @@ private:
         return true;
     }
 
+    // Read-only probe of the CURRENT input desktop's name (no SetThreadDesktop). Lets the
+    // capture loop notice a Default<->Winlogon switch PROACTIVELY (~200ms) instead of waiting
+    // ~9s for DXGI to raise ACCESS_LOST on the now-hidden desktop (the gap measured in 2a).
+    // Empty string on failure (don't act on it — the eventual ACCESS_LOST still recovers).
+    std::string probeInputDesktopName() {
+        HDESK h = OpenInputDesktop(0, FALSE, GENERIC_READ);
+        if (!h) return std::string();
+        char name[128] = {0}; DWORD len = 0;
+        GetUserObjectInformationA(h, UOI_NAME, name, sizeof(name) - 1, &len);
+        CloseDesktop(h);
+        return std::string(name);
+    }
+
     bool Init(bool quiet) {
         Release();
         auto fail = [&](const char* w, HRESULT h) { if (!quiet) LogHr(w, h); return false; };
@@ -722,6 +765,7 @@ private:
     bool desktopFollow_ = false;
     HDESK currentDesktop_ = nullptr;      // the input desktop this thread is attached to (owned)
     std::string currentDesktopName_;      // last-logged desktop name (Default / Winlogon)
+    Clock::time_point lastDesktopProbe_{}; // throttle for the proactive input-desktop-change poll (2d)
 
     // pipe output (Part 2b): --output pipe:<name>. The user-session sender HOSTS, we CONNECT.
     bool pipeOutput_ = false;
