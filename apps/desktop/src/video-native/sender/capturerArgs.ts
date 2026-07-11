@@ -60,6 +60,53 @@ function codecArg(codec: VideoConfig['codec']): 'h264' | 'h265' {
 }
 
 /**
+ * Structured spawn request for the SECURE-DESKTOP SYSTEM capturer path
+ * (docs/secure-desktop-plan.md "2b spawn-trigger contract"). The user-session sender
+ * hosts the video pipe + a request pipe; the SYSTEM launcher reads ONE of these and
+ * spawns capturer.exe as SYSTEM-in-session, building the argv ITSELF from these
+ * validated fields (never a raw command string).
+ *
+ * These fields are 1:1 with buildCapturerArgs' resolved values ON PURPOSE and derived
+ * from the SAME config/opts, so the SYSTEM path's argv is identical to the user path's
+ * — no drift. dev/verify-units.mjs asserts this equivalence field-by-field.
+ */
+export interface CapturerSpawnRequest {
+  /** Video pipe the sender already hosts; launcher passes as `--output pipe:<name>`. */
+  pipeName: string
+  monitor: number
+  codec: 'h264' | 'h265'
+  fps: number
+  bitrate: number
+  maxrate: number
+  gop: number
+  vbvMs: number
+  /** Always true for this path — the SYSTEM capturer follows Default<->Winlogon. */
+  desktopFollow: boolean
+}
+
+/**
+ * Build the SYSTEM-capturer spawn request from the SAME inputs buildCapturerArgs uses,
+ * so the two argvs can't diverge. `pipeName` is the sender-generated video pipe.
+ */
+export function buildCapturerSpawnRequest(
+  config: VideoConfig,
+  pipeName: string,
+  opts: CapturerArgOptions = {}
+): CapturerSpawnRequest {
+  return {
+    pipeName,
+    monitor: opts.outputIdx ?? 0,
+    codec: codecArg(config.codec),
+    fps: config.fps,
+    bitrate: opts.bitrateKbps ?? config.startBitrateKbps,
+    maxrate: opts.maxBitrateKbps ?? config.maxBitrateKbps,
+    gop: opts.gop ?? NVENC_KEYFRAME_GOP,
+    vbvMs: opts.vbvMs ?? NVENC_VBV_MS,
+    desktopFollow: true
+  }
+}
+
+/**
  * Full capturer.exe argv (without the binary path). Mirrors the documented 3c CLI
  * contract. `fps` is a CAP (change-detection makes the real rate variable ≤ cap).
  */

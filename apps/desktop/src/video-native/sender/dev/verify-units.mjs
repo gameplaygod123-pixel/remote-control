@@ -27,7 +27,7 @@ async function bundle() {
   const entry = `
     export { NalSplitter, AccessUnitAssembler } from ${JSON.stringify(join(SENDER, 'nalSplitter.ts'))}
     export { buildFfmpegArgs } from ${JSON.stringify(join(SENDER, 'ffmpegArgs.ts'))}
-    export { buildCapturerArgs } from ${JSON.stringify(join(SENDER, 'capturerArgs.ts'))}
+    export { buildCapturerArgs, buildCapturerSpawnRequest } from ${JSON.stringify(join(SENDER, 'capturerArgs.ts'))}
     export { parseRtcpFeedback, isKeyframeRequest } from ${JSON.stringify(join(SENDER, 'rtcpFeedback.ts'))}
   `
   await esbuild.build({
@@ -52,6 +52,7 @@ bundle()
       AccessUnitAssembler,
       buildFfmpegArgs,
       buildCapturerArgs,
+      buildCapturerSpawnRequest,
       parseRtcpFeedback,
       isKeyframeRequest
     } = m
@@ -289,6 +290,41 @@ bundle()
           b.includes('--bitrate 30000') &&
           b.includes('--maxrate 50000') &&
           b.includes('--vbv-ms 33')
+      )
+    }
+
+    // ── buildCapturerSpawnRequest (secure-desktop SYSTEM path) MUST NOT drift ──
+    // from buildCapturerArgs: the launcher builds the SYSTEM argv from these fields,
+    // so a mismatch = the secure-desktop capturer runs different settings than the
+    // user path. This test pins the two together (docs/secure-desktop-plan.md 2b).
+    console.log('buildCapturerSpawnRequest (== buildCapturerArgs, no drift)')
+    {
+      const cfg = {
+        width: 1920,
+        height: 1080,
+        fps: 60,
+        codec: 'h264',
+        minBitrateKbps: 6000,
+        startBitrateKbps: 25000,
+        maxBitrateKbps: 40000,
+        cursor: 'composited'
+      }
+      const opts = { outputIdx: 1, gop: 90, bitrateKbps: 20000, maxBitrateKbps: 45000, vbvMs: 33 }
+      const req = buildCapturerSpawnRequest(cfg, '\\\\.\\pipe\\pr-capturer-abc', opts)
+      const args = buildCapturerArgs(cfg, opts)
+      const argVal = (flag) => args[args.indexOf(flag) + 1]
+      check('spawn: pipeName carried', req.pipeName === '\\\\.\\pipe\\pr-capturer-abc')
+      check('spawn: desktopFollow always true', req.desktopFollow === true)
+      check('spawn: monitor == --monitor', String(req.monitor) === argVal('--monitor'))
+      check('spawn: codec == --codec', req.codec === argVal('--codec'))
+      check('spawn: fps == --fps', String(req.fps) === argVal('--fps'))
+      check('spawn: bitrate == --bitrate', String(req.bitrate) === argVal('--bitrate'))
+      check('spawn: maxrate == --maxrate', String(req.maxrate) === argVal('--maxrate'))
+      check('spawn: gop == --gop', String(req.gop) === argVal('--gop'))
+      check('spawn: vbvMs == --vbv-ms', String(req.vbvMs) === argVal('--vbv-ms'))
+      check(
+        'spawn: hevc config -> codec h265',
+        buildCapturerSpawnRequest({ ...cfg, codec: 'hevc' }, 'p').codec === 'h265'
       )
     }
 
