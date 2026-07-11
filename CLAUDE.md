@@ -65,8 +65,8 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-11)
 
-IN PROGRESS (branch `feat/native-video`) — **SECURE-DESKTOP remote control: SEE + control the
-UAC / lock / Ctrl+Alt+Del screen → PRERELEASE v1.38.0-beta.1 (awaiting 2c real-hw verify).**
+DONE — **SECURE-DESKTOP remote control: SEE + control the UAC / lock / Ctrl+Alt+Del screen →
+PROMOTED to full v1.38.0 (all 5 acceptance criteria verified on real hardware).**
 Full spec: [`docs/secure-desktop-plan.md`](docs/secure-desktop-plan.md). Owner (2026-07-11):
 "เอาให้ใช้งานได้จริงๆ". Track 2 (v1.23.0) already gives INPUT on the secure desktop but it was
 BLIND (video froze there — a user-session capturer on WinSta0\Default can't follow into
@@ -93,19 +93,25 @@ screen and log back in remotely.
   the duplex video pipe, `onUnavailable`→fall back to the in-session capturer/ffmpeg chain so
   the normal desktop never black-screens; no-orphan = closing the video pipe is the capturer's
   broken-pipe death signal), sender gate `VIDEO_SECURE_DESKTOP=1` (default OFF = byte-identical).
-- **SHIPPED PRERELEASE v1.38.0-beta.1** (`3091922`, off `feat/native-video`, built via
-  build-win.sh @ `wss://rose-marie-against-from.trycloudflare.com`, all 4 packed checks pass
-  incl. the fresh capturer.exe with desktop-follow/switch-fix; golden rule #1). Rolls up the
-  v1.37.0-beta line (120fps lever + BWE-25/max-50 + HUD/titlebar).
-- **NEXT — 2c joint e2e (WC):** install over the prev build → `setup-track2-permanent.ps1`
-  (installs the `PersonalRemoteInput` SYSTEM launcher) → set machine env `VIDEO_SECURE_DESKTOP=1`
-  (persisted, [[agent-env-overrides-must-be-persisted]]) → reboot → **lock the Mac-controlled
-  PC (Win+L) → SEE the lock screen live → type password → log back in; trigger UAC → see +
-  click.** Watch the cross-integrity VIDEO pipe (MEDIUM sender host + SYSTEM capturer connect —
-  Fix A, proven for input v1.23.0, first use for video). If clean → promote (rolls up 1.37 too).
-- **DEFERRED till 2c proves out:** in-app toggle to enable Track 2 from the app (Part 1a, no
-  PowerShell); 1b reboot-permanent re-verify; 1c Phase 4 hardening; getEncodeMs on the SYSTEM
-  path (stderr goes to the launcher log, not the pipe) + session-change re-honor (2d remainder).
+- **SHIPPED via prereleases → full v1.38.0.** beta.1 (`3091922`, first joint e2e) → **beta.2**
+  (`f4ea215`, baked the launcher re-spawn fix `dd7a53c`: dedup by the request's VIDEO pipe name +
+  poll every tick so a re-pair re-spawns the capturer instead of freezing — the 2c e2e bug) →
+  **full v1.38.0** (`e383f6a`) after 1b passed. Built via build-win.sh @
+  `wss://rose-marie-against-from.trycloudflare.com`, all 4 packed checks (incl. the fresh
+  capturer.exe with desktop-follow/switch-fix). Rolls up the v1.37.0-beta line (120fps lever +
+  BWE-25/max-50 + HUD/titlebar).
+- **VERIFIED on real hardware (WC, all 5 acceptance criteria):** 2c e2e — lock the Mac-controlled
+  PC (Win+L) → SEE the lock screen live → click → SEE the sign-in → control it → type password →
+  logged back in; UAC visible + clickable; the cross-integrity VIDEO pipe (MEDIUM sender host +
+  SYSTEM capturer connect — Fix A, first use for video) works; **1b reboot-permanence — after a
+  reboot Track 1 (Task Mgr) + Track 2 (lock/UAC input) + secure video all work automatically with
+  NO script re-run.** Owner: "ใช้งานเป็นปกติแล้ว".
+- **REMAINING (non-blocking, deferred):** **1a in-app toggle** to enable Track 2 + secure-desktop
+  from the app (no PowerShell) — Mac does the toggle UI/IPC/config, WC the elevated install/uninstall;
+  1c Phase 4 hardening (pipe SDDL Fix B / uninstall cleanup); switch blip ~2-3s on the click-triggered
+  re-pair (accepted, Parsec has a transition too); input-injector reconnect flap after launcher restart
+  (input still works); getEncodeMs on the SYSTEM path (stderr → launcher log, not the pipe) +
+  session-change re-honor (2d remainder).
 
 DONE — **security: signaling server fails LOUD instead of silently booting with the
 public default token (2026-07-11).** The 2026-07-06 incident (a leftover `tsx watch`
@@ -900,7 +906,19 @@ IN PROGRESS (branch `feat/native-video`, PRERELEASE line v1.37.0-beta.x — NOT 
   + 120fps feel → then promote full v1.37.0.** The UI changes are controller-only (Mac sees them on
   relaunch); the agent installer only carries VIDEO_FPS + the corrected BWE ceiling.
 
-Latest release: **v1.36.0** — **Parsec-style controller X/tray + no orphaned processes +
+Latest release: **v1.38.0** — **secure-desktop remote control: SEE + control the UAC / lock /
+Ctrl+Alt+Del screen** (lock the PC from the Mac → see the lock screen → type the password → log
+back in). A SYSTEM capturer follows the desktop into Winlogon (DXGI+NVENC as SYSTEM) and streams
+over the unchanged RTP path; the Track 2 SYSTEM launcher spawns it via a validated request pipe +
+re-spawns per re-pair (self-heals a desktop switch); the Mac hosts the video+request pipes (Fix A).
+Opt-in `VIDEO_SECURE_DESKTOP=1` + Track 2 installed (`setup-track2-permanent.ps1`); default OFF =
+byte-identical. Off `feat/native-video`; verified end-to-end on real hardware (all 5 acceptance
+criteria incl. reboot-permanence) via prereleases beta.1→beta.2 before this full release (golden
+rules #1/#7). Full spec [`docs/secure-desktop-plan.md`](docs/secure-desktop-plan.md). Remaining
+(non-blocking): an in-app toggle (1a) to enable without PowerShell. **Rolls up the v1.37.0-beta
+line** (VIDEO_FPS=120 lever + BWE avg-25/burst-50 + health-colored HUD + titlebar-off-video).
+
+Prior release: **v1.36.0** — **Parsec-style controller X/tray + no orphaned processes +
 TURN relay + WebRTC-60fps fallback + elevation-handoff mode guard.** Off `feat/native-video`;
 WC-verified on real hardware (post-stress: `PersonalRemote.exe`=6 / `capturer.exe`=1 steady —
 one root instance, tree collapses clean after Switch-mode/re-pair/lid-close, capturer never
