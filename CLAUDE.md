@@ -63,7 +63,35 @@ either machine can resume without re-explaining anything.**
   (raw.githubusercontent.com, ~5-min CDN cache), re-resolved on every
   reconnect; the supervisor auto-publishes tunnel URL changes.
 
-## Current status (updated 2026-07-09)
+## Current status (updated 2026-07-11)
+
+DONE — **security: signaling server fails LOUD instead of silently booting with the
+public default token (2026-07-11).** The 2026-07-06 incident (a leftover `tsx watch`
+dev server held port 8080 → the supervisor never spawned `dist/index.js` →
+**production silently ran dev code with `dev-token-change-me`, the default that lives
+in this public repo = an open relay**) is now impossible to hit unnoticed.
+- **`server/signaling/src/auth.ts`:** hoisted `DEFAULT_AGENT_TOKEN = "dev-token-change-me"`;
+  at module load, if the resolved `AGENT_TOKEN` equals the default AND
+  `ALLOW_DEFAULT_TOKEN !== '1'` → **throw** (refuse to boot). Production is UNAFFECTED
+  (the LaunchAgent plist sets a real `AGENT_TOKEN`; verified the supervisor spawns
+  `dist/index.js` with `{stdio:'inherit'}` = inherits the plist env → guard passes).
+  Dev opts in: `server/signaling/package.json` `dev` script now prefixes
+  `ALLOW_DEFAULT_TOKEN=1 tsx watch …` so `pnpm dev` still runs frictionlessly.
+- Zero cost: one check at boot only (not per-request), no new dependency, no latency
+  impact. `NODE_ENV`-based guards were REJECTED — this repo never sets `NODE_ENV`
+  (checked plist + scripts), so such a guard would be a silent no-op; keying off the
+  token value itself is what actually protects here.
+- **DEPLOYED + verified live:** built (`pnpm --filter signaling-server build`), tested
+  all 3 paths (no token → throws / `ALLOW_DEFAULT_TOKEN=1` → boots / real token →
+  boots), then killed the running prod `dist/index.js` → supervisor respawned the new
+  code in ~1s (PID rotated, log `listening on ws://localhost:8080` + agent re-registered,
+  no throw = token present). Also **swept 7 orphaned `tsx watch` strays** (PPID 1, from
+  Jul 3–4 — the exact hazard class from the incident; SIGTERM-immune, cleared with
+  SIGKILL). Port 8080 now held solely by the fresh supervisor-spawned prod server.
+- Rotating the token still works as before (edit plist → restart LaunchAgent → kill
+  8080 → machines re-enter via the auto-shown TokenSetupView). The client-side
+  first-launch token entry (userData `house-token.txt`) is UNTOUCHED — this is a
+  server-side guard only.
 
 DONE — **Parsec-style controller window X (background/tray) — owner-requested
 2026-07-09: "กด X ตอนเชื่อมต่อ remote ไม่ปิดโปรแกรม แต่กลับหน้าหลัก; กด X หน้าหลักก็ไม่ปิด
