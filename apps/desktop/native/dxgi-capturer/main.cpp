@@ -109,6 +109,9 @@ struct CapturerOptions {
     int floorDecayMs = 350;         // keep the floor alive this long after the last real change
     bool selftest = false;          // 3a change-detection log loop only (no encode)
     int durationSec = 0;            // 0 = run until stdin EOF / killed (offline testing aid)
+    std::string logPath;            // --log <path>: redirect stderr ([capturer] logs) to a file.
+                                    // Used by the SYSTEM launcher (no console) -> a world-readable
+                                    // C:\Users\Public\... log. Empty = stderr unchanged.
     bool desktopFollow = false;     // SECURE-DESKTOP capture (Part 2a): before creating the DXGI
                                     // duplication — and on every ACCESS_LOST recover — attach this
                                     // thread to the ACTIVE input desktop (OpenInputDesktop +
@@ -790,6 +793,7 @@ int main(int argc, char** argv) {
         else if (a == "--locked-cadence") o.lockedCadence = true;
         else if (a == "--locked-idle-ms") next(o.lockedIdleMs);
         else if (a == "--desktop-follow") o.desktopFollow = true;  // secure-desktop capture (2a)
+        else if (a == "--log" && i + 1 < argc) o.logPath = argv[++i];  // redirect stderr to a file
         else if (a == "--duration") next(o.durationSec);
         else if (a == "--help" || a == "-h") {
             printf("dxgi-capturer (Step 3 custom DXGI capturer)\n"
@@ -820,6 +824,8 @@ int main(int argc, char** argv) {
                    "                           active input desktop (OpenInputDesktop+SetThreadDesktop) on\n"
                    "                           init + every ACCESS_LOST, so a SYSTEM-in-session capturer sees\n"
                    "                           Winlogon (UAC / lock). env VIDEO_CAPTURER_DESKTOP_FOLLOW=1\n"
+                   "  --log <path>             redirect [capturer] stderr logs to a file (SYSTEM launcher\n"
+                   "                           has no console)\n"
                    "  --selftest               3a change-detection log loop only (no encode)\n"
                    "  --duration <sec>         stop after N seconds (offline testing)\n"
                    "  stdin: 'I' -> force IDR;  'L' -> LTR-P recovery;  'B'<kbps>'\\n' -> live VBR bitrate;  EOF -> shutdown\n");
@@ -846,6 +852,12 @@ int main(int argc, char** argv) {
     if (const char* lenv = std::getenv("VIDEO_CAPTURER_LEGACY_EMIT")) { std::string l = lenv; o.lockedCadence = !(l == "1" || l == "true" || l == "on"); }
     if (const char* e = std::getenv("VIDEO_CAPTURER_DESKTOP_FOLLOW")) o.desktopFollow = o.desktopFollow || truthy(e);
     applyTuneFile(o);  // highest priority: a live tune file overrides CLI + env (no relaunch)
+
+    // --log: redirect the [capturer] stderr stream to a file (the SYSTEM launcher has no
+    // console). Best-effort: on failure stderr is unchanged. Do it before the first Log below.
+    if (!o.logPath.empty()) {
+        if (!freopen(o.logPath.c_str(), "a", stderr)) { /* keep original stderr */ }
+    }
 
     SetProcessDPIAware();  // physical pixels for width/height + cursor coords
     Log("start: monitor=%u output=%s fps=%d %s%s", o.monitor, o.output.c_str(), o.fps,

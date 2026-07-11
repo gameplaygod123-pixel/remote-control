@@ -28,6 +28,7 @@ async function bundle() {
     export { NalSplitter, AccessUnitAssembler } from ${JSON.stringify(join(SENDER, 'nalSplitter.ts'))}
     export { buildFfmpegArgs } from ${JSON.stringify(join(SENDER, 'ffmpegArgs.ts'))}
     export { buildCapturerArgs, buildCapturerSpawnRequest } from ${JSON.stringify(join(SENDER, 'capturerArgs.ts'))}
+    export { validateSpawnRequest, buildSystemCapturerArgv } from ${JSON.stringify(join(SENDER, '../../input-service/capturerSpawn.ts'))}
     export { parseRtcpFeedback, isKeyframeRequest } from ${JSON.stringify(join(SENDER, 'rtcpFeedback.ts'))}
   `
   await esbuild.build({
@@ -53,6 +54,8 @@ bundle()
       buildFfmpegArgs,
       buildCapturerArgs,
       buildCapturerSpawnRequest,
+      validateSpawnRequest,
+      buildSystemCapturerArgv,
       parseRtcpFeedback,
       isKeyframeRequest
     } = m
@@ -326,6 +329,41 @@ bundle()
         'spawn: hevc config -> codec h265',
         buildCapturerSpawnRequest({ ...cfg, codec: 'hevc' }, 'p').codec === 'h265'
       )
+    }
+
+    // ── launcher side: validateSpawnRequest + buildSystemCapturerArgv (secure-desktop 2b) ──
+    // The SYSTEM launcher trusts NOTHING off the request pipe (a same-user squatter could
+    // write it): it validates every field, then builds the argv itself. Closes the loop
+    // buildCapturerSpawnRequest -> validateSpawnRequest -> buildSystemCapturerArgv == user argv.
+    console.log('validateSpawnRequest + buildSystemCapturerArgv (launcher, 2b)')
+    {
+      const cfg = {
+        width: 1920, height: 1080, fps: 60, codec: 'h264',
+        minBitrateKbps: 6000, startBitrateKbps: 25000, maxBitrateKbps: 40000, cursor: 'composited'
+      }
+      const opts = { outputIdx: 1, gop: 90, bitrateKbps: 20000, maxBitrateKbps: 45000, vbvMs: 33 }
+      const good = buildCapturerSpawnRequest(cfg, '\\\\.\\pipe\\pr-capturer-abc123', opts)
+      // round-trip through JSON (that's what crosses the pipe)
+      const v = validateSpawnRequest(JSON.parse(JSON.stringify(good)))
+      check('valid request accepted', v !== null)
+      // the launcher argv == the user path argv (shared flags) + --output pipe: + --desktop-follow
+      const sysArgv = buildSystemCapturerArgv(v)
+      const userArgv = buildCapturerArgs(cfg, opts)
+      const val = (argv, flag) => argv[argv.indexOf(flag) + 1]
+      for (const flag of ['--monitor', '--codec', '--fps', '--bitrate', '--maxrate', '--gop', '--vbv-ms']) {
+        check(`launcher argv ${flag} == user argv`, val(sysArgv, flag) === val(userArgv, flag))
+      }
+      check('launcher --output is the pipe', val(sysArgv, '--output') === 'pipe:\\\\.\\pipe\\pr-capturer-abc123')
+      check('launcher adds --desktop-follow', sysArgv.includes('--desktop-follow'))
+      // rejections — every field the launcher guards (squatter / garbage)
+      check('reject: non-object', validateSpawnRequest('nope') === null && validateSpawnRequest(null) === null)
+      check('reject: bad pipeName (not pr-capturer-)', validateSpawnRequest({ ...good, pipeName: '\\\\.\\pipe\\evil' }) === null)
+      check('reject: pipeName with space (arg-injection)', validateSpawnRequest({ ...good, pipeName: '\\\\.\\pipe\\pr-capturer-a b' }) === null)
+      check('reject: bad codec', validateSpawnRequest({ ...good, codec: 'av1' }) === null)
+      check('reject: non-int fps', validateSpawnRequest({ ...good, fps: 60.5 }) === null)
+      check('reject: out-of-range bitrate', validateSpawnRequest({ ...good, bitrate: 9_000_000 }) === null)
+      check('reject: negative monitor', validateSpawnRequest({ ...good, monitor: -1 }) === null)
+      check('reject: missing desktopFollow', validateSpawnRequest({ ...good, desktopFollow: undefined }) === null)
     }
 
     // ── parseRtcpFeedback: a hand-built PLI compound packet ──
