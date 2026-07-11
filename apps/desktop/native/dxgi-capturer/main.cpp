@@ -109,6 +109,13 @@ struct CapturerOptions {
     int floorDecayMs = 350;         // keep the floor alive this long after the last real change
     bool selftest = false;          // 3a change-detection log loop only (no encode)
     int durationSec = 0;            // 0 = run until stdin EOF / killed (offline testing aid)
+    bool desktopFollow = false;     // SECURE-DESKTOP capture (Part 2a): before creating the DXGI
+                                    // duplication — and on every ACCESS_LOST recover — attach this
+                                    // thread to the ACTIVE input desktop (OpenInputDesktop +
+                                    // SetThreadDesktop). Reaching Winlogon (UAC / lock / Ctrl+Alt+Del)
+                                    // requires running as SYSTEM-in-session; a normal user just gets
+                                    // Default (harmless). --desktop-follow / env
+                                    // VIDEO_CAPTURER_DESKTOP_FOLLOW=1. Off = today's behaviour, exact.
     bool lockedCadence = true;      // Parsec-parity: emit EXACTLY one frame every 1/fps (locked
                                     // 60fps cadence) — real P/IDR when the desktop changed this
                                     // tick, else a near-free coded-SKIP frame. Replaces the old
@@ -135,8 +142,9 @@ public:
         bitrateMaxRatio_ = (o.bitrateKbps > 0) ? (double)o.maxrateKbps / o.bitrateKbps : 1.6;
         lockedCadence_ = o.lockedCadence;
         lockedIdleMs_ = o.lockedIdleMs;
+        desktopFollow_ = o.desktopFollow;
     }
-    ~DuplCapturer() { Release(); }
+    ~DuplCapturer() { Release(); if (currentDesktop_) { CloseDesktop(currentDesktop_); currentDesktop_ = nullptr; } }
 
     int Run() {
         if (!InitWithRetry()) { Log("fatal: could not initialize Desktop Duplication"); return 1; }
@@ -527,9 +535,45 @@ private:
         if (encoding_) setupEncoder();
     }
 
+    // SECURE-DESKTOP follow (Part 2a): point THIS thread at the desktop currently receiving user
+    // input (Default in normal use; Winlogon during UAC / lock / Ctrl+Alt+Del). DXGI Desktop
+    // Duplication can only duplicate the desktop the calling thread is attached to, and attaching
+    // to Winlogon requires SYSTEM — so this is the crux of "SEE the secure desktop". Must run
+    // BEFORE DuplicateOutput and be re-run on every ACCESS_LOST (a secure-desktop switch IS an
+    // ACCESS_LOST), which happens for free because Init() runs on each ReinitWithRetry attempt.
+    // Returns false (throttled-quiet on retries) so ReinitWithRetry keeps retrying until the
+    // target desktop is reachable — mirrors the lock-screen retry policy.
+    bool AttachInputDesktop(bool quiet) {
+        if (!desktopFollow_) return true;
+        HDESK h = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+        if (!h) {
+            if (!quiet) Log("desktop-follow: OpenInputDesktop failed: %lu (not SYSTEM? secure desktop up?)",
+                            (unsigned long)GetLastError());
+            return false;
+        }
+        if (!SetThreadDesktop(h)) {
+            if (!quiet) Log("desktop-follow: SetThreadDesktop failed: %lu", (unsigned long)GetLastError());
+            CloseDesktop(h);
+            return false;
+        }
+        char name[128] = {0}; DWORD len = 0;
+        GetUserObjectInformationA(h, UOI_NAME, name, sizeof(name) - 1, &len);
+        if (currentDesktopName_ != name) {
+            Log("desktop-follow: input desktop -> '%s'", name[0] ? name : "?");
+            currentDesktopName_ = name;
+        }
+        // The thread now references the new handle; releasing the previous one is safe (only this
+        // thread ever attaches a desktop — the stdin thread makes no desktop calls).
+        if (currentDesktop_) CloseDesktop(currentDesktop_);
+        currentDesktop_ = h;
+        return true;
+    }
+
     bool Init(bool quiet) {
         Release();
         auto fail = [&](const char* w, HRESULT h) { if (!quiet) LogHr(w, h); return false; };
+
+        if (!AttachInputDesktop(quiet)) return false;
 
         D3D_FEATURE_LEVEL fl = {};
         HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
@@ -607,6 +651,11 @@ private:
     bool lockedCadence_ = true;      // locked 1/fps emit clock (Parsec-parity) vs emit-on-change
     long lockedIdleMs_ = 350;        // locked-cadence idle decay window (0 = never decay)
 
+    // secure-desktop follow (Part 2a)
+    bool desktopFollow_ = false;
+    HDESK currentDesktop_ = nullptr;      // the input desktop this thread is attached to (owned)
+    std::string currentDesktopName_;      // last-logged desktop name (Default / Winlogon)
+
     // control channel (set from the stdin thread)
     std::atomic<bool> idrRequested_{false};
     std::atomic<bool> ltrRequested_{false};  // 'L' from stdin -> LTR-P recovery (cheap resync)
@@ -671,6 +720,7 @@ int main(int argc, char** argv) {
         else if (a == "--legacy-emit") o.lockedCadence = false;  // revert to emit-on-change
         else if (a == "--locked-cadence") o.lockedCadence = true;
         else if (a == "--locked-idle-ms") next(o.lockedIdleMs);
+        else if (a == "--desktop-follow") o.desktopFollow = true;  // secure-desktop capture (2a)
         else if (a == "--duration") next(o.durationSec);
         else if (a == "--help" || a == "-h") {
             printf("dxgi-capturer (Step 3 custom DXGI capturer)\n"
@@ -695,6 +745,10 @@ int main(int argc, char** argv) {
                    "                           tune legacy=1 / env VIDEO_CAPTURER_LEGACY_EMIT=1 also revert)\n"
                    "  --locked-idle-ms <ms>    locked-cadence idle decay (default 350; 0 = never decay,\n"
                    "                           always-locked but ~17-20%% enc on a static 1440p screen)\n"
+                   "  --desktop-follow         SECURE-DESKTOP capture: attach the capture thread to the\n"
+                   "                           active input desktop (OpenInputDesktop+SetThreadDesktop) on\n"
+                   "                           init + every ACCESS_LOST, so a SYSTEM-in-session capturer sees\n"
+                   "                           Winlogon (UAC / lock). env VIDEO_CAPTURER_DESKTOP_FOLLOW=1\n"
                    "  --selftest               3a change-detection log loop only (no encode)\n"
                    "  --duration <sec>         stop after N seconds (offline testing)\n"
                    "  stdin: 'I' -> force IDR;  'L' -> LTR-P recovery;  'B'<kbps>'\\n' -> live VBR bitrate;  EOF -> shutdown\n");
@@ -719,11 +773,12 @@ int main(int argc, char** argv) {
     if (const char* e = std::getenv("VIDEO_CAPTURER_LTR")) o.ltr = o.ltr || truthy(e);
     if (const char* e = std::getenv("VIDEO_LTR"))          o.ltr = o.ltr || truthy(e);
     if (const char* lenv = std::getenv("VIDEO_CAPTURER_LEGACY_EMIT")) { std::string l = lenv; o.lockedCadence = !(l == "1" || l == "true" || l == "on"); }
+    if (const char* e = std::getenv("VIDEO_CAPTURER_DESKTOP_FOLLOW")) o.desktopFollow = o.desktopFollow || truthy(e);
     applyTuneFile(o);  // highest priority: a live tune file overrides CLI + env (no relaunch)
 
     SetProcessDPIAware();  // physical pixels for width/height + cursor coords
-    Log("start: monitor=%u output=%s fps=%d %s", o.monitor, o.output.c_str(), o.fps,
-        o.selftest ? "(selftest, no encode)" : "");
+    Log("start: monitor=%u output=%s fps=%d %s%s", o.monitor, o.output.c_str(), o.fps,
+        o.selftest ? "(selftest, no encode) " : "", o.desktopFollow ? "(desktop-follow)" : "");
 
     DuplCapturer cap(o);
     return cap.Run();
