@@ -42,11 +42,19 @@ const POLL_MS = 2000
 
 // ── secure-desktop SYSTEM capturer (Part 2b) ─────────────────────────────────
 // The user-session sender HOSTS the request pipe (CAPTURER_SPAWN_PIPE) whenever the
-// secure-desktop video path is active + writes ONE structured spawn request. We poll-
-// connect on the same ~2s tick, validate the request, and spawn capturer.exe as SYSTEM-
-// in-session. Self-gating: no sender hosting => connect fails => no-op (byte-identical to
-// input-only Track 2). Single-session for this freeze — re-spawn on session change is 2d.
-let capturerSpawnedForSession = NO_SESSION
+// secure-desktop video path is active + writes a structured spawn request carrying a
+// unique VIDEO pipe name. We poll-connect on the same ~2s tick, validate, and spawn
+// capturer.exe as SYSTEM-in-session. Self-gating: no sender hosting => connect fails =>
+// no-op (byte-identical to input-only Track 2).
+//
+// RE-SPAWN PER REQUEST (not once per Windows session): the sender re-creates its
+// SystemCapturerFrameSource — and re-hosts a NEW video pipe — on every re-negotiation
+// (a re-pair, which the Mac triggers when video stalls, e.g. during a lock/desktop
+// switch). The OLD capturer dies on its broken pipe; we MUST spawn a fresh one for the
+// new pipe or the sender times out (10s) and falls back to the in-session capturer, which
+// can't follow the secure desktop -> permanent freeze + a re-pair loop (found in 2c e2e).
+// So we dedup by the request's pipeName and spawn whenever it changes.
+let lastSpawnedPipeName: string | null = null
 let capturerConnectInFlight = false
 
 // The capturer.exe the LAUNCHER resolves (never from the wire). Mirrors resolveCapturerPath()
@@ -92,7 +100,7 @@ function readOneRequest(sock: net.Socket, onRequest: (raw: unknown) => void): vo
 }
 
 function maybeSpawnCapturer(sid: number): void {
-  if (capturerSpawnedForSession === sid || capturerConnectInFlight) return
+  if (capturerConnectInFlight) return
   capturerConnectInFlight = true
   const sock = net.connect(CAPTURER_SPAWN_PIPE)
   const finish = (): void => {
@@ -108,6 +116,9 @@ function maybeSpawnCapturer(sid: number): void {
         log('capturer spawn request invalid (squatter/garbage?) -> skip')
         return
       }
+      // Dedup: the sender re-writes the same request on every poll-connect. Only (re)spawn
+      // when the VIDEO pipe changed — i.e. a new SystemCapturerFrameSource (re-negotiation).
+      if (req.pipeName === lastSpawnedPipeName) return
       const exe = resolveCapturerExe()
       if (!exe) {
         log('capturer.exe not found -> cannot spawn SYSTEM capturer')
@@ -115,7 +126,7 @@ function maybeSpawnCapturer(sid: number): void {
       }
       const res = spawnCapturerInSession(exe, req, sid, log)
       if (res) {
-        capturerSpawnedForSession = sid
+        lastSpawnedPipeName = req.pipeName
         log(`SYSTEM capturer spawned: pid ${res.pid}, session ${sid}, pipe ${req.pipeName}`)
       } else {
         log('spawnCapturerInSession failed (see GetLastError above)')
@@ -130,7 +141,7 @@ function tick(): void {
     if (currentSessionId !== NO_SESSION) {
       log(`no interactive session (was ${currentSessionId})`)
       currentSessionId = NO_SESSION
-      capturerSpawnedForSession = NO_SESSION // capturer died with the session (broken video pipe)
+      lastSpawnedPipeName = null // capturer died with the session (broken video pipe)
       // TODO(win): kill the previous injector process here (keep its handle
       // from spawnInjectorInSession) so it doesn't linger on a dead session.
     }
@@ -138,7 +149,7 @@ function tick(): void {
   }
   if (sid !== currentSessionId) {
     log(`active session -> ${sid}; (re)spawning injector`)
-    capturerSpawnedForSession = NO_SESSION // new session -> allow a fresh capturer spawn
+    lastSpawnedPipeName = null // new Windows session -> allow a fresh capturer spawn
     // TODO(win): kill any previous injector before spawning the new one.
     const ok = spawnInjectorInSession(process.execPath, injectorScript, sid, log)
     if (ok) {
