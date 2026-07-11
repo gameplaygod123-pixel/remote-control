@@ -65,6 +65,48 @@ either machine can resume without re-explaining anything.**
 
 ## Current status (updated 2026-07-11)
 
+IN PROGRESS (branch `feat/native-video`) — **SECURE-DESKTOP remote control: SEE + control the
+UAC / lock / Ctrl+Alt+Del screen → PRERELEASE v1.38.0-beta.1 (awaiting 2c real-hw verify).**
+Full spec: [`docs/secure-desktop-plan.md`](docs/secure-desktop-plan.md). Owner (2026-07-11):
+"เอาให้ใช้งานได้จริงๆ". Track 2 (v1.23.0) already gives INPUT on the secure desktop but it was
+BLIND (video froze there — a user-session capturer on WinSta0\Default can't follow into
+Winlogon) + off-by-default behind a script. This adds the missing **video**: a SYSTEM capturer
+follows the desktop into Winlogon and streams over the SAME RTP path, so you can see the lock
+screen and log back in remotely.
+- **Architecture (WC-led native + Mac TS, division in the doc):** a SYSTEM-in-session
+  `capturer.exe` (spawned by the Track 2 launcher) follows Default↔Winlogon and encodes it;
+  the user-session sender HOSTS a **video pipe + a request pipe** (Fix A: medium HOSTS, SYSTEM
+  CONNECTS — the proven Track 2 pipe model), the launcher reads a validated spawn request and
+  `CreateProcessAsUserW`-spawns the capturer. Receiver (Mac) UNCHANGED.
+- **KEY: reused ~80% of existing pieces** — the capturer already had ACCESS_LOST recovery (a
+  desktop switch IS an ACCESS_LOST), spawn-SYSTEM-in-session existed (Track 2), the named-pipe
+  transport existed. Missing native work = run as SYSTEM + `SetThreadDesktop` to the input
+  desktop on switch (Sunshine/Parsec model).
+- **DONE + verified on real hardware (WC):** 2a `--desktop-follow` (captures lock/sign-in as
+  SYSTEM, decode-clean), 2b capturer `--output pipe:` + control + launcher
+  `spawnCapturerInSession` + validated request pipe (`capturerSpawn.ts`: regex pipeName /
+  codec enum / int clamp → skip a squatter, never a raw command string), 2d proactive
+  desktop-switch detect + forced-IDR (the ~9s Default→Winlogon freeze → ~0). Mac (DONE):
+  `buildCapturerSpawnRequest` (fields 1:1 with `buildCapturerArgs` — anti-drift unit test on
+  BOTH sides: sender request == launcher argv == user argv), `SystemCapturerFrameSource`
+  (`f389189`, hosts both pipes, streams via the unchanged NalSplitter/AU/RTP, sends I/B/L over
+  the duplex video pipe, `onUnavailable`→fall back to the in-session capturer/ffmpeg chain so
+  the normal desktop never black-screens; no-orphan = closing the video pipe is the capturer's
+  broken-pipe death signal), sender gate `VIDEO_SECURE_DESKTOP=1` (default OFF = byte-identical).
+- **SHIPPED PRERELEASE v1.38.0-beta.1** (`3091922`, off `feat/native-video`, built via
+  build-win.sh @ `wss://rose-marie-against-from.trycloudflare.com`, all 4 packed checks pass
+  incl. the fresh capturer.exe with desktop-follow/switch-fix; golden rule #1). Rolls up the
+  v1.37.0-beta line (120fps lever + BWE-25/max-50 + HUD/titlebar).
+- **NEXT — 2c joint e2e (WC):** install over the prev build → `setup-track2-permanent.ps1`
+  (installs the `PersonalRemoteInput` SYSTEM launcher) → set machine env `VIDEO_SECURE_DESKTOP=1`
+  (persisted, [[agent-env-overrides-must-be-persisted]]) → reboot → **lock the Mac-controlled
+  PC (Win+L) → SEE the lock screen live → type password → log back in; trigger UAC → see +
+  click.** Watch the cross-integrity VIDEO pipe (MEDIUM sender host + SYSTEM capturer connect —
+  Fix A, proven for input v1.23.0, first use for video). If clean → promote (rolls up 1.37 too).
+- **DEFERRED till 2c proves out:** in-app toggle to enable Track 2 from the app (Part 1a, no
+  PowerShell); 1b reboot-permanent re-verify; 1c Phase 4 hardening; getEncodeMs on the SYSTEM
+  path (stderr goes to the launcher log, not the pipe) + session-change re-honor (2d remainder).
+
 DONE — **security: signaling server fails LOUD instead of silently booting with the
 public default token (2026-07-11).** The 2026-07-06 incident (a leftover `tsx watch`
 dev server held port 8080 → the supervisor never spawned `dist/index.js` →
