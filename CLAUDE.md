@@ -1212,10 +1212,17 @@ Also working since v1.16.0:
   in clipboard memory instead of the text (→ dangling-pointer crash AND
   cross-app paste never actually worked). Fix: inline UTF-16 code units via
   `koffi.array('uint16', n)`, reads bounded by `GlobalSize`, chunked string
-  building, `OpenClipboard(null)`. NOTE for future clipboard tests: the owner
-  sometimes runs Parsec, whose clipboard sync masks ours — close it first.
-  Cosmetic nit for later: helper's `clipboard.onopen` log is overwritten by
-  runClipboardSync, never prints.
+  building, `OpenClipboard(null)`. NOTE on the sync behavior (read before
+  diagnosing a "can't copy through remote"): `clipboardSyncCore` SEEDS
+  `lastSynced` from whatever is in the clipboard at connect, so text copied
+  BEFORE the session connects does NOT auto-sync — you must copy something NEW
+  after the session is up. It polls every 1s and skips text >256KB.
+  `clipboardSyncCore` now logs `[clipboard] ...` (seed/send/recv/write/skip) so
+  a future issue is diagnosable from the log instead of guessed. (2026-07-11: a
+  "can't copy" was WRONGLY blamed on Parsec masking the clipboard, then affirmed
+  without checking — Parsec was still running unchanged when it started working,
+  so it was NOT the cause. Lesson: verify from logs/process/code before asserting
+  a cause; macOS can't "lock" the pasteboard, so an idle app can't block a copy.)
 
 Since v1.17.0 — **house token** (one shared secret per household):
 - Gates register-agent, pair-request (checked BEFORE the PIN — no guessing
