@@ -937,7 +937,20 @@ IN PROGRESS (branch `feat/native-video`, PRERELEASE line v1.37.0-beta.x — NOT 
   + 120fps feel → then promote full v1.37.0.** The UI changes are controller-only (Mac sees them on
   relaunch); the agent installer only carries VIDEO_FPS + the corrected BWE ceiling.
 
-Latest release: **v1.38.0** — **secure-desktop remote control: SEE + control the UAC / lock /
+Latest release: **v1.39.0** — **fix: device-card thumbnail (idle 4s preview) resumes after a
+native session ends.** The controller's Computers-page cards went dark permanently after the
+first connection: the agent's ~4s idle-thumbnail capture is gated OFF while the native video
+sender holds DXGI (Chromium desktopCapturer would race it → keyed-mutex crash), but the
+`useNativeVideoRef` gate was set true on a native pairing and never reset — and native is the
+auto-default, so every session left it stuck true. Fix (`AgentView.tsx`): on pc `failed`/`closed`
+(session end) stop the forked sender (release DXGI/NVENC) and reset the ref so idle capture
+resumes; the next pairing recomputes it. Also cleans up a sender that previously ran orphaned
+until the next pair/unmount. Pure renderer lifecycle (NOT FFI) → full release per golden rule #2;
+built via `build-win.sh` (all 4 packed checks: ndc/koffi/ffmpeg/capturer). First release cut from
+**`main`** (feat/native-video was folded back into main this session; main is source of truth
+again). **Rolls up v1.38.0** (secure-desktop remote control).
+
+Prior release: **v1.38.0** — **secure-desktop remote control: SEE + control the UAC / lock /
 Ctrl+Alt+Del screen** (lock the PC from the Mac → see the lock screen → type the password → log
 back in). A SYSTEM capturer follows the desktop into Winlogon (DXGI+NVENC as SYSTEM) and streams
 over the unchanged RTP path; the Track 2 SYSTEM launcher spawns it via a validated request pipe +
