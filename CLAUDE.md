@@ -106,8 +106,11 @@ screen and log back in remotely.
   SYSTEM capturer connect — Fix A, first use for video) works; **1b reboot-permanence — after a
   reboot Track 1 (Task Mgr) + Track 2 (lock/UAC input) + secure video all work automatically with
   NO script re-run.** Owner: "ใช้งานเป็นปกติแล้ว".
-- **REMAINING (non-blocking, deferred):** **1a in-app toggle** to enable Track 2 + secure-desktop
-  from the app (no PowerShell) — Mac does the toggle UI/IPC/config, WC the elevated install/uninstall;
+- **REMAINING (non-blocking, deferred):** **1a in-app toggle — OWNER DECLINED (2026-07-12): keep the
+  PowerShell-script setup, do NOT build an in-app toggle** ("แบบเดิมก็ดีแล้ว … ถ้ายังใช้งานได้ปกติก็ไม่
+  น่าจะเพิ่มอะไรแล้ว ข้ามเลย"). Owner is the sole user, the script is run-once + reboot-permanent, so the
+  UI isn't worth the WC elevated-install coordination. Don't re-propose it. The project's feature set is
+  considered COMPLETE — remaining items below are optional polish only, not to be started unprompted.
   1c Phase 4 hardening (pipe SDDL Fix B / uninstall cleanup); switch blip ~2-3s on the click-triggered
   re-pair (accepted, Parsec has a transition too); input-injector reconnect flap after launcher restart
   (input still works); getEncodeMs on the SYSTEM path (stderr → launcher log, not the pipe) +
