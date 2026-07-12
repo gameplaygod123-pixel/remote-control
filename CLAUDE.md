@@ -63,7 +63,35 @@ either machine can resume without re-explaining anything.**
   (raw.githubusercontent.com, ~5-min CDN cache), re-resolved on every
   reconnect; the supervisor auto-publishes tunnel URL changes.
 
-## Current status (updated 2026-07-11)
+## Current status (updated 2026-07-12)
+
+REPO HYGIENE (2026-07-12) — **`feat/native-video` folded into `main`; main is the source of
+truth again.** main had drifted 213 commits behind (every release v1.34.0→v1.38.0 shipped from
+the branch), while origin/main only carried 48 supervisor auto-published `signaling-url.json`
+commits + 2 superseded July-6 foundation commits. Merged branch→main (`-X theirs`, conflicts to
+the branch = the authoritative line), then RESTORED `contract.ts` + `docs/native-video-plan.md`
+from the branch because the old foundation commit (`bf452b6`) reintroduced required `chroma`/
+`bitDepth`/audio fields the branch had dropped → would break typecheck. Net: **main tree ==
+branch (v1.38.0) byte-for-byte except signaling-url.json (kept live for the supervisor)**; merge
+commit `f297952` (2 parents). Both pushed. `feat/native-video` left in place (not deleted — WC
+may still push to it; can retire later). GO-FORWARD: work on `main`.
+
+DONE — **device-card thumbnail (idle 4s preview) went dark permanently after the first native
+session → FIXED (`AgentView.tsx`, controller/agent renderer, NOT FFI).** Owner: the ~4s
+capture-and-send-to-card stopped working. ROOT CAUSE: the agent's idle-thumbnail interval skips
+capture while `useNativeVideoRef.current` is true (the gate exists because Chromium's
+`desktopCapturer` DXGI races ffmpeg/capturer's DXGI → keyed-mutex crash), but the ref was set
+true on a native pairing and **NEVER reset** — and native is the auto-default, so after ANY
+session ended the card preview stayed dark forever (MonitorIcon fallback). FIX: in the pc
+`failed`/`closed` handler (session end), stop the forked sender (`videoSender.stopSession()` →
+release DXGI/NVENC) and reset `useNativeVideoRef.current = false` so the gate reopens; the next
+pairing recomputes the flag in `negotiateHelperCaps()`. This also cleans up an orphaned sender
+that previously ran until the next pair/unmount. typecheck(web) + lint clean (the 2 AgentView
+lint errors are the documented pre-existing `nameRef`/`deviceIdRef` ones). **Agent-side code →
+needs a Windows build/install to take effect on the real agent; verify the card resumes
+updating ~every 4s after a session ends (idle) + no keyed-mutex/ffmpeg-respawn on that first
+post-session capture.** Not FFI (pure renderer lifecycle) → ships as a full release per golden
+rule #2, but still needs the Windows installer rebuilt for the agent to pick it up.
 
 DONE — **SECURE-DESKTOP remote control: SEE + control the UAC / lock / Ctrl+Alt+Del screen →
 PROMOTED to full v1.38.0 (all 5 acceptance criteria verified on real hardware).**

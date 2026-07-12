@@ -568,6 +568,20 @@ function AgentView(): React.JSX.Element {
               setConnectionType(null)
               pcRef.current = null
               setActivePc(null)
+              // Native session over: stop the forked sender (release its DXGI +
+              // NVENC hold) and re-open the idle device-card thumbnail. Without
+              // this, useNativeVideoRef stays sticky-true after the first native
+              // pairing -- and since native is the auto-default, the 4s card
+              // preview would go dark PERMANENTLY once any session had run
+              // (the gate at THUMBNAIL_INTERVAL_MS skips capture while it's true).
+              // Stopping the sender first means no ffmpeg/capturer is holding DXGI
+              // when the next ~4s thumbnail tick fires (avoids the keyed-mutex
+              // race the gate exists for); the next pairing recomputes the flag in
+              // negotiateHelperCaps().
+              if (useNativeVideoRef.current) {
+                void window.api.videoSender.stopSession()
+                useNativeVideoRef.current = false
+              }
             }
           }
 
