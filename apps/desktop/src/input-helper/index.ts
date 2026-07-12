@@ -26,12 +26,23 @@ import {
   getScreenSize
 } from '../main/input/injector'
 import type { RemoteInputMessage } from '../renderer/src/shared/input/inputProtocol'
+import { startServiceClient, maybeForwardInput } from './serviceClient'
 import {
   runClipboardSync,
   type ClipboardChannelLike
 } from '../renderer/src/shared/clipboard/clipboardSyncCore'
 import { readClipboardText, writeClipboardText } from './clipboardNative'
+import { startCursorCapture } from './cursorCapture'
 import { logInputHelper } from '../main/inputHelperLog'
+
+// Parent-death watchdog: this helper is fork()ed by the Electron main process and
+// must never outlive it. On Windows a forked child does NOT auto-die when its parent
+// dies (crash / force-kill / app.exit during elevation-handoff or relaunch), so without
+// this it orphans and accumulates as extra "Personal Remote" entries in Task Manager.
+// The IPC channel emits 'disconnect' the instant main's end closes -- exit immediately
+// so exactly one generation of helpers is ever alive. main never disconnects while
+// alive (it uses the channel for ping/pong + IPC), so this can't fire spuriously.
+process.on('disconnect', () => process.exit(0))
 
 // TEMP diagnostic (helper-session-flapping investigation, see
 // docs/native-input-plan.md). `session` is passed explicitly rather than
@@ -50,7 +61,9 @@ function log(session: number, message: string): void {
 // NDC_LOG_LEVEL if it proves too noisy to read by hand. Logged with
 // `sessionCounter` (not a per-pc session, since these lines originate from
 // the native library itself, not from one of our own pc-bound handlers).
-initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Debug', (level, message) => {
+// 'Warning' (was 'Debug') so shipped input-helper.log isn't 98% [ndc:Debug] spam
+// that buries real diagnostics -- set NDC_LOG_LEVEL=Debug to bring it back.
+initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Warning', (level, message) => {
   logInputHelper('HELPER', `[session ${sessionCounter}] [ndc:${level}] ${message}`)
 })
 
@@ -77,10 +90,33 @@ initLogger((process.env.NDC_LOG_LEVEL as LogLevel | undefined) ?? 'Debug', (leve
 // Binding Request from this machine and confirming a valid Binding Success
 // Response came back (6/6 across 3 separate runs), the same verification
 // openrelay never got before it was originally added.
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' }
-]
+// TURN relay is appended ONLY when configured via env (default: STUN-only =
+// byte-identical). A symmetric-NAT / CGNAT peer can't be reached by STUN
+// hole-punching at all -- it needs a relay in the middle. Opt-in and MUST be a
+// verified-working server before enabling (golden rule #4): a dead TURN wastes
+// gathering time and makes things worse. Env (inherited by this forked helper
+// from the app process): PR_TURN_URLS (comma list, e.g.
+// "turn:relay.host:3478,turns:relay.host:5349") + PR_TURN_USERNAME +
+// PR_TURN_CREDENTIAL.
+function buildIceServers(): RTCIceServer[] {
+  const servers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' }
+  ]
+  const urls = (process.env.PR_TURN_URLS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (urls.length) {
+    servers.push({
+      urls,
+      username: process.env.PR_TURN_USERNAME,
+      credential: process.env.PR_TURN_CREDENTIAL
+    })
+  }
+  return servers
+}
+const ICE_SERVERS: RTCIceServer[] = buildIceServers()
 
 // TEMP diagnostic: pulls the `typ host|srflx|relay` suffix out of a raw ICE
 // candidate string so the log says outright whether a server-reflexive/relay
@@ -122,6 +158,11 @@ let sessionCounter = 0
 let cachedScreenSize: { width: number; height: number } | null = null
 
 async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
+  // Elevated path (gated behind PR_INPUT_SERVICE=1, off by default): forward to
+  // the SYSTEM injector so input reaches Task Manager / elevated apps / the
+  // secure desktop. Returns false when the service isn't available, in which
+  // case we fall through to local injection exactly as before.
+  if (maybeForwardInput(message)) return
   switch (message.t) {
     case 'move': {
       if (!cachedScreenSize) cachedScreenSize = await getScreenSize()
@@ -136,7 +177,7 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
       await mouseButtonToggle(message.button, message.t === 'down')
       break
     case 'wheel':
-      await scrollMouse(message.dy)
+      await scrollMouse(message.dy, message.dx ?? 0, message.px === true)
       break
     case 'keydown':
     case 'keyup':
@@ -148,8 +189,11 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
       // -- remove once the Win32 SendInput keyboard path is confirmed
       // solid across real hardware rounds, not just this sandboxed dev
       // environment's own oracle.
-      log(currentSession?.session ?? sessionCounter, `${message.t} code=${message.code}`)
-      await keyToggle(message.code, message.t === 'keydown')
+      log(
+        currentSession?.session ?? sessionCounter,
+        `${message.t} code=${message.code}${message.scan ? ' scan' : ''}`
+      )
+      await keyToggle(message.code, message.t === 'keydown', message.scan === true)
       break
     case 'text':
       log(
@@ -192,6 +236,22 @@ function enqueueRemoteInput(message: RemoteInputMessage): void {
     const last = inputQueue[inputQueue.length - 1]
     if (last?.t === 'move') {
       inputQueue[inputQueue.length - 1] = message // newest position supersedes
+    } else {
+      inputQueue.push(message)
+    }
+  } else if (message.t === 'wheel') {
+    // Scroll is cumulative, so a queued wheel burst collapses by SUMMING (not
+    // superseding like moves) -- keeps the total travel while preventing a
+    // backlog of stale deltas under jitter. Only merge same-semantics wheels
+    // (both px or both legacy) so the accumulator scales don't cross.
+    const last = inputQueue[inputQueue.length - 1]
+    if (last?.t === 'wheel' && (last.px === true) === (message.px === true)) {
+      inputQueue[inputQueue.length - 1] = {
+        t: 'wheel',
+        dy: last.dy + message.dy,
+        dx: (last.dx ?? 0) + (message.dx ?? 0),
+        px: message.px
+      }
     } else {
       inputQueue.push(message)
     }
@@ -247,6 +307,22 @@ let connectTimeout: ReturnType<typeof setTimeout> | undefined
 // re-created per negotiation attempt, so the previous one must be torn down
 // before the next starts (otherwise stale poll intervals stack up).
 let clipboardStop: (() => void) | null = null
+// Same lifecycle for the cursor-shape poll (see the 'cursor' data channel
+// below): stopped before each new attempt so no stale interval keeps polling.
+let cursorStop: (() => void) | null = null
+
+// Whether to run the native cursor-SHAPE overlay (Phase 3). Follows the capturer,
+// because only then is the video guaranteed cursor-free (the capturer never
+// composites the cursor) so the CSS overlay is the ONE cursor. The ffmpeg fallback
+// composites the cursor (draw_mouse=1), so overlaying there would DOUBLE it -- hence
+// off when the capturer is disabled. Mirrors capturerEnabled()'s VIDEO_CAPTURER!='0'
+// (B1 default-on). PR_CURSOR_OVERLAY overrides: '1' forces on, '0' forces off (cancel).
+function cursorOverlayEnabled(): boolean {
+  const override = process.env.PR_CURSOR_OVERLAY
+  if (override === '0') return false
+  if (override === '1') return true
+  return process.env.VIDEO_CAPTURER !== '0'
+}
 
 function clearConnectTimeout(): void {
   if (connectTimeout) clearTimeout(connectTimeout)
@@ -259,6 +335,10 @@ function closeSession(): void {
   if (clipboardStop) {
     clipboardStop()
     clipboardStop = null
+  }
+  if (cursorStop) {
+    cursorStop()
+    cursorStop = null
   }
   if (pc) {
     // Belt-and-suspenders: null the pc-level handlers before close(), on top
@@ -398,6 +478,42 @@ function attemptNegotiation(): void {
     write: writeClipboardText
   })
 
+  // Cursor SHAPE side-channel (agent -> controller) = Mac-native trackpad Phase 3.
+  // The DXGI capturer (VIDEO_CAPTURER=1, the shipping path) encodes the desktop
+  // WITHOUT the HW cursor (DDA excludes it; the capturer never composites it), so the
+  // controller shows only its OWN cursor over the video -- already 0-latency, but
+  // always an arrow. This channel reports the remote's semantic cursor SHAPE
+  // (GetCursorInfo, on change) so the controller applies it as a CSS `cursor` -> the
+  // cursor gets the RIGHT shape (I-beam on text, hand on links, resize on edges) at 0
+  // latency. WC-verified on real hardware. Windows-only + fully guarded (see
+  // cursorCapture.ts); the controller degrades to the plain local arrow if the channel
+  // never opens (older controller / non-native mode). Enabled by cursorOverlayEnabled().
+  if (cursorOverlayEnabled()) {
+    const cursor = conn.createDataChannel('cursor')
+    cursor.onopen = () => {
+      // Guard on THIS CHANNEL's own state, NOT `pc === conn`. On a re-pair after a
+      // lid-close/network blip, the input channel usually opens BEFORE the cursor
+      // channel on the same conn; if another negotiation attempt starts in that gap,
+      // `pc` moves to the newer conn, so a `pc !== conn` guard here would bail when
+      // the (still perfectly live) cursor channel finally opens -> startCursorCapture
+      // never runs -> shapes go silent while input/scroll/pinch keep working on the
+      // same conn (the exact reported bug). The channel being open is the real signal
+      // that we can capture+send; a stale onopen after close still bails on readyState.
+      if (cursor.readyState !== 'open') return
+      log(mySession, 'data channel "cursor" open')
+      cursorStop?.() // stop any prior session's capture (closeSession also does)
+      const capture = startCursorCapture((shape) => {
+        if (cursor.readyState !== 'open') return
+        try {
+          cursor.send(JSON.stringify({ shape }))
+        } catch {
+          /* channel closing between the guard and send -- ignore */
+        }
+      })
+      cursorStop = () => capture.stop()
+    }
+  }
+
   void (async () => {
     const offer = await conn.createOffer()
     await conn.setLocalDescription(offer)
@@ -507,5 +623,8 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   log(currentSession?.session ?? sessionCounter, `unhandledRejection: ${reason}`)
 })
+
+// Start trying to reach the elevated injector (no-op unless PR_INPUT_SERVICE=1).
+startServiceClient()
 
 send({ evt: 'ready' })

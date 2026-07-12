@@ -63,9 +63,1058 @@ either machine can resume without re-explaining anything.**
   (raw.githubusercontent.com, ~5-min CDN cache), re-resolved on every
   reconnect; the supervisor auto-publishes tunnel URL changes.
 
-## Current status (updated 2026-07-06)
+## Current status (updated 2026-07-11)
 
-Latest release: **v1.22.0** — **video quality now matches Parsec** (1920×1080 @
+DONE — **SECURE-DESKTOP remote control: SEE + control the UAC / lock / Ctrl+Alt+Del screen →
+PROMOTED to full v1.38.0 (all 5 acceptance criteria verified on real hardware).**
+Full spec: [`docs/secure-desktop-plan.md`](docs/secure-desktop-plan.md). Owner (2026-07-11):
+"เอาให้ใช้งานได้จริงๆ". Track 2 (v1.23.0) already gives INPUT on the secure desktop but it was
+BLIND (video froze there — a user-session capturer on WinSta0\Default can't follow into
+Winlogon) + off-by-default behind a script. This adds the missing **video**: a SYSTEM capturer
+follows the desktop into Winlogon and streams over the SAME RTP path, so you can see the lock
+screen and log back in remotely.
+- **Architecture (WC-led native + Mac TS, division in the doc):** a SYSTEM-in-session
+  `capturer.exe` (spawned by the Track 2 launcher) follows Default↔Winlogon and encodes it;
+  the user-session sender HOSTS a **video pipe + a request pipe** (Fix A: medium HOSTS, SYSTEM
+  CONNECTS — the proven Track 2 pipe model), the launcher reads a validated spawn request and
+  `CreateProcessAsUserW`-spawns the capturer. Receiver (Mac) UNCHANGED.
+- **KEY: reused ~80% of existing pieces** — the capturer already had ACCESS_LOST recovery (a
+  desktop switch IS an ACCESS_LOST), spawn-SYSTEM-in-session existed (Track 2), the named-pipe
+  transport existed. Missing native work = run as SYSTEM + `SetThreadDesktop` to the input
+  desktop on switch (Sunshine/Parsec model).
+- **DONE + verified on real hardware (WC):** 2a `--desktop-follow` (captures lock/sign-in as
+  SYSTEM, decode-clean), 2b capturer `--output pipe:` + control + launcher
+  `spawnCapturerInSession` + validated request pipe (`capturerSpawn.ts`: regex pipeName /
+  codec enum / int clamp → skip a squatter, never a raw command string), 2d proactive
+  desktop-switch detect + forced-IDR (the ~9s Default→Winlogon freeze → ~0). Mac (DONE):
+  `buildCapturerSpawnRequest` (fields 1:1 with `buildCapturerArgs` — anti-drift unit test on
+  BOTH sides: sender request == launcher argv == user argv), `SystemCapturerFrameSource`
+  (`f389189`, hosts both pipes, streams via the unchanged NalSplitter/AU/RTP, sends I/B/L over
+  the duplex video pipe, `onUnavailable`→fall back to the in-session capturer/ffmpeg chain so
+  the normal desktop never black-screens; no-orphan = closing the video pipe is the capturer's
+  broken-pipe death signal), sender gate `VIDEO_SECURE_DESKTOP=1` (default OFF = byte-identical).
+- **SHIPPED via prereleases → full v1.38.0.** beta.1 (`3091922`, first joint e2e) → **beta.2**
+  (`f4ea215`, baked the launcher re-spawn fix `dd7a53c`: dedup by the request's VIDEO pipe name +
+  poll every tick so a re-pair re-spawns the capturer instead of freezing — the 2c e2e bug) →
+  **full v1.38.0** (`e383f6a`) after 1b passed. Built via build-win.sh @
+  `wss://rose-marie-against-from.trycloudflare.com`, all 4 packed checks (incl. the fresh
+  capturer.exe with desktop-follow/switch-fix). Rolls up the v1.37.0-beta line (120fps lever +
+  BWE-25/max-50 + HUD/titlebar).
+- **VERIFIED on real hardware (WC, all 5 acceptance criteria):** 2c e2e — lock the Mac-controlled
+  PC (Win+L) → SEE the lock screen live → click → SEE the sign-in → control it → type password →
+  logged back in; UAC visible + clickable; the cross-integrity VIDEO pipe (MEDIUM sender host +
+  SYSTEM capturer connect — Fix A, first use for video) works; **1b reboot-permanence — after a
+  reboot Track 1 (Task Mgr) + Track 2 (lock/UAC input) + secure video all work automatically with
+  NO script re-run.** Owner: "ใช้งานเป็นปกติแล้ว".
+- **REMAINING (non-blocking, deferred):** **1a in-app toggle — OWNER DECLINED (2026-07-12): keep the
+  PowerShell-script setup, do NOT build an in-app toggle** ("แบบเดิมก็ดีแล้ว … ถ้ายังใช้งานได้ปกติก็ไม่
+  น่าจะเพิ่มอะไรแล้ว ข้ามเลย"). Owner is the sole user, the script is run-once + reboot-permanent, so the
+  UI isn't worth the WC elevated-install coordination. Don't re-propose it. The project's feature set is
+  considered COMPLETE — remaining items below are optional polish only, not to be started unprompted.
+  1c Phase 4 hardening (pipe SDDL Fix B / uninstall cleanup); switch blip ~2-3s on the click-triggered
+  re-pair (accepted, Parsec has a transition too); input-injector reconnect flap after launcher restart
+  (input still works); getEncodeMs on the SYSTEM path (stderr → launcher log, not the pipe) +
+  session-change re-honor (2d remainder).
+
+DONE — **security: signaling server fails LOUD instead of silently booting with the
+public default token (2026-07-11).** The 2026-07-06 incident (a leftover `tsx watch`
+dev server held port 8080 → the supervisor never spawned `dist/index.js` →
+**production silently ran dev code with `dev-token-change-me`, the default that lives
+in this public repo = an open relay**) is now impossible to hit unnoticed.
+- **`server/signaling/src/auth.ts`:** hoisted `DEFAULT_AGENT_TOKEN = "dev-token-change-me"`;
+  at module load, if the resolved `AGENT_TOKEN` equals the default AND
+  `ALLOW_DEFAULT_TOKEN !== '1'` → **throw** (refuse to boot). Production is UNAFFECTED
+  (the LaunchAgent plist sets a real `AGENT_TOKEN`; verified the supervisor spawns
+  `dist/index.js` with `{stdio:'inherit'}` = inherits the plist env → guard passes).
+  Dev opts in: `server/signaling/package.json` `dev` script now prefixes
+  `ALLOW_DEFAULT_TOKEN=1 tsx watch …` so `pnpm dev` still runs frictionlessly.
+- Zero cost: one check at boot only (not per-request), no new dependency, no latency
+  impact. `NODE_ENV`-based guards were REJECTED — this repo never sets `NODE_ENV`
+  (checked plist + scripts), so such a guard would be a silent no-op; keying off the
+  token value itself is what actually protects here.
+- **DEPLOYED + verified live:** built (`pnpm --filter signaling-server build`), tested
+  all 3 paths (no token → throws / `ALLOW_DEFAULT_TOKEN=1` → boots / real token →
+  boots), then killed the running prod `dist/index.js` → supervisor respawned the new
+  code in ~1s (PID rotated, log `listening on ws://localhost:8080` + agent re-registered,
+  no throw = token present). Also **swept 7 orphaned `tsx watch` strays** (PPID 1, from
+  Jul 3–4 — the exact hazard class from the incident; SIGTERM-immune, cleared with
+  SIGKILL). Port 8080 now held solely by the fresh supervisor-spawned prod server.
+- Rotating the token still works as before (edit plist → restart LaunchAgent → kill
+  8080 → machines re-enter via the auto-shown TokenSetupView). The client-side
+  first-launch token entry (userData `house-token.txt`) is UNTOUCHED — this is a
+  server-side guard only.
+
+DONE — **Parsec-style controller window X (background/tray) — owner-requested
+2026-07-09: "กด X ตอนเชื่อมต่อ remote ไม่ปิดโปรแกรม แต่กลับหน้าหลัก; กด X หน้าหลักก็ไม่ปิด
+ให้ไปรันพื้นหลัง เรียกใช้ได้เสมอเหมือน Parsec; รองรับ Windows ด้วย".** The controller's X no
+longer quits: **during a live session** it drops back to the main page (device list); **on the
+main page** it hides to a **tray** so the app keeps running in the background and can be
+re-summoned any time. Cross-platform (Mac menu-bar tray + Windows tray). NOT native/FFI → no
+prerelease; Mac controller runs from dev → **owner just relaunches `start-controller.command`**.
+- **Main (`main/index.ts`):** `controllerSessionActive` flag (set by the renderer via
+  `ipcMain.on('controller:session-active')`); new `setupControllerTray(win)` (mirrors
+  `setupAgentTray`) wired in the `appMode==='controller'` branch of `createWindow`. Its
+  `win.on('close')`: `isQuitting`→allow; else `preventDefault` + (session live → `sendToWindow
+  'controller:go-home'`, main page → `win.hide()`). Tray menu = Show / Quit (Quit sets
+  `isQuitting`). Added `app.on('before-quit', ()=>{isQuitting=true})` so **macOS Cmd+Q / app-menu
+  Quit actually quit** (else the close→hide handler would trap them). `app.on('activate')` now
+  also **re-shows a tray-hidden window** (dock click), not just recreates when none exist.
+  Re-summon paths: tray click, dock (mac), or relaunch (existing `second-instance` shows it).
+- **Preload:** new `window.api.controller.setSessionActive(active)` + `onGoHome(handler)`
+  (+ `.d.ts`).
+- **Renderer (`ControllerView.tsx`):** effect reports `setSessionActive(activeDevice !== null)`
+  on change; effect subscribes `onGoHome(() => setActiveDevice(null))` (X-during-session → leave
+  session, session cleanup runs via ControllerSession unmount).
+- Agent UNAFFECTED (`setupControllerTray` only runs in controller mode; the before-quit/activate
+  tweaks are benign for the agent). typecheck(node+web) + lint clean. **DEV NOTE:** closing the
+  controller window no longer quits it — use **Cmd+Q** or the **tray → Quit** (or Ctrl+C in the
+  `electron-vite dev` terminal). **NEXT (owner): relaunch `start-controller.command` → verify X
+  in-session returns to the list (session ends), X on the list hides to tray, tray/dock/relaunch
+  brings it back, Cmd+Q still quits.** A distributable Windows *controller* build is a separate
+  build step if ever wanted (logic is already cross-platform).
+
+DONE — **cursor-shape overlay dies after a lid-close re-pair → FIXED + PROMOTED to
+full v1.35.0 (WC-verified real hardware).** WC E2E: พับจอ/re-pair + back/reconnect many
+rounds → cursor shapes (I-beam/hand/resize) return EVERY session (5/5 have `data channel
+"cursor" open` + shapes flowing, vs beta.1 where session 2+ opened the channel but sent 0);
+input/scroll/keyboard fine; default-on env intact (only GAIN=1.5), capturer unchanged.
+The two fixes together: beta.1's channel-state `onopen` guard + beta.2's koffi struct
+singleton (the real root cause). koffi lesson saved [[koffi-struct-register-once]].
+(Historical note below kept for the record.)
+Owner reproduced: after พับจอ (lid-close) + auto-reconnect, the native cursor SHAPES
+(I-beam/hand/resize) stop showing while scroll/pinch/keyboard keep working. NOT the
+earlier version-mismatch ([[cursor-shape-needs-both-sides-current-code]]) — both sides
+are on current code this time.
+- **ROOT CAUSE (found in code):** `input-helper/index.ts` the `'cursor'` channel's
+  `onopen` guarded with `if (pc !== conn) return`. On a re-pair the **input channel
+  usually opens BEFORE the cursor channel on the same conn**; if another negotiation
+  attempt starts in that gap, module-level `pc` moves to the newer conn, so when the
+  (still live) cursor channel finally opens `pc !== conn` → **`startCursorCapture`
+  never runs** → shapes go silent while input/scroll/pinch keep working on that same
+  conn. Exactly the reported symptom.
+- **beta.1 FIX (partial):** guard the cursor `onopen` on the CHANNEL's own state
+  (`cursor.readyState !== 'open'`) instead of `pc !== conn`, + `cursorStop?.()` before
+  starting. This corrected the lifecycle but **beta.1 still FAILED (WC real-hw):** shapes
+  still dead after a re-pair.
+- **THE REAL ROOT CAUSE (WC diag, deeper than beta.1) → FIX in v1.35.0-beta.2:**
+  `startCursorCapture()` runs once per session and was calling `koffi.struct('PR_POINT')`
+  + `koffi.struct('CURSORINFO')` (and `koffi.load`/`user32.func`) EVERY time. **koffi throws
+  if a named struct is registered twice** → from the 2nd pairing on it threw → the try/catch
+  returned NOOP silently → no poll timer → no shapes. A latent bug since the overlay shipped
+  (v1.32–1.34), only exposed by a real re-pair. WC diag: before = session1 41 sends /
+  session2,3 = 0; after = every session sends. FIX (baked WC's proven fix): hoist the FFI
+  init to a **module-level singleton `initCursorFfi()`** (koffi.load + koffi.struct +
+  user32.func + handle resolution run ONCE, cached; a `failed` latch avoids re-throwing);
+  `startCursorCapture` now only spins a fresh `setInterval` off the cached handle. Keeps
+  beta.1's lifecycle guard. typecheck + lint clean. **koffi rule saved:
+  [[koffi-struct-register-once]].** Golden rule #1 (koffi) → PRERELEASE. **NEXT (WC): install
+  v1.35.0-beta.2, พับจอ/re-pair 2-3×, confirm shapes return EVERY session (I-beam/hand/resize).
+  If clean → promote full v1.35.0.** (WC has patched their local agent install meanwhile so the
+  owner can use the mouse across lid-close until beta.2 lands.)
+
+
+DONE — **B1: productize the streaming stack to DEFAULT-ON so a fresh install "just
+works" without manually-set env → VERIFIED + PROMOTED to full v1.34.0.** WC simulated a
+fresh machine (deleted all `VIDEO_*` User env) → agent log showed `startSession codec=hevc`
++ `capturer: nvenc HEVC P1/ULL` (~60fps, enc_ms 4-8ms) + `data channel "cursor" open`, all
+from the baked defaults; owner confirmed "ใช้งานได้เหมือนเดิม". Escape hatches
+(`VIDEO_CAPTURER=0`→ffmpeg+cursor-off, `VIDEO_CODEC=h264`→H.264) verified from code. Owner
+(2026-07-09): "ตอน
+เครื่องใหม่ๆ ติดตั้งต้องเรียบร้อยใช้งาน". The good experience was gated behind persisted env
+vars (`VIDEO_CAPTURER=1` / `VIDEO_CODEC=hevc` / `VIDEO_NACK_BUFFER=1`) that a reinstall or a
+registry wipe ([[agent-env-overrides-must-be-persisted]]) would lose → a fresh machine fell
+back to plain ffmpeg/H.264. Flipped all from opt-in to **opt-out (default ON, disable with
+`=0`/`h264`)**, reproducing the owner's exact verified stack out of the box:
+- `sender/index.ts` `capturerEnabled()` → `VIDEO_CAPTURER !== '0'` (capturer default-on; SILENT
+  ffmpeg fallback if it can't run, so default-on can't black-screen). `resolveCodec()` → default
+  **HEVC** (`VIDEO_CODEC=h264` forces H.264) — matches the owner's pair (agent encodes HEVC, the
+  M4 Pro Mac HW-decodes it; a non-Mac controller uses WebRTC anyway, so no new risk). `VIDEO_LTR`
+  stays default-OFF (LTR is worse on blackout loss, [[ltr-worse-than-idr-on-blackout-loss]]).
+- `receiver/index.ts` `nackBufferEnabled()` → `VIDEO_NACK_BUFFER !== '0'` (patched darwin ndc ships
+  committed + postinstall-reapplied; without it, no NACKs arrive → the buffer just times out each
+  small gap = a hair more delay, never a break).
+- `input-helper/index.ts` `cursorOverlayEnabled()` follow → `VIDEO_CAPTURER !== '0'` (cursor overlay
+  tracks the capturer default; ffmpeg fallback still auto-disables it = no double cursor).
+- Safety bar INTACT: the native pipeline still only engages when both peers advertise native caps +
+  NVIDIA + binaries present; else total WebRTC fallback. These flips only change which codec/capture
+  runs WITHIN the native path. typecheck + lint clean (no committed unit-test suite / test script;
+  build relies on typecheck+lint). Golden rule #1/#7: native/FFI in the default path → PRERELEASE
+  first. **NEXT (WC): on a truly-fresh agent install with NO `VIDEO_*` env set, confirm the HUD/logs
+  show `spawn capturer` + `codec=hevc` + smooth Parsec-like feel + cursor shapes; on the Mac with no
+  `VIDEO_NACK_BUFFER`, confirm the NACK buffer engages; verify the `=0`/`h264` escape hatches still
+  fall back. If clean → promote full v1.34.0.** → **DONE: promoted to full v1.34.0.**
+
+
+DONE — **Mac-native control — smooth trackpad scroll → PROMOTED to full v1.32.0
+(WC-VERIFIED on real hardware, owner-confirmed feel).** Owner (2026-07-09):
+"โหมดเฉพาะแยกของ Mac ... ควบคุมผ่าน Mac ให้ใช้งานแบบ Mac 100% โดยเฉพาะทัชแพดต้องสมูส
+ลื่นไหล". Full plan: [`docs/mac-trackpad-plan.md`](docs/mac-trackpad-plan.md).
+- **VERIFIED (WC + owner, real hardware, v1.32.0-beta.1):** two-finger up/down +
+  left/right (HWHEEL) = smooth continuous, NO dead-zone on slow flicks; momentum
+  works. Feel: `INPUT_WHEEL_GAIN=1` was "ช้าไปนิดเดียว" → **1.5 = "พอดีเลย กำลังดี"
+  = 1:1 with the Mac trackpad** → **baked `WHEEL_GAIN` default 1→1.5** in both
+  `injectorWin32.ts` + `rawInject.ts` (env `INPUT_WHEEL_GAIN` still overrides) and
+  cut full **v1.32.0** (rebuilt so the value ships IN the app, not via a temp setx).
+  non-px path (USB mouse / Windows controller) untouched = no regression; coalesce
+  guards runaway; wheel isn't logged (verified by feel — add a log line at case
+  'wheel' later if observability is wanted).
+- **Phase 2 — pinch-to-zoom DONE (committed, CONTROLLER-ONLY, no agent/FFI/protocol
+  change → no installer needed; owner relaunches `start-controller.command` to use
+  it, agent stays on v1.32.0).** macOS delivers a trackpad pinch as a `wheel` with
+  `ctrlKey=true` and NO physical key, so today it just scrolls. `handlePinchZoom`
+  (`ControllerSession.tsx`, inside `handleWheel`'s Mac branch only) synthesizes a real
+  **Ctrl (scancode, the already-verified key path)** held for the pinch burst, released
+  `PINCH_IDLE_MS`=140ms after the last pinch wheel → the agent reads Ctrl+wheel = zoom.
+  Guard: a genuine physical Ctrl+scroll already forwards a real Ctrl via the key path,
+  so we synthesize ONLY when `ctrlKey` is set AND no physical Ctrl is held
+  (`heldKeysRef`, now shared between the keyboard effect + wheel handler); panic-release
+  (blur/hide) drops the synthetic Ctrl too. Reuses verified scancode-key + px-wheel
+  paths (no koffi, golden rule #1 N/A); Windows controller never enters the Mac branch
+  = byte-identical. typecheck clean; lint = the one pre-existing `[]`-deps effect
+  warning (now also names releasePinchCtrl). **OWNER-VERIFIED (2026-07-09): pinch
+  in/out zooms correctly ("ใช้ได้ ซูมเข้าออก") — direction correct, no regression.**
+  Phase 2 DONE.
+- **Phase 3 — native 0-latency cursor SHAPE → READY TO ENABLE (awaiting real-hw
+  verify). KEY FINDING: it's MOSTLY ALREADY BUILT + the latency goal is already met.**
+  The shipping DXGI capturer (`VIDEO_CAPTURER=1`) encodes the desktop **with NO cursor**
+  (DDA excludes the HW cursor; `main.cpp` only reads pointer metadata, never composites
+  it — confirmed by reading the source), so the pointer the owner sees is **already the
+  local Mac cursor at 0 latency** — the "glued" goal is effectively done on the capturer
+  path. The ONLY gap = it's always an ARROW (wrong shape on text fields / links / resize).
+  Phase 3 fills that via the **dormant `PR_CURSOR_OVERLAY` plumbing (built + koffi-verified
+  in beta.4, shipped dormant in v1.32.0)**: agent `cursorCapture.ts` (`GetCursorInfo` →
+  13 semantic `CursorShape`s + `none`, on change, ~16Hz) sends over a `'cursor'` data
+  channel → controller applies it as a CSS `cursor` (already wired, NO gate) → macOS draws
+  the correct native shape at 0 latency. **Enabling = `PR_CURSOR_OVERLAY=1` on the agent
+  (NO rebuild — it's in v1.32.0), persisted in the registry
+  ([[agent-env-overrides-must-be-persisted]]), relaunch agent + reconnect.** Coherent ONLY
+  with the capturer (no composited cursor); the ffmpeg fallback (`draw_mouse=1`) would
+  double the cursor → stays **opt-in + real-hw-verified before any default-on** (golden
+  rule #1); the flag is also the built-in cancel switch ("เผื่อไม่ดีค่อยยกเลิก").
+  - **WC-VERIFIED on real hardware (2026-07-09, `PR_CURSOR_OVERLAY=1` + VIDEO_CAPTURER=1
+    + HEVC): PASS** — text field→I-beam, link/button→hand, window edge→resize
+    (ew/ns/nwse/nesw), normal→arrow; shapes change instantly (0-latency, 60ms poll); **NO
+    double cursor** (capturer draws no cursor → the CSS overlay is the one cursor). Owner
+    asked "does a Windows controller get this too?" → YES, the controller render is shared
+    (`ondatachannel 'cursor'` → `onCursorChannel` → `setRemoteCursor` → CSS on the video
+    el, pure React/CSS, OS-agnostic; glyph = the controller OS's native cursor). Caveat: a
+    Windows controller must be v1.32.0-beta.1+ (older = no `onCursorChannel`); not a concern
+    now (owner's Mac controller is dev/latest).
+  - **BAKED DEFAULT → PRERELEASE v1.33.0-beta.1:** `input-helper/index.ts`
+    `cursorOverlayEnabled()` — `PR_CURSOR_OVERLAY=0` forces off (cancel), `=1` forces on,
+    UNSET → **on automatically when `VIDEO_CAPTURER=1`** (the ONLY state where the video is
+    guaranteed cursor-free, so the overlay can't double). ffmpeg fallback (composites the
+    cursor) → overlay stays OFF = no double, per WC's requirement 2. Owner no longer needs
+    the env var. typecheck + lint clean.
+  - **VERIFIED + PROMOTED to full v1.33.0 (WC agent-side + owner Mac-side, 2026-07-09):**
+    with `PR_CURSOR_OVERLAY` REMOVED (only `VIDEO_CAPTURER=1`), the helper log shows
+    `data channel "cursor" open` from the baked default, and the owner confirmed the shapes
+    on the Mac (text→I-beam, link→hand, edge→resize, normal→arrow, no double, 0-latency).
+    The ffmpeg-fallback gate (no channel when `VIDEO_CAPTURER!=1`) is proven from code (live
+    test skipped — would disrupt the session; logic is unambiguous). **Mac-native trackpad
+    is COMPLETE: Phase 1 (v1.32.0 smooth scroll+HWHEEL) + Phase 2 (pinch-zoom) + Phase 3
+    (v1.33.0 native 0-latency cursor shape).**
+  - **GOTCHA (2026-07-09, cost a long false FFI chase → saved to
+    [[cursor-shape-needs-both-sides-current-code]]):** after all the v1.34.0/lid-test churn the
+    cursor shapes stopped showing while scroll/pinch/keyboard still worked. Root cause was NOT
+    the FFI — it was the **Mac controller running a STALE dev build missing its half of the
+    overlay** (`trackCursorChannel` + CSS). The shape needs BOTH halves current: agent
+    (`cursorCapture` + `'cursor'` channel) AND controller (`trackCursorChannel` + CSS); a stale
+    build on either side = no shapes even though the channel opens (scroll/pinch ride a different
+    channel, so they mask it). Fix = relaunch `start-controller.command` on the latest checkout
+    (the Mac controller is dev-run, not a versioned install). Debug order: badge=NATIVE first,
+    then confirm both sides' code, THEN the agent log line `data channel "cursor" open`, and only
+    then FFI.
+- **ROOT CAUSE of the chunky scroll:** the pipeline threw away the trackpad's
+  high-resolution signal — controller sent only `deltaY/40`, the agent did
+  `Math.round(abs(dy))` (a gentle flick 8px→dy 0.2→round 0 = scrolls NOTHING) then
+  `nut.js scrollDown` in whole 120-unit notches; no horizontal, no momentum, no
+  pinch. Windows itself is fine — `SendInput` `mouseData` < WHEEL_DELTA(120) = real
+  high-res smooth scroll that modern apps honor; the bottleneck was nut.js + our
+  rounding.
+- **Phase 1 DONE (Mac-side code, this session):** high-resolution scroll end-to-end,
+  **auto-gated to Mac controllers (no toggle)** so a Windows controller is
+  BYTE-IDENTICAL to before (owner's explicit concern — "อย่าให้ผู้ใช้ผ่าน Windows
+  มีปัญหา"). Design: new protocol `px?` flag on `wheel` (+`dx?`) —
+  `px:true` = RAW pixel deltas (Mac path); absent = legacy notch path (Windows/old
+  controller, unchanged). Controller (`ControllerSession.tsx`): `IS_MAC_CONTROLLER`
+  (UA) gates `handleWheel` to forward raw deltaX/deltaY (deltaMode-normalized) via
+  `sendWheel` (sums pending delta under channel backlog — never drops scroll travel).
+  Agent: new koffi **`injectWheelWin32(dx,dy)`** (`injectorWin32.ts`, MOUSEINPUT +
+  fractional accumulator + `MOUSEEVENTF_HWHEEL` horizontal) bypasses nut.js — same
+  move the keyboard made; `scrollMouse(dy,dx,px)` routes to it only when `px` +
+  win32; `input-helper` dispatch passes dx/px + coalesces queued wheels by SUMMING;
+  renderer path threaded (AgentView/preload/main `input:scroll`); SYSTEM injector
+  (`rawInject.ts`) got the same accumulator + HWHEEL. Feel knob `INPUT_WHEEL_GAIN`
+  (default 1, tune on hw → bake). typecheck clean; lint clean (only the 2 pre-existing
+  AgentView ref errors + the pre-existing ControllerSession sendInput deps warning).
+- **Golden rule #1:** koffi SendInput wheel = native FFI → shipped as PRERELEASE
+  v1.32.0-beta.1, WC verifies on the real Windows agent BEFORE promoting. NEXT (WC):
+  Mac trackpad two-finger scroll = smooth + no dead-zone on slow flicks; momentum
+  continues after lift; horizontal scroll works (HWHEEL); no runaway under load;
+  a real USB mouse wheel still feels notchy/normal; tune `INPUT_WHEEL_GAIN` to ~1:1
+  then bake the default. Windows-controller regression check = scroll unchanged.
+- **Deferred (Phase 2/3, after Phase 1 feels right):** pinch-to-zoom (Chromium
+  pinch = wheel+ctrlKey → wrap Ctrl on the agent); local 0-latency Mac cursor overlay
+  (reuse dormant `PR_CURSOR_OVERLAY`) for the true "glued to the mouse" pointer feel.
+
+IN PROGRESS (branch `feat/native-video`): **native-video polish — HUD latency
+telemetry (SHIPPED to the branch) + a 120fps/60Mbps PRERELEASE awaiting real-
+hardware verify.** Post-v1.24.0 the owner asked to see real latency numbers, then
+to push FPS.
+- **HUD telemetry (`7d491e4`, Mac-side only, committed — no prerelease needed, not
+  FFI):** the native HUD showed only fps/kbps (`Network ?ms`, `0×0`). Added: (1)
+  **true resolution** — a from-scratch H.264 **SPS parser**
+  (`video-native/receiver/spsDimensions.ts`, handles frame-cropping 1088→1080 /
+  high profile / emulation-prevention bytes; unit-verified 10/10 incl. a real
+  ffmpeg 1080p vector; parsed once off the first IDR in `receiver/index.ts`) since
+  ndc/VideoToolbox never surface the size to Node; (2) **real Network RTT** — the
+  native pc is media-only so `pc.rtt()` (SCTP) is always null; derive RTT from the
+  **input pc's** candidate-pair `currentRoundTripTime` in `ControllerSession`
+  onStats (same two machines / same path, always has a data channel; mirrors
+  useVideoStats); (3) **frame-pacing Jitter** — RFC3550-style smoothed AU inter-
+  arrival, receiver-side (new `jitterMs` on `NativeVideoStats`); (4) dropped the
+  fake `Decode 0ms` (AVSampleBufferDisplayLayer has no decode callback — hide vs
+  lie). Owner confirmed live: `Network 11ms · Jitter 10ms · 2560×1440`.
+- **RESOLUTION IS NOT DOWNSCALABLE ON THIS GPU (documented finding):** the owner
+  asked for an in-app resolution setting. Can't be done without killing latency —
+  `ffmpegArgs.ts:83-90` already records that `scale_d3d11` fails on the agent's
+  driver (VideoProcessor can't do BGRA→NV12, reproduced ffmpeg 8.1 + master 2026)
+  and CUDA hwmap is "not implemented", so NVENC encodes at the **native capture
+  res** (2560×1440). The only downscale path is hwdownload→CPU-scale = kills zero-
+  copy + adds latency, which defeats native. On a direct ~11ms link bandwidth
+  isn't a constraint anyway. DECISION: leave it at native res (the owner's own
+  fallback). The zero-cost lever if ever needed = change the source monitor's
+  Windows display res (still zero-copy).
+- **120fps + 60Mbps → PRERELEASE v1.25.0-beta.1 (`2e8e4aa`):** the Mac controller
+  is ProMotion 120Hz and the owner's source is 144Hz, so 120fps is the perceptible
+  ceiling (min of both displays; NVENC 3060Ti does 1440p120 easily). Bumped
+  `DEFAULT_VIDEO_CONFIG` (native-only; the agent passes it straight to the sender;
+  WebRTC untouched): `fps 60→120`, CBR `startBitrateKbps 20→60 Mbps` (2× frames
+  need ~2× bits; Parsec runs ~60-70 here), min 6→20, max 30→70. Built via
+  `build-win.sh` @ `2e8e4aa` (all 3 packed checks pass, signed, 175MB), published
+  **PRERELEASE v1.25.0-beta.1** off `feat/native-video` (golden rule #1). beta.1
+  e2e: **120fps encoded perfectly** (HUD 113fps, Jitter 3ms, nvidia-smi 122fps @
+  67% util, headroom) BUT after 1-3 min the whole session froze (mouse+kbd dead,
+  frame stuck, HUD blank) — SUPERSEDED by beta.2.
+- **ROOT CAUSE of the beta.1 freeze (Windows-Claude, real hardware):** the "mouse
+  death" was a SYMPTOM. `video-sender.log` showed `ffmpeg [ddagrab] AcquireNextFrame
+  failed: 887a0026` = **DXGI_ERROR_ACCESS_LOST** — ddagrab loses Desktop Duplication
+  on a desktop/mode switch or a 2nd capturer (Parsec was running concurrently!) →
+  ffmpeg exits code=1 → sender helper reported FATAL → **full re-pair tore down
+  BOTH video+input** for seconds (sometimes hung at "connecting"). NOT ping/pong
+  (0ms), NOT CPU (1%), NOT NVENC (67% free), input-helper healthy throughout. Plus
+  `juice: Lost connectivity` (ICE) 2×/15min — the fixed 60 Mbps CBR straining the
+  link. (Aside: running Parsec + our ffmpeg at once fights over DXGI duplication +
+  dual NVENC — don't; close Parsec.)
+- **FIX → PRERELEASE v1.25.0-beta.2 (`edd6a59`):** (1) **ddagrab crash recovery**
+  (`frameSource.ts`) — an ffmpeg exit AFTER it streamed is treated as recoverable
+  capture loss: **restart ffmpeg in place** (~300ms, fresh IDR + in-band SPS/PPS)
+  WITHOUT tearing down the peer connection (brief ~0.5s freeze that auto-recovers
+  vs a full re-pair); crash-loop guard (>5 exits/10s) still escalates to onFatal.
+  (2) **60fps** (was 120) + (3) **VBR ≤40 Mbps** (was 60 CBR) — `ffmpegArgs.ts`
+  `-rc vbr -b:v 25000k -maxrate 40000k -bufsize ~250ms`; a static screen now drops
+  to a few Mbps like Parsec (big cut in average traffic = less ICE strain);
+  `maxBitrateKbps` is finally USED (the cap). (4) **input-helper ndc log
+  Debug→Warning** (killed the 98% `[ndc:Debug]` spam; `NDC_LOG_LEVEL=Debug`
+  restores). Sender unit tests updated to VBR (all pass), typecheck clean, built
+  via `build-win.sh` (3 packed checks pass, signed). **NEXT: Windows-Claude installs
+  over beta.1, CLOSES Parsec, controls 10+ min → confirm no mouse-death/re-pair (a
+  real desktop switch auto-recovers in ~0.5s), HUD `60fps · 2560×1440` with Mbps
+  that drops on a static screen; watch for residual `juice: Lost connectivity`
+  (should fall with VBR). If clean → promote full v1.25.0.** Optional: `VIDEO_NVENC_
+  BITRATE_KBPS` still sweeps the VBR target live. STILL OPEN: fix any re-pair that
+  hangs at "connecting" (controller side) if it recurs post-fix.
+- **beta.2 VERIFIED stable (owner, real hardware): the freeze is GONE** — used it
+  long with no mouse-death. Windows-Claude confirmed agent-side: 60fps, VBR
+  `-b:v 25000k -maxrate 40000k`, ndc spam 0, and **NVENC util dropped 67%→8%** at
+  60fps VBR. beta.2 is promotable BUT two follow-ups emerged before promoting (see
+  below), and the owner's REAL use = **Parsec always open as the primary monitor
+  (do NOT close/modify Parsec)** — so coexistence must be proven with Parsec
+  running (the stable test had it closed).
+- **GPU efficiency vs Parsec — dup_frames=0 → PRERELEASE v1.25.0-beta.3
+  (`8348ca8`, VERIFIED + shipped):** Task Manager showed our ffmpeg at **45.7%
+  Video-Encode engine** vs Parsec 6.1% (same tool). Cause: `ddagrab=...:framerate=60`
+  with default dup_frames=1 re-encodes the STATIC screen 60×/s. Fix = **`dup_frames=0`**
+  (emit only on actual desktop change; framerate = a cap) — Parsec's trick; our RTP
+  path already uses wall-clock TS for this variable interval (phase1/NOTES #64).
+  **Windows-Claude verified standalone on the RTX 3060 Ti: static-screen encoder util
+  ~32%→~2% (BELOW Parsec's ~6%), stream −91%, AND the cursor stays smooth** — the
+  feared cursor-in-video freeze did NOT happen because a cursor-only move is itself a
+  desktop change (draw_mouse composites it) → ~54fps while moving, ~5fps idle. Also
+  added a **receiver jitter guard** (exclude AU gaps >100ms) so the HUD jitter doesn't
+  spike under the now-variable frame rate. Built via `build-win.sh`, published beta.3.
+  **beta.3 in-app result (owner+Windows-Claude, Parsec running, ~12min):** ✅ no
+  black/stall on a static screen (fps ran 50-77); ✅ ddagrab ACCESS_LOST hit once
+  (Parsec grabbed the desktop) and beta.3 recovered in place (`restarting capture
+  300ms`, no re-pair). ❌ **GPU still ~38-42% (avgFps ~38), NOT near Parsec's ~6%**;
+  ⚠️ cursor a touch stuttery. ROOT CAUSE FOUND: **we composite the cursor into the
+  video (`draw_mouse` default-on), and in real use the mouse moves nonstop → ddagrab
+  sees a "desktop change" every frame → NVENC re-encodes ~38fps continuously**, so
+  dup_frames=0 can't idle. Parsec is at 6% because it draws the cursor as a SEPARATE
+  overlay (not in the video). Same reason the cursor stutters — its smoothness was
+  tied to the video framerate.
+- **CURSOR-OUT-OF-VIDEO → the real Parsec-GPU fix → PRERELEASE v1.25.0-beta.4
+  (owner picked "แบบ Parsec เป๊ะ", SHIPPED):** ship `draw_mouse=0` (cursor NOT baked
+  into the frame → a mouse-only move is no longer a change → the encoder finally
+  idles on a static screen) AND draw the cursor natively on the Mac. Chose the SAFE
+  realization over transmitting a cursor bitmap (koffi GetDIBits = the kind of pixel
+  FFI that dangling-pointer-crashed v1.15.0): the agent reports only the **semantic
+  cursor SHAPE** and the Mac applies it as a **CSS `cursor`** so macOS draws the real
+  native cursor (0-latency, correct hotspot, 1:1 position — the Mac already knows the
+  position, it's the input source). Standard cursors (arrow/I-beam/hand/resize/wait/
+  hidden) map to CSS keywords; custom app cursors fall back to arrow. New code:
+  `input-helper/cursorCapture.ts` (Windows koffi `GetCursorInfo` + `LoadCursorW`
+  handle-compare, lazy load per golden rule #5, struct-size guard, fully try/no-op
+  guarded → any failure degrades to the local Mac cursor, never a black hole); a
+  dedicated `'cursor'` data channel on the input pc (`input-helper/index.ts` creates
+  it, `peerConnection.ts` `onCursorChannel`, `ControllerSession` applies the shape as
+  CSS on the video el, native mode only so WebRTC is untouched); `CursorShape`/
+  `RemoteCursorMessage` in `inputProtocol.ts`; `contract.ts` `DEFAULT_VIDEO_CONFIG.
+  cursor` `'composited'`→`'separate'`; `ffmpegArgs.ts` grab now `...:dup_frames=0:
+  draw_mouse=${separate?0:1}`. Mac-side verified: typecheck (node+web) + sender unit
+  tests (draw_mouse 0/1 asserted) + lint(prod, 0 err) all clean. **koffi FFI VERIFIED
+  (golden rule #1): Windows-Claude ran the isolation harness `node src/input-helper/
+  dev/cursor-capture-test.mjs` on the real RTX agent — 3 runs, NO segfault, 7 shapes
+  correct — so `cursorCapture.ts` needs no changes.** Built via `build-win.sh` @
+  `feat/native-video` (all 3 packed checks pass: node-datachannel/koffi/ffmpeg win32,
+  signed, 175MB, VITE_SIGNALING_URL=cooperative-incorporate-innovations-jumping),
+  published **PRERELEASE v1.25.0-beta.4**. **NEXT e2e (owner+Windows-Claude, Parsec
+  left OPEN/untouched — primary monitor): install over beta.3, control 10+ min →
+  (1) GPU Video-Encode during ACTIVE control should drop toward Parsec's ~6% now the
+  cursor no longer re-encodes the screen (THE DECIDER); (2) cursor shows correct NATIVE
+  shape (I-beam/hand/resize) + no stutter; (3) coexists with Parsec (ACCESS_LOST
+  recovers in place); (4) no mouse-death/stuck-keys.** If clean → promote full v1.25.0
+  (rolls up 60fps+VBR≤40, ddagrab crash-recovery, dup_frames=0, cursor-out-of-video,
+  quiet ndc log, HUD telemetry, stuck-key panic-release).
+- **beta.4 e2e RESULT = REGRESSION (owner+Windows-Claude, real hardware ~12min):**
+  `draw_mouse=0` DOES remove the cursor from the video (pixel-diff verified, not a
+  software cursor, not Parsec's fault) BUT gave **ZERO GPU benefit** — DXGI Desktop
+  Duplication emits a new frame on EVERY pointer-move and ddagrab passes it through
+  regardless (`dup_frames=0` only stops padding, doesn't check `LastPresentTime`), so
+  `draw_mouse` 0 vs 1 = identical 478-frame count; GPU stayed ~38-42%. PLUS a
+  double-cursor-on-drag artifact (app drag-images stay baked in the video while the
+  CSS cursor moves independently). So beta.4 is STRICTLY WORSE than beta.3. Root cause
+  is structural (ddagrab has no change-detection) — fixable only with a custom DXGI
+  capturer, NOT a flag.
+- **PIVOT → full Parsec-parity roadmap (owner, 2026-07-08: "แก้มันทั้งหมด ไล่ทีละอย่าง
+  เอาให้เหมือน Parsec"):** owner found a research doc
+  (`~/Downloads/low-latency-remote-streaming-guide.md`, Parsec/Moonlight/Sunshine
+  architecture); measured against our pipeline we already do ~80% right (zero-copy
+  cap→enc + enc→render, B-off/zerolatency/no-lookahead, jitter=0, input channel + seq
+  + normalized coords, NACK/PLI, HUD). The gaps + the incremental plan are now in
+  **[`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md)** —
+  Step 0 revert beta.4 + ship v1.25.0 baseline; Step 1 intra-refresh (no 1s keyframe
+  spike); Step 2 multi-slice + present tuning; **Step 3 custom DXGI capturer with
+  change-detection = the real Parsec-GPU fix + proper cursor (reuses beta.4's cursor
+  channel + Mac CSS overlay, sourcing shape from DXGI metadata)**; Step 4 FEC
+  (deferred). Doing 0→1→2 first (cheap, existing ffmpeg pipeline), then Step 3
+  (big native, phased, prerelease-per-substep).
+- **Step 0 DONE — full release v1.25.0** (reverted beta.4; cursor overlay plumbing
+  kept DORMANT behind `PR_CURSOR_OVERLAY`, reused in Step 3d; rolls up
+  60fps+VBR≤40, ddagrab crash-recovery, dup_frames, HUD telemetry, stuck-key).
+- **Step 1 — intra-refresh → PRERELEASE v1.25.1-beta.1 (SHIPPED, awaiting verify):**
+  WC confirmed `h264_nvenc` supports `-intra-refresh`/`-forced-idr` on the RTX agent
+  and test-encoded it (1 I-frame at start, rolling I-MBs after, no periodic IDR,
+  decode clean, forced-idr on PLI still accepted). `ffmpegArgs.ts` nvenc now adds
+  `-intra-refresh 1 -forced-idr 1` and sets `-g` to `NVENC_INTRA_REFRESH_GOP`
+  (999999 — no periodic full IDR; recovery via PLI→forced-idr; dump_extra still
+  repeats SPS/PPS in-band for mid-join). Unit tests updated + pass; built via
+  build-win.sh.
+  - **beta.1 BUG (WC, real hardware) → FIXED in beta.2:** intra-refresh + forced-idr
+    were in the argv correctly, but `sender/index.ts:243` passed `gop = config.fps`
+    (60), overriding buildFfmpegArgs' `NVENC_INTRA_REFRESH_GOP` default → running argv
+    was `-intra-refresh 1 -g 60`, so NVENC still emitted a full IDR every 1s (proven:
+    intra-refresh+g60 = 3 I/3s vs +g999999 = 1 I/3s → bitrate still spiked). Fix:
+    `sender/index.ts` now sets `gop = NVENC_INTRA_REFRESH_GOP` (the `config.fps` "1s
+    GOP" comment predated intra-refresh; MF fallback is unaffected — its argv has no
+    `-g`). Rebuilt → **PRERELEASE v1.25.1-beta.2**.
+  - **beta.2 REGRESSION (WC, real hardware) → FIXED in beta.3:** argv was finally
+    correct (`-intra-refresh 1 -g 999999 -forced-idr 1`, image sharp) BUT the Mac
+    receiver FROZE mid-session — owner had to reconnect every 1-3 min. Proven
+    receiver-side: during each freeze the sender log was error-free (pure P-frame
+    stream, NO ddagrab ACCESS_LOST / respawn / fatal) = a VideoToolbox decode stall,
+    not capture. ROOT CAUSE: **pure intra-refresh (`-g 999999` = one IDR ever) removes
+    the periodic IDR that AVSampleBufferDisplayLayer NEEDS to recover** — VT does NOT
+    resume off intra-refresh's rolling I-MB recovery, so any loss/reference gap sticks
+    forever (drag felt worse = more motion → more glitches → more freezes). forced-idr-
+    on-PLI didn't save it (receiver wasn't sending PLI on decode-stall; forcing an IDR
+    then needed a heavy ffmpeg respawn). **NEVER ship pure intra-refresh on this VT
+    pipeline** (saved to memory). FIX (Option B): keep intra-refresh (spreads the
+    keyframe cost across P-frames) but restore a MODERATE periodic IDR safety net —
+    `NVENC_INTRA_REFRESH_GOP` 999999→**120** (IDR every ~2s@60fps, half v1.25.0's 1s
+    spike frequency) so VT self-heals at least every 2s. `ffmpegArgs.ts` +
+    `sender/index.ts` comments + unit test updated (`-g 120`, not 60/999999); all pass,
+    typecheck clean. Rebuilt → **PRERELEASE v1.25.1-beta.3**.
+  - **beta.3 STILL FROZE → VERDICT: intra-refresh REVERTED (Option A) → v1.25.1-beta.4:**
+    beta.3 (`-g 120` + intra-refresh) froze mid-session just like beta.2 (`-g 999999` +
+    intra-refresh); only v1.25.0 (`-g 60`, NO intra-refresh) is stable. **The culprit
+    is `-intra-refresh` itself, NOT the GOP length** — VideoToolbox / AVSample­Buffer­Display­Layer
+    can't cleanly decode the rolling-intra P-frame structure (blurs/freezes BETWEEN
+    IDRs, recovers only off a real IDR), so changing IDR frequency can't fix it (WC,
+    real hardware, both prereleases). **NEVER use NVENC `-intra-refresh` on this VT
+    pipeline** (saved to memory: [[pure-intra-refresh-freezes-videotoolbox]]). Fix =
+    remove `-intra-refresh 1`; renamed the const `NVENC_INTRA_REFRESH_GOP` →
+    **`NVENC_KEYFRAME_GOP`**. Kept the ONE salvageable partial Step-1 win: plain
+    periodic **`-g 120`** (IDR every 2s, NO intra-refresh) instead of v1.25.0's `-g 60`
+    (1s) — plain periodic IDRs decode fine on VT and this halves the keyframe-spike
+    frequency. `-forced-idr 1` retained (harmless; forces a real IDR on PLI). Unit test
+    now asserts `!-intra-refresh` + `-g 120`; tests + typecheck clean. Rebuilt →
+    **PRERELEASE v1.25.1-beta.4**.
+  - **beta.4 VERIFIED stable → PROMOTED to full v1.25.1 (Step 1 DONE):** WC on real
+    hardware — argv confirmed `-g 120` + NO `-intra-refresh` + `-forced-idr 1`; owner
+    controlled with heavy drag, NO freeze, a single stable ffmpeg pid ~3+ min, 0
+    reconnects, 0 errors. **Step 1 landed as the plain `-g 120` partial win** (IDR every
+    2s vs v1.25.0's 1s = half the keyframe-spike frequency; intra-refresh permanently
+    dropped — VideoToolbox-incompatible at every GOP length,
+    [[pure-intra-refresh-freezes-videotoolbox]]). The true flat-bitrate endgame
+    (receiver detects decode-stall → PLI → cheap forced IDR, no respawn) is deferred to
+    Step 2/3 receiver work.
+- **Step 2 — SKIPPED (code audit 2026-07-08; owner chose to jump to Step 3):** it
+  delivers no perceptible win as our pipeline is built. (1) The Mac present path is
+  ALREADY optimal — every sample is tagged `kCMSampleAttachmentKey_DisplayImmediately
+  =true` and enqueued straight into `AVSampleBufferDisplayLayer.sampleBufferRenderer`
+  with no timebase/queue (`receiver/render/decoder.swift`+`embed.swift`). (2)
+  `-slices 4` gives NO latency benefit here because the sender assembles the WHOLE
+  access unit and sends it in one `sendMessageBinary` (slices only cut latency if you
+  *pipeline* per-slice sends, which we don't) — and it would BREAK `AccessUnitAssembler`
+  (1 VCL = 1 frame → 4 slices = 4 broken sub-frames). Real slice benefit = a slice-
+  level send + partial-decode rewrite = Step-3-scale. Deferred robustness-only variant
+  (multi-slice-aware assembler, corrupts 1/4-frame on loss) is invisible on the clean
+  link — not worth it. Details in [`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md).
+- **Step 3 — custom DXGI capturer = the real Parsec-GPU + cursor fix (ACTIVE, owner
+  picked it over Step 2). Full spec: [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md).**
+  ARCHITECTURE DECIDED: a **standalone `capturer.exe` subprocess** (DXGI Desktop
+  Duplication + change-detection + NVENC → Annex-B on stdout, byte-identical contract
+  to today's ffmpeg → drop-in for `FfmpegFrameSource`, receiver UNCHANGED) — NOT
+  koffi-COM, NOT a node addon, for crash isolation (golden rule #1: a DXGI/NVENC fault
+  = a subprocess exit the existing ffmpeg crash-recovery handles, not an Electron-main
+  segfault) + reuse of the proven spawn/stdout/NalSplitter/RTP plumbing. **Windows-
+  Claude-LED** (needs MSVC + the real RTX GPU; Mac-Claude can't compile/run DXGI+NVENC
+  — Mac owns the spec, the Annex-B contract, the sender TS wiring in 3c, the Mac cursor
+  overlay in 3d, review/merge). Phased, prerelease-per-substep:
+  - **3a ✅ DONE + VERIFIED on real hardware (WC):** standalone `capturer.exe` (MSVC +
+    Win SDK, NOT koffi/addon) with the `AcquireNextFrame` change-detection loop —
+    SKIPS `WAIT_TIMEOUT` (unchanged) AND `LastPresentTime==0` (pointer-only). **The
+    decider passed: mouse moving on a static screen → ~0 screen frames emitted** (the
+    exact case ddagrab/beta.4 could NOT skip = the GPU root cause). ACCESS_LOST recovery
+    hardened (was capped 15s → survived a ~22s lock via unlimited retry + throttle).
+    Reads cursor `PointerPosition`/`GetFramePointerShape` (for 3d). Files:
+    `apps/desktop/native/dxgi-capturer/{main.cpp,build.ps1,CMakeLists.txt,README.md}`
+    + `--selftest`. Coexists with Parsec. (WC committing to feat/native-video after
+    pulling Mac's spec.)
+  - **3b ✅ DONE + VERIFIED on real hardware (WC, `nvenc.{h,cpp}` linking nvEncodeAPI
+    directly in the C++ .exe):** DXGI `ID3D11Texture2D` → `CopyResource` → registered
+    NVENC D3D11 input → zero-copy encode (no CPU download), encoding ONLY the frames
+    3a flags as real changes. **Clean decider metric (frames NVENC actually encoded in
+    7s, Parsec running): static screen + mouse moving = 13 (~2/s: residual + forced
+    IDR) vs ddagrab's ~420; active screen = 70 (~10/s, tracks real change).** = the GPU
+    win ddagrab/beta.4 can't get (they'd encode ~420 in both). `.h264` decodes clean in
+    ffmpeg 8.1 (H.264 High, 2560×1440, yuv420p, I/P only NO B, IDR ~every 2s wall-clock,
+    SPS/PPS in-band). Config P1/ULL, VBR 25/40 Mbps, VBV 250ms, **`-g 120` NO
+    intra-refresh** ✓. ACCESS_LOST → teardown+rebuild encoder+device (fresh IDR). NB:
+    absolute enc% vs Parsec ~6% can't be measured cleanly yet (Parsec's own NVENC
+    session pollutes nvidia-smi's GPU-wide enc%); frames-encoded is the clean metric,
+    real % shows at 3c. Output = `.h264` file (stdout/RTP is 3c). third_party/ + the
+    built binary are gitignored.
+  - **3c IN PROGRESS — Mac side DONE (committed), awaiting WC's capturer stdout mode +
+    binary, then joint e2e PRERELEASE (golden rule #1).** MAC (done): `capturerArgs.ts`
+    (`buildCapturerArgs`, unit-tested), `CapturerFrameSource` in `frameSource.ts` (spawns
+    capturer.exe, reuses NalSplitter/AU/RTP untouched; **`forceKeyframe()` writes `'I'`
+    to stdin = cheap PLI recovery, no respawn**; crash-loop-guarded restart),
+    `resolveCapturerPath()` + `capturerEnabled()` gate (**opt-in `VIDEO_CAPTURER=1`,
+    default OFF → byte-identical ffmpeg path; capturer missing/fails → SILENT ffmpeg
+    fallback**, never a black screen), `electron-builder.yml` packs
+    `resources/capturer/capturer.exe`, `build-win.sh` stages from
+    `native/dxgi-capturer/bin/capturer.exe` if delivered + verifies it packed (tolerant:
+    absent → builds without it). typecheck + lint(0 err) + units pass. WC (todo): add
+    `--output stdout` + CLI arg parsing to capturer.exe (contract in
+    [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md) "3c CLI contract":
+    `--output/--monitor/--fps/--bitrate/--maxrate/--gop`, Annex-B/flush-per-frame,
+    **stdin `'I'`=forced IDR**, ACCESS_LOST recovers in-process); commit the built
+    `capturer.exe` to `native/dxgi-capturer/bin/` (needs a `.gitignore` exception — that
+    dir currently ignores `capturer.exe`). Then Mac builds the PRERELEASE
+    (`VIDEO_CAPTURER=1`). Receiver UNCHANGED. DECIDER: GPU during active control near
+    Parsec, coexists with Parsec, no freeze/stuck-keys, PLI recovery via stdin works.
+  - **3c WC HALF DONE + delivered → PRERELEASE v1.26.0-beta.1 BUILT (awaiting e2e).**
+    WC (`016e72c` 3b, `022e8d4` 3c) implemented the exact contract read from
+    `capturerArgs.ts`/`CapturerFrameSource` (no guessing): CLI `--output stdout|<path>
+    --monitor --fps --bitrate --maxrate --gop` (+`--selftest/--duration`); stdout =
+    binary Annex-B (`_setmode _O_BINARY` — no CRLF corruption, verified decodes clean in
+    ffmpeg 8.1), 4-byte start codes, in-band SPS/PPS, flush per frame, first frame IDR;
+    **stdin `'I'` (separate thread) → forces an IDR next frame, no respawn** (on a static
+    screen it re-encodes the last frame as IDR so the receiver re-syncs), EOF → exit 0;
+    IDR interval is **wall-clock** (gop/fps seconds, since change-detection makes fps
+    variable), fps is a real cap; all logs → stderr `[capturer]` (stdout is pure stream);
+    ACCESS_LOST recovers in-process. Built `capturer.exe` (192KB PE) committed to
+    `native/dxgi-capturer/bin/` with a `!bin/capturer.exe` gitignore exception (gotcha:
+    no trailing `#` comment on that line). Mac built **PRERELEASE v1.26.0-beta.1** via
+    build-win.sh (all 4 packed checks pass incl. `resources/capturer/capturer.exe`,
+    signed). **ENABLE AT RUNTIME:** the helper inherits the agent env
+    (`videoSenderHost` forks with `{...process.env}`), so launch the agent with
+    **`VIDEO_CAPTURER=1`** (e.g. `set VIDEO_CAPTURER=1 && PersonalRemote.exe`) — default
+    OFF = ffmpeg.
+  - **3c e2e RESULT (WC, real hardware) — change-detection ✅, but found the REAL
+    remaining Parsec gap = NO adaptive bitrate (BWE):** capturer verified spawning
+    (`spawn capturer`, not ffmpeg), packed binary encodes/decodes clean. **Change-
+    detection PASSED hard:** static+mouse-still = enc 0% (~1 frame/s); static+MOUSE-
+    MOVING = enc ~0% (`skipped_pointeronly` 25-60/s) vs beta.4's flat 38-42% — the
+    Parsec-GPU-idle goal ddagrab structurally couldn't hit. BUT GPU + smoothness still
+    lose to Parsec, and WC nailed WHY: **we push a FIXED 60fps + fixed bitrate with NO
+    BWE** (`sendMessageBinary` per AU, no drop/adapt). The owner's link is ~35-45 Mbps;
+    pushing 50/60 → the Mac receives only fps 33-48 / 30-45 Mbps = **packet overflow →
+    whole-frame DROPS → not smooth** (THIS is the owner's "กะชาก" judder — frames
+    dropped from overflow, not a capture/present issue). Parsec adapts fps+bitrate to
+    fit the link → no drops → smooth AND less encode → lower GPU. So the smoothness gap
+    AND the GPU gap are the SAME cause: **no adaptive bitrate/framerate.** Codec (H.265
+    vs our H.264) is NOT the culprit (A/B inconclusive, scene-variance dominates; enc%
+    ours ~30.5 vs Parsec ~19.3 at 50Mbps 1440p60 — HEVC would help ~1.6× but needs a Mac
+    HEVC-decode rewrite = parked). Latency is fine (Net 10ms, jitter 4-13ms, same NVENC
+    encode ~4-9ms, same VideoToolbox decode ~4ms). **PLAN:** (1) BAND-AID now — fit a
+    fixed bitrate to the link (~25-30 Mbps, WC testing 25/35 for zero-drop + steady 60);
+    Mac bakes the winning number into `DEFAULT_VIDEO_CONFIG` + rebuild. (2) THE REAL FIX
+    = **BWE / adaptive bitrate+fps** (receiver measures bandwidth/loss → feedback over
+    the input pc data channel → sender sets capturer bitrate LIVE via a new stdin cmd
+    `B<kbps>`, like `'I'`=IDR, no respawn) — fixes smoothness + GPU together; Mac
+    (receiver) + Windows (sender). (3) min-fps floor (WC prototyped, 30fps decay→0 on
+    static) — keep OFF by default (costs GPU 8→22% active, addresses low-motion cadence
+    not the drop-judder); revisit after BWE. WC's experiment infra (env override +
+    `%LOCALAPPDATA%\pr-capturer-tune.txt` live tune-file + `--codec h264|h265`) is worth
+    committing (gated, no default change).
+  - **3c e2e ROUND 2 (WC) — the fps-swing reframe + BWE stdin ready + goal correction:**
+    band-aid alone (25/35 Mbps) did NOT stop the swing → the earlier "no BWE" story was
+    INCOMPLETE. WC found **3 separate causes** of the fps swing (from `video-sender.log`
+    the capturer's own `emitted/s` already swings 41-60 on a video with the cursor still):
+    (1) **Capture-side variable rate** — inherent to change-detection: DXGI/DWM delivers
+    frames at the CONTENT's real cadence, not a locked 60 (a 30fps video → ~30 emit =
+    CORRECT, not a drop). Un-fixable by bitrate. (2) **No receiver pacing** — the Mac
+    shows every AU immediately (`DisplayImmediately=true`) so uneven arrival = uneven
+    display = judder; a small present/jitter buffer (~1 frame latency) smooths it. (3)
+    **Bitrate overflow** — only at high bitrate (the old 50/60); at 25/35 it's no longer
+    the bottleneck (hence "same as before"). **GOAL CORRECTION:** "lock a steady 60" is
+    NOT achievable/correct with change-detection when the source is <60fps — the right
+    pass criterion is **"received fps ≈ sender emitted (no NET loss)" + smooth perceived
+    motion**, not "steady 60". **BWE live-bitrate is DONE on the capturer** (WC, verified
+    RTX): stdin **`'B'<ascii-kbps>'\n'`** (e.g. `B25000\n`) → `nvEncReconfigureEncoder`
+    live (no respawn, no forced IDR, maxrate keeps target:max ratio); tested 25→12→45
+    Mbps mid-stream, decode clean. Committed w/ the tooling as `d73834c` (new
+    `bin/capturer.exe` — next prerelease packs it). **DIRECTION (Mac):** the real judder
+    fix = **receiver-side pacing on the Mac** (WC + earlier Mac analysis agree; NB Parsec's
+    own metric showed `queued_frames=0` so verify empirically, toggleable, ~1 frame
+    latency) — BWE fixes overflow/robustness but does NOT make motion smooth. PENDING:
+    WC compares HUD received-fps vs emitted (41-60) at 25/35 to confirm net-drop=0.
+  - **THE FIX — Parsec overlay revealed it + LOCKED-60 capturer (WC `88a3ce8`):** the
+    owner sent a Parsec perf overlay on a STATIC screen showing **Host/Client Video Frame
+    Time 16.57/16.66ms = Parsec holds a LOCKED 60fps cadence even when nothing moves**
+    (Encode field blank = unchanged frames are near-free skip-frames). So Parsec is NOT
+    change-detection-drop like our 3a-3c; it's **locked-60 cadence + cheap skip-frames**
+    → smooth AND low-GPU. Our change-detection dropped frames → VARIABLE cadence = the
+    judder. WC re-architected the capturer: **LOCKED 1/fps clock (emit every 16.66ms)**,
+    drain the latest DXGI change per tick → real P/IDR if the screen changed, else a skip
+    frame. RESULT: **cadence locked 60 (emitted 60/61 per sec, was 41-60) = judder fix ✅**;
+    skip frame = 114-118 bytes (~55 Kbps idle) ✅; decode clean (IPPP, IDR ~2s) ✅. **GPU
+    did NOT reach Parsec's 6%:** static-locked ~17-20% enc @1440p (HEVC no better) —
+    Parsec's 6% uses TRUE coded-skip (`NV_ENC_PIC_TYPE_SKIPPED`) which NVENC only allows
+    with `enablePTD=0`, but PTD=0 + the ULTRA_LOW_LATENCY preset falls back to ALL-INTRA
+    (every frame I, 62KB, worst) → reverted; under PTD=1 a "skip" still costs a motion-
+    estimation pass ~17-20% @1440p. WC's fix = **idle-decay (`--locked-idle-ms`, default
+    350):** a truly static screen has nothing to judder, so after 350ms of no change STOP
+    emitting → idle GPU ~0% (= legacy); lock 60 only while active. Net: **motion =
+    locked-60 smooth; true static = 0%; active-low-motion (video/typing) = the only
+    residual cost ~20%.** Flag-gated: `--legacy-emit` / tune `legacy=1` / env
+    `VIDEO_CAPTURER_LEGACY_EMIT=1` reverts to emit-on-change live. **MAC DECISIONS: (1)
+    default = LOCKED + idle 350** (judder was the owner's real complaint; locked fixes it;
+    true-static stays 0%; ~20% active-low-motion is acceptable on the 3060 Ti). **(2) do
+    NOT chase true 6% now** — the only paths (drop ULL for PTD=0 all-intra, or downscale
+    1440→1080) sacrifice the latency (Step 1) or resolution the owner values more; judder-
+    fixed is the win. Building **PRERELEASE v1.26.0-beta.2** (packs `88a3ce8`) for the
+    owner to FEEL the smoothness. → **beta.2 VERIFIED by the owner on real hardware:
+    "ลื่นเหมือน Parsec ละ" (smooth like Parsec) — judder GONE. PROMOTED to full
+    v1.26.0.** (golden rule #1/#7 honored: locked-60 = native capturer, verified via
+    beta.2 before the full release.) The whole Step 3 custom DXGI capturer (change-
+    detection + locked-60 cadence + idle-decay + BWE stdin primitive) is now a full
+    release. NEXT (owner: "รอบหน้าปล่อยออโต้บิตเรต Max ไม่เกิน 60 แบบ parsec") = BWE
+    auto-bitrate, ≤60 Mbps cap — the capturer stdin `B<kbps>` is ready; Mac builds the
+    receiver estimate + feedback path.
+  - **"Parsec 6%" WAS A MYTH — corrected (owner Task-Manager + Parsec overlay, 2026-07-08):**
+    with Task Manager open (its perf graph continuously ANIMATING = not truly static),
+    **Parsec itself sits at ~35% GPU Video-Encode** (overlay: Host Video Encode 8.72ms/
+    frame @ locked 16.71ms = 60fps, Bitrate 3.10 Mbps, **Hardware H.265**). So Parsec is
+    NOT magically 6% on real (animating) content — **our locked-60 ~20% is already
+    competitive/better**; ~6% only ever happens on a fully FROZEN screen, which our
+    idle-decay already takes to 0%. Fully vindicates "don't chase 6%." **The ONE real
+    remaining differentiator = codec: Parsec H.265 vs our H.264.** H.265 ≈1.6× more
+    efficient → Parsec pushes 1440p60 at only ~3 Mbps (vs our higher H.264 bitrate) = less
+    network (fewer overflow drops) + better quality per bit, NOT lower GPU (HEVC encode GPU
+    is similar/higher). **NEXT after the beta.2 judder confirm: consider H.265** — the
+    capturer already has `--codec h265` (WC); the gap is Mac-receiver HEVC decode
+    (`decoder.swift` → `CMVideoFormatDescriptionCreateFromHEVCParameterSets` VPS+SPS+PPS,
+    2-byte NAL header, VCL types 0-31/IDR 19-20 + codec-aware `nalSplitter.ts` `isVcl()` +
+    negotiation; VideoToolbox on the M4 Pro decodes HEVC in hardware = feasible, medium
+    effort both ends).
+  - 3d cursor from DXGI over the dormant `'cursor'` channel (un-gate
+    `PR_CURSOR_OVERLAY`) → Mac CSS overlay (reuse beta.4's plumbing).
+- **STUCK-KEY BUG — FIXED (`cc4e381`, controller-side, NOT native-related, does not
+  block v1.25.0):** holding a modifier (Left Shift) then switching focus (to Parsec/
+  Alt-Tab) sent the physical keyup to the new foreground window, so the controller
+  never forwarded keyup → the key stuck "down" on the agent (Thai still typed via
+  Unicode; shortcuts broke). Windows-Claude proved it from input logs (down=2 up=1
+  UNMATCHED). Fix in `ControllerSession.tsx`: track physically-held key codes +
+  **panic-release** (keyup all + clear) on window `blur`/`pagehide`/visibility-hidden.
+  Mac runs the controller from dev so the owner tests by relaunching (hold Shift →
+  switch to Parsec → back → no stuck key).
+
+IN PROGRESS (branch `feat/native-video`, NOT released — needs packaging +
+PRERELEASE per golden rule #1): **the native video pipeline works END TO END on
+real hardware, and the §3a compositing crux is SOLVED.** The Windows desktop now
+decodes + renders natively inside the Mac controller and feels like a normal app.
+- **Path**: Windows agent `ffmpeg` (ddagrab DXGI → h264_nvenc, `mf` fallback) →
+  Annex-B → `H264RtpPacketizer` → RTP over node-datachannel on
+  `channel:'video-native'` → Mac receiver child (`video-native/receiver/`, ndc +
+  JS `rtpDepacketizer` since ndc has no H.264 depacketizer) → **forwards each AU
+  to Electron main** as `{evt:'au',data:Buffer}` over an `'advanced'`-serialized
+  fork channel → main `pushNativeAccessUnit` → **koffi → `librvr.dylib`** →
+  VideoToolbox decode → `AVSampleBufferDisplayLayer`.
+- **§3a FIX (the whole point)**: the decoded video is an `AVSampleBufferDisplayLayer`
+  -backed NSView added as the BOTTOM subview of the controller window's OWN content
+  view (`embed.swift`, pointer from `getNativeWindowHandle()`), NOT a separate
+  floating NSWindow. One window ⇒ the OS handles drag / resize / fullscreen /
+  Spaces / z-order / corner-rounding for free. This killed every prior symptom
+  (drag stutter, covers-everything, clipped corners, fullscreen-mouse-dead) at the
+  root. The web UI sits above it, transparent over the video area (CSS
+  `.native-video`), controls paint on top.
+- **Window UX** (all verified windowed on the real Mac): session window locked to
+  the remote's 16:9 (`setAspectRatio` + one-time `setContentSize` snap) so the
+  video fills edge-to-edge with no letterbox AND input maps 1:1; a `.session-titlebar`
+  app-name bar ("Personal Remote · <machine>") that is the window-drag handle
+  (rendered whenever windowed, z-index BELOW the floating controls); the floating
+  control panel moved below the bar (top:42px) and made responsive (`flex-wrap` +
+  `max-width:calc(100vw-24px)`) so it stays usable in a small window.
+- **New code**: `receiver/render/{decoder.swift(shared),embed.swift(dylib),main.swift(selftest)}`,
+  `main/nativeRenderSurface.ts` (lazy koffi, golden rule #5), build via
+  `scripts/build-render-mac.sh` (→ `out/video-render/librvr.dylib`, a sibling of
+  out/main so main rebuilds don't wipe it), launch via
+  `start-controller-native.command`. SAFETY BAR intact: everything gated on
+  `VIDEO_PIPELINE=native` + both caps; default build is byte-identical WebRTC.
+- **Verified**: dylib exports the 3 C symbols; koffi loads it + calls safely under
+  Electron's Node ABI; selftest decodes 120/120; typecheck + full build clean;
+  and the owner confirmed on real hardware — video in-window, smooth drag, working
+  fullscreen mouse, no covering, title bar, responsive controls.
+- **IN-APP TOGGLE (2026-07-07, `3e68964`)**: the owner asked to run Native as the
+  PRIMARY path ("ลื่นสมูส"). Answered by making native a **saved per-machine
+  preference** (`main/pipelineConfig.ts` → userData `video-pipeline.txt`, mirrors
+  themeConfig) + a **sidebar bolt toggle** (`controller/PipelineToggle.tsx`),
+  instead of an env var + a special launcher — WITHOUT removing WebRTC, which
+  stays the automatic safety net UNDER native (native only runs Windows-NVIDIA
+  +ffmpeg → Mac; anything else / ffmpeg missing / native failure silently falls
+  back to WebRTC). `resolveVideoPipeline()` lets the `VIDEO_PIPELINE` env still
+  win (dev/harness override), else the saved pref; the 3 startup gates in
+  `main/index.ts` now read `nativePipelineEnabled()`. SAFETY BAR intact: code
+  default stays `'webrtc'` → no file + no env = byte-identical. `pipeline:get/set`
+  IPC + `window.api.pipeline`. Toggle applies on the NEXT session (receiver host
+  is wired at startup). `start-controller.command` now builds `librvr.dylib` +
+  exports `VIDEO_RENDER_LIB` (guarded on swiftc) so the toggle engages native from
+  the ONE normal launcher; it deliberately does NOT set `VIDEO_PIPELINE` so the
+  toggle is the source of truth. Typecheck + full build + lint clean.
+- **AUTO-NATIVE DEFAULT (owner, 2026-07-07, `c2a686d`): native is now the AUTO
+  default** ("บังคับออโต้ native เป็นหลัก") — `pipelineConfig` `AUTO_DEFAULT_PIPELINE
+  = 'native'`, so a machine with no saved file tries native automatically (no
+  toggle press); the sidebar bolt becomes the OFF switch. This FLIPS the old
+  "default byte-identical WebRTC" safety bar, but stays safe because native only
+  ACTUALLY engages when both peers advertise the cap + hosts ready, else TOTAL
+  silent WebRTC fallback. To keep that fallback total, `video-receiver:is-ready`
+  now ALSO requires `nativeSurfaceAvailable()` (dylib loadable) — a machine that
+  spawned the receiver but can't load `librvr.dylib` must NOT advertise native or
+  it'd black-screen with no fallback. Still MUST ship via PRERELEASE + real-agent
+  verify (ffmpeg) before a full release (golden rule #1). Live HUD badge
+  `⚡ NATIVE`/`WebRTC` (`.pipeline-badge`, app.css) in `ControllerSession` shows
+  which path is ACTUALLY rendering (bolt = saved intent; badge = live reality).
+- **ffmpeg BUNDLED + PRERELEASE v1.24.0-beta.1 (2026-07-07, `7d72300`)**: native
+  video now ships out of the box on Windows. Windows-Claude verified the agent's
+  ffmpeg (ddagrab DXGI + h264_nvenc, static LGPL master 2026-07-06) runs the exact
+  `buildFfmpegArgs()` argv on real hardware (RTX, zero-copy NVENC, 8.86MB H.264 in
+  2s, no stderr). Owner chose to bundle (vs per-machine FFMPEG_PATH). Mac side:
+  `electron-builder.yml` `win.extraResources` packs `apps/desktop/ffmpeg/` →
+  `resources/ffmpeg/ffmpeg.exe` (where `resolveFfmpegPath()` looks);
+  `build-win.sh` downloads+caches the LGPL build once, VERIFIES it's a PE AND that
+  `strings` contains `ddagrab`+`h264_nvenc` before packing, stages it, and asserts
+  it's in the packed app. Installer +67MB (100→167MB). Built via `build-win.sh` @
+  `7d72300`, all 3 packed-binary checks pass (ndc/koffi/ffmpeg). Published as
+  **PRERELEASE v1.24.0-beta.1** (golden rule #1 — native = FFI). **NEXT: real e2e**
+  — install over v1.23.0, control from the Mac, confirm the HUD badge shows
+  `⚡NATIVE` (not WebRTC) + it feels smoother + the agent's `videoSenderHost`
+  spawns ffmpeg (check logs). If good → promote to full v1.24.0.
+- **beta.1 e2e (Windows-Claude, real hardware): PASS except one bug.** ✅ ffmpeg
+  bundle spawned from `resources\ffmpeg\ffmpeg.exe` (not env — after removing the
+  stale `FFMPEG_PATH`), nvenc live, `⚡NATIVE` badge shown, stream live. ❌ native
+  cursor drifted on Y — symmetric about centre, worse toward top/bottom (X fine).
+- **MOUSE FIX → PRERELEASE v1.24.0-beta.2 (`bb858ce`)**: root cause = the native
+  surface draws `.resizeAspect` (letterbox, embed.swift) inside the session window,
+  whose aspect lock (`setAspectRatio`) only APPROXIMATELY holds 16:9, so the drawn
+  video rect is a hair shorter than the element box; the old native mouse mapping
+  normalized over the FULL box → error over the bars. WebRTC was immune because
+  `videoRelativePosition` is already letterbox-aware. Fix: native `relativePosition`
+  now reproduces the same object-fit math using the remote frame size from
+  `nativeStats` (fallback 16:9), mapping over the ACTUAL video rect (pointer on the
+  bars → null/no-move). Agent input map untouched (correct). Rebuilt via
+  `build-win.sh` @ `bb858ce` (ffmpeg cached), published **v1.24.0-beta.2**. NEXT:
+  Windows-Claude installs beta.2 over beta.1, confirms the cursor tracks 1:1 to the
+  edges → then promote full v1.24.0.
+- **STILL TODO to ship (revised for the owner's dev setup)**: the "bundle
+  `librvr.dylib` into Mac app Resources + codesign/notarize" TODO is **moot while
+  the owner runs the Mac controller from `electron-vite dev`** (no packaged .dmg —
+  backlog #5, deferred); in dev the resolver finds the dylib via
+  `VIDEO_RENDER_LIB`/out-sibling. The REAL remaining gaps are Windows-side:
+  **(1) ffmpeg must be present** on the agent (ddagrab→h264_nvenc) — ship it or
+  find on PATH; **(2)** flip the agent's saved pref to native (an agent-side
+  toggle mirroring PipelineToggle, or a script/file) so its sender host spawns;
+  then **(3)** real-hardware e2e + PRERELEASE (golden rule #1) before any full
+  release — default stays WebRTC. `stats` still reports fps/kbps only
+  (decodeMs/renderMs dropped with the Swift subprocess); Windows-side NVENC
+  preset/bitrate sweep still open.
+- Commits on `feat/native-video`: `ae3c502` (§3a in-window composite), `652b5bb`
+  + `3cd6d2f` (title bar), `29eb5ab` (controls below bar), `4397cea` (responsive
+  control bar in small windows), `3e68964` (in-app pipeline toggle + persisted
+  pref).
+
+IN PROGRESS (branch `feat/native-video`, PRERELEASE line v1.37.0-beta.x — NOT promoted):
+**120fps lever + auto-bitrate "max 50" + session-HUD redesign + titlebar-no-longer-covers-video.**
+- **`VIDEO_FPS` lever (beta.1):** `VIDEO_FPS=120` on the agent locks the native capturer to 120fps
+  (config.fps is a cap; GOP auto-scales as fps×2 to keep IDR ~2s). WC verified the capturer emits
+  120/121 steady @1440p, enc ~6ms. NOT baked (owner keeps it as an env lever). Real limiter at 120 =
+  LINK bandwidth, not GPU.
+- **Auto-bitrate "max 50" — the bufferbloat trap + fix (beta.2→beta.4):** owner asked "auto max 50".
+  FIRST set `BWE_CEIL`/`BWE_HEVC_CEIL` = 50 → WRONG: the capturer sets VBR **maxrate = target × the
+  launch maxrate:bitrate ratio (2.0)**, so BWE probing the target to ~49 drove the PEAK to ~98 Mbps
+  (WC saw ~98 live) = bufferbloat on the ~40 Mbps link. FIX (WC `987198c`, cherry-picked `652b4b5`):
+  **BWE ceiling = 25 (safe AVERAGE), `contract.maxBitrateKbps` = 50 (BURST cap)** → 25 avg × 2.0 =
+  50 peak = "max 50" done right. Rule saved: peak N ⇒ ceiling N÷ratio, never N.
+  [[loss-only-bwe-misses-bufferbloat]]. Agent stopgap for an old Mac build: capturer tune-file
+  maxrate=25000 (ratio 1:1) so the peak can't double.
+- **Session HUD redesign (controller, safe):** frosted glass (0.92→0.5 + blur), two-tier layout
+  (nav+connection-status top row via CSS `order`, telemetry bottom row), **health-colored** values
+  (`statHealth()`: Encode/Network/Jitter/Loss/Bitrate → green/amber/red; Res/FPS/Codec neutral),
+  amber left accent when NATIVE. Fullscreen: collapsed toggle centered; float 50% opacity at rest.
+  Owner picked "design 2 (two-tier) + design 4 (health color)" from a 5-option artifact.
+- **Titlebar no longer covers the remote screen (controller, native surface change):** the drag
+  titlebar was an absolute overlay over a full-window native video, so the top 34px of the remote
+  screen sat behind it. Now it's a real top strip and the video is INSET below it — `embed.swift`
+  reserves a top strip (`rvr_set_top_inset` C ABI + `setNativeTopInset` koffi binding, guarded),
+  main sets the inset on attach + fullscreen enter/leave (titlebar-px windowed / 0 fullscreen) and
+  `setAspectRatio(16/9, {height:34})` so the area UNDER the bar is exactly 16:9 (no letterbox, mouse
+  still 1:1). Title centered. dylib rebuilt by `start-controller.command` (Mac dev). Verified: Swift
+  compiles + `_rvr_set_top_inset` exported.
+- **STATUS:** shipped as prereleases beta.1–beta.4 (golden rule #1/#7 — 120fps/BWE touch the native
+  streaming path). **NEXT: owner/WC verify BWE-25 (no bufferbloat/freeze via `analyze-session.mjs`)
+  + 120fps feel → then promote full v1.37.0.** The UI changes are controller-only (Mac sees them on
+  relaunch); the agent installer only carries VIDEO_FPS + the corrected BWE ceiling.
+
+Latest release: **v1.38.0** — **secure-desktop remote control: SEE + control the UAC / lock /
+Ctrl+Alt+Del screen** (lock the PC from the Mac → see the lock screen → type the password → log
+back in). A SYSTEM capturer follows the desktop into Winlogon (DXGI+NVENC as SYSTEM) and streams
+over the unchanged RTP path; the Track 2 SYSTEM launcher spawns it via a validated request pipe +
+re-spawns per re-pair (self-heals a desktop switch); the Mac hosts the video+request pipes (Fix A).
+Opt-in `VIDEO_SECURE_DESKTOP=1` + Track 2 installed (`setup-track2-permanent.ps1`); default OFF =
+byte-identical. Off `feat/native-video`; verified end-to-end on real hardware (all 5 acceptance
+criteria incl. reboot-permanence) via prereleases beta.1→beta.2 before this full release (golden
+rules #1/#7). Full spec [`docs/secure-desktop-plan.md`](docs/secure-desktop-plan.md). Remaining
+(non-blocking): an in-app toggle (1a) to enable without PowerShell. **Rolls up the v1.37.0-beta
+line** (VIDEO_FPS=120 lever + BWE avg-25/burst-50 + health-colored HUD + titlebar-off-video).
+
+Prior release: **v1.36.0** — **Parsec-style controller X/tray + no orphaned processes +
+TURN relay + WebRTC-60fps fallback + elevation-handoff mode guard.** Off `feat/native-video`;
+WC-verified on real hardware (post-stress: `PersonalRemote.exe`=6 / `capturer.exe`=1 steady —
+one root instance, tree collapses clean after Switch-mode/re-pair/lid-close, capturer never
+orphans) before this full release. Shipped via prereleases beta.1–beta.5 (golden rules #1/#7):
+- **beta.1 — controller X → background/tray (Parsec-style).** X during a live session → drop to
+  the main page; X on the main page → hide to tray (re-summonable via tray/dock/relaunch), keeps
+  running. Cross-platform. `setupControllerTray` mirrors the agent tray; `before-quit` sets
+  `isQuitting` so Cmd+Q/tray-Quit still really quit.
+- **beta.2 — TURN relay** for symmetric-NAT/CGNAT peers where native (libjuice/ndc) can't
+  hole-punch. ICE servers minted by the signaling server + delivered to the native
+  sender/receiver/input-helper (opt-in TURN via `PR_TURN_*`; default STUN-only). NB Cloudflare
+  TURN is INCOMPATIBLE with ndc/libjuice (omits ERROR-CODE on CreatePermission → `error code=0`)
+  — removed; a real coturn on a public-IP VM (owner pursuing Oracle Always Free) is the plan.
+  Also: receiver rebuilds the pc on a 2nd offer (ndc has no ICE restart).
+- **beta.3 — WebRTC fallback tuned for smooth 60fps** (`maintain-framerate`, unlock res,
+  start-bitrate 30 Mbps). Fallback only; native path unchanged. (WebRTC capture is
+  content-adaptive so it can't LOCK 60 like the native capturer — expected.)
+- **beta.4 — elevation-handoff app-mode guard** (WC fix `6a69572`, cherry-picked). On a box that
+  is BOTH agent+controller, every packaged medium launch bounced to the elevated agent task and
+  exited → picker/controller never showed ("app won't open"). Fix: only auto-elevate when
+  `APP_MODE !== 'controller'` AND saved mode is `agent` (read `%APPDATA%\desktop\app-mode.json`,
+  pre-`app.ready` safe).
+- **beta.5 — no orphaned "Personal Remote" processes.** On Windows a `fork()`ed child doesn't
+  auto-die when its parent (Electron main) dies via crash/force-kill/app.exit (elevation bounce,
+  relaunch, Switch-mode) → input-helper/video-sender/video-receiver orphaned + piled up (+ stray
+  capturer.exe). Fix: `process.on('disconnect', () => process.exit(0))` on all three helpers (the
+  fork-IPC parent-death idiom) → exactly one generation alive; capturer dies with the sender
+  (stdin EOF). Electron is inherently multi-process (~6-7) so it can't be one process like
+  Parsec's native code — but it no longer ACCUMULATES. Owner asked "why not rewrite in C++?" →
+  answer: we already ARE hybrid (native hot path = capturer.exe DXGI+NVENC, koffi input,
+  librvr.dylib VideoToolbox; Electron for the cold path = UI/signaling/auto-update/WebRTC). Full
+  C++ = throw away libwebrtc NAT traversal + all UI + cross-platform + auto-update for a cosmetic
+  single-process win; latency already captured. Not worth it for a solo project.
+
+**Rolls up v1.35.0 (cursor-shape re-pair fix) + the whole native-video streaming arc.**
+
+Prior release: **v1.35.0** — **fix: native cursor SHAPE overlay dies after a re-pair
+(lid-close/reconnect).** Off `feat/native-video`; WC-verified on real hardware (5/5 sessions
+after re-pair show the shapes) via prereleases beta.1 (channel-state onopen guard) + beta.2
+(the real fix) before this full release. Root cause: `startCursorCapture()` ran once per
+session and re-registered koffi structs (`koffi.struct('PR_POINT'/'CURSORINFO')`) every call;
+koffi throws on a duplicate named struct → from the 2nd pairing on it threw → the guard
+returned NOOP silently → no cursor shapes after any re-pair (latent since v1.32). Fix = hoist
+the FFI init to a module-level singleton `initCursorFfi()` (koffi.load + koffi.struct +
+user32.func + handle resolution run ONCE, cached); `startCursorCapture` only spins a fresh poll
+timer. Also beta.1's `cursor.onopen` guard is now channel-state (`readyState`) not `pc !== conn`.
+Golden rule #1 (koffi) honored (prerelease + real-hw verify). koffi lesson:
+[[koffi-struct-register-once]]. **Rolls up v1.34.0 (default-on stack) + v1.33.0 (cursor shape)
++ v1.32.0 (smooth scroll).**
+
+Prior release: **v1.34.0** — **default-on streaming stack (fresh install just works).**
+Off `feat/native-video`; WC-verified on a simulated fresh machine (all `VIDEO_*` env deleted)
++ owner-confirmed before this full release. The Parsec-like stack was gated behind persisted
+env vars that a reinstall/registry-wipe would lose; now flipped from opt-in to **opt-out** so a
+plain install reproduces the owner's verified stack: **capturer** default-on (`VIDEO_CAPTURER=0`
+disables; silent ffmpeg fallback if it can't run), **HEVC** default (`VIDEO_CODEC=h264` forces
+H.264), **NACK buffer** default-on (`VIDEO_NACK_BUFFER=0` disables; patched darwin ndc ships
+committed + postinstall-reapplied), **cursor overlay** follows the capturer default. Safety bar
+intact: the native pipeline still only engages with both native caps + NVIDIA + binaries present,
+else total WebRTC fallback — the flips only change which codec/capture runs WITHIN the native
+path. Golden rules #1/#7 honored (native/FFI in the default path → prerelease + real-hw verify).
+**Rolls up v1.33.0 (native cursor shape) + v1.32.0 (smooth scroll).**
+
+Prior release: **v1.33.0** — **Mac-native trackpad complete: native 0-latency cursor
+shape.** Off `feat/native-video`; WC-verified (agent) + owner-verified (Mac) via prerelease
+v1.33.0-beta.1 before this full release. The DXGI capturer encodes NO cursor (the Mac already
+shows its own 0-latency cursor), so the agent now streams the remote's semantic cursor SHAPE
+over a `'cursor'` data channel (`cursorCapture.ts` koffi `GetCursorInfo` → 13 shapes + `none`,
+on change ~16Hz) and the controller applies it as a CSS `cursor` → the cursor shows the correct
+native glyph (I-beam on text, hand on links, resize on edges) at 0 latency, no double cursor.
+**Default-on when `VIDEO_CAPTURER=1`** (`cursorOverlayEnabled()`; the only cursor-free-video
+state — ffmpeg fallback composites the cursor so the overlay auto-disables there); override
+`PR_CURSOR_OVERLAY=0/1`. Controller render is OS-agnostic so a Windows controller (v1.32.0+)
+gets it too. Golden rules #1/#7 honored (koffi in the default path → prerelease + real-hw verify).
+This completes the Mac-native trackpad arc (Phase 1 smooth scroll + HWHEEL, Phase 2 pinch-zoom,
+Phase 3 cursor shape). Plan: [`docs/mac-trackpad-plan.md`](docs/mac-trackpad-plan.md).
+**Rolls up v1.32.0 (smooth scroll) + v1.31.0 (Parsec-100% keyboard).**
+
+Prior release: **v1.32.0** — **Mac-native smooth trackpad scroll.** Off
+`feat/native-video`; WC-verified on real hardware (owner-confirmed feel) via prerelease
+v1.32.0-beta.1 before this full release. Controlling the Windows agent **from a Mac** now
+scrolls with real trackpad resolution + momentum + horizontal wheel (HWHEEL) instead of chunky
+notch scroll. **Auto, no toggle** — gated to Mac controllers by UA (`px:true` wheel path); a
+**Windows controller is byte-identical to before** (legacy notch path). The agent scrolls via a
+new koffi `injectWheelWin32` (MOUSEINPUT + fractional accumulator that emits `mouseData` < 120 =
+true high-res smooth scroll + `MOUSEEVENTF_HWHEEL`), bypassing nut.js; controller coalesces queued
+wheels by SUMMING under channel backlog (never drops scroll travel). `WHEEL_GAIN` default **1.5**
+(owner-verified 1:1 with the Mac trackpad; env `INPUT_WHEEL_GAIN` overrides). New protocol
+`wheel.px?`/`dx?` flags; threaded through all 3 agent paths (input-helper / AgentView IPC / SYSTEM
+injector). Golden rules #1/#7 honored (koffi SendInput wheel = native FFI → prerelease + real-hw
+verify first). Plan: [`docs/mac-trackpad-plan.md`](docs/mac-trackpad-plan.md); Phase 2 (pinch-zoom)
+/ Phase 3 (local 0-latency cursor overlay) deferred. **Rolls up v1.31.0 (Parsec-100% keyboard).**
+
+Prior release: **v1.31.0** — **Parsec-100% keyboard (always scancode, no mode).** Off
+`feat/native-video`; verified on real hardware (owner: "ใช้งานได้") before this full release,
+via prereleases v1.30.0-beta.1 (Text/Game toggle, scancode injection proven) → v1.31.0-beta.1
+(retire the toggle, always scancode). The controller now forwards EVERY key as a physical
+scancode (`{t:'keydown'/'keyup', scan:true}`, `KEYEVENTF_SCANCODE`, wVk=0) — no Unicode `text`
+path, no Text/Game button. The remote HOST does Scancode→VK→its-active-layout→character, so
+gaming (holdable WASD) and TH/EN typing coexist with no mode switch (Grave ` / Alt+Shift toggle
+the host layout, forwarded as real keys). OS auto-repeat forwarded; panic-release covers all
+keys; Escape stays local (disconnect); Thai paste via clipboard-sync + physical Ctrl+V; Cmd maps
+to Ctrl VK for shortcut parity. New protocol `scan?` flag; scancode inject added to all 3 agent
+paths (input-helper / AgentView IPC / SYSTEM injector), agent otherwise unchanged. Golden rules
+#1/#7 honored (native key-injection FFI → prerelease + real-hw verify first). See backlog 0b.
+**Rolls up v1.29.0 (NACK silent loss repair) + v1.28.0 (H.265 opt-in + PLI-on-loss).**
+
+Prior release: **v1.29.0** — **NACK silent loss repair (controller-side, `VIDEO_NACK_BUFFER=1`).**
+A patched darwin-arm64 ndc emits Generic NACK on a tracked seq gap + `receiver/reorderBuffer.ts`
+holds a small gap ~1 RTT for the retransmit → scattered losses repaired SILENTLY (~66%, no
+PLI/hitch); blackouts >64 pkt → fast PLI. Windows agent = stock ndc (RtcpNackResponder
+retransmits, untouched). Patched binary committed at `native/ndc-nack/bin/`, auto-reapplied by
+the desktop `postinstall`. Also: `--vbv-ms` capturer knob (default 250 unchanged), LTR off by
+default. See [`docs/step-nack-retransmit.md`](docs/step-nack-retransmit.md).
+
+Prior release: **v1.27.0** — **BWE auto-bitrate + HUD encode telemetry** (off
+`feat/native-video`). The native capturer path (`VIDEO_CAPTURER=1`) now adapts its
+VBR bitrate to the link: the Mac receiver runs a loss+jitter AIMD estimator
+(`receiver/bwe.ts`, **cap 25 / floor 5 Mbps**, +2 additive / ×0.85 backoff), rides
+the target over signaling (`video-bitrate`), and the agent forwards `B<kbps>` to the
+capturer stdin (`nvEncReconfigureEncoder`, no respawn). **cap 25 is deliberate** —
+beta.1's cap-60 caused bufferbloat on the owner's ~40 Mbps link (delay, not loss →
+loss-only AIMD never backed off → double-cursor/freeze); beta.2 fixed it by starting
+AT the proven-good 25 and adding a jitter (delay) backoff signal
+([[loss-only-bwe-misses-bufferbloat]]). Also: **HUD `Encode X.Xms`** — the capturer
+measures pure HW encode time (`enc_ms`, nvEncEncodePicture→LockBitstream) → relayed
+agent→controller via `video-sender-stats` → shown in the HUD; **fullscreen HUD
+expands** to a full-width telemetry strip; **BWE target** shown as `actual → target
+Mbps`. WC-verified on real hardware (baseline
+[`docs/streaming-baseline-v1.27.0-beta.3.md`](docs/streaming-baseline-v1.27.0-beta.3.md):
+enc_ms avg 5.6ms < Parsec 8.72ms, locked-60, BWE cap 25 confirmed, error 0; owner
+confirmed HUD Encode 5.5ms live), shipped via prereleases beta.1–beta.3 before this
+full release (golden rules #1/#7). Prior full releases rolled up below.
+
+Prior release: **v1.26.0** — **custom DXGI capturer, locked-60 (smooth like Parsec).**
+Standalone `capturer.exe` (DXGI Desktop Duplication + change-detection + locked-60
+cadence + idle-decay + NVENC → Annex-B on stdout), opt-in `VIDEO_CAPTURER=1`, ffmpeg
+fallback. Change-detection idles the GPU on a static screen (mouse-only = skip);
+locked-60 emit fixed the judder ("ลื่นเหมือน Parsec" — owner-verified). Also has the
+BWE stdin primitive (`B<kbps>`) + `--codec h265` that v1.27.0/H.265 build on.
+
+Prior release: **v1.25.1** — Parsec-parity roadmap Step 1 (off `feat/native-video`,
+same as v1.25.0). Native-video keyframe tuning: **plain periodic IDR every 2s
+(`-g 120`)** instead of v1.25.0's 1s (`-g 60`), halving the keyframe-spike
+frequency. Step 1 originally tried NVENC `-intra-refresh` for a fully flat bitrate
+but it is **permanently dropped** — the Mac VideoToolbox decoder can't handle the
+rolling-intra P-frame structure (froze mid-session at every GOP length; verified via
+prereleases beta.1–beta.4 before this clean full release, golden rules #1/#7). See
+[[pure-intra-refresh-freezes-videotoolbox]]. Prior full release rolled up below.
+
+Prior release: **v1.25.0** — native video 60fps + VBR≤40, ddagrab crash-recovery,
+dup_frames on-change capture, HUD latency telemetry, stuck-key panic-release. (Step 0
+of the roadmap: reverted the beta.4 cursor-out-of-video regression.)
+
+Prior release: **v1.24.0** — **native video pipeline (lower latency than
+WebRTC), SHIPPED + signed off on real hardware.** The whole feat/native-video
+effort (see the IN PROGRESS block above for the architecture) is now a full
+release. Windows agent ffmpeg (ddagrab DXGI → h264_nvenc) → RTP → Mac controller
+VideoToolbox decode + in-window compositing. Highlights:
+- **Auto-default** (owner: "บังคับออโต้ native เป็นหลัก"): native engages
+  automatically when both ends support it; **WebRTC is the automatic fallback**
+  (no NVIDIA / no ffmpeg / native failure / dylib-not-loadable → silently WebRTC,
+  never a black screen). `pipelineConfig.ts` `AUTO_DEFAULT_PIPELINE='native'`;
+  `video-receiver:is-ready` also requires `nativeSurfaceAvailable()`.
+- **Bundled ffmpeg** (LGPL, ddagrab+h264_nvenc) at `resources/ffmpeg/ffmpeg.exe`
+  via `electron-builder.yml` `win.extraResources` + `build-win.sh` (downloads/
+  caches/strings-verifies the encoders). Installer 100→167MB.
+- Sidebar **bolt toggle** (off-switch to force WebRTC) + live **⚡NATIVE/WebRTC**
+  HUD badge (bolt=intent, badge=reality). Letterbox-aware native mouse mapping
+  (cursor 1:1 to edges — the beta.1→beta.2 fix).
+- Golden rules #1/#7 honored: prereleases beta.1 (ffmpeg e2e) + beta.2 (mouse
+  fix) verified on the real Windows agent before this clean full v1.24.0. The Mac
+  controller still runs from `electron-vite dev` (`start-controller.command` now
+  builds `librvr.dylib`); a packaged Mac .dmg + codesign stays deferred
+  (backlog #5). Commits: `3e68964` (toggle) `c2a686d` (auto-default+badge)
+  `7d72300` (ffmpeg bundle) `bb858ce` (mouse fix) `00e6abb`-ish (v1.24.0). Owner
+  confirmed on real hardware: ⚡NATIVE live, cursor 1:1, Thai/English typing OK.
+
+Prior release: **v1.23.0** — **elevated input: Task Manager + secure desktop
+(UAC / Ctrl+Alt+Del / lock screen)**. Fixes the owner's "open Task Manager →
+mouse dies" and adds control on the secure desktop. Full details in backlog #8
+(Track 1 + Track 2, both DONE + proven on real hardware, permanent across reboot).
+Both features ship OFF by default (gated behind `PR_INPUT_SERVICE=1` + their setup
+scripts: `install-agent-autostart.ps1` for Track 1, `setup-track2-permanent.ps1`
+for Track 2), so a plain auto-update is byte-identical WebRTC. Built from
+`feat/native-video @ 3c17df4` via `build-win.sh`; verified via prerelease
+v1.23.0-beta.1 on the real Windows agent first (golden rule #1). REMAINING polish
+(deferred, owner is sole user): Phase 4 hardening (Fix B pipe SDDL + squat guard,
+injector crash-respawn, uninstall cleanup) + an in-app Track-2 toggle — do these
+when family joins; SYSTEM video capture (see the secure desktop) is a separate
+big project.
+
+Prior release: **v1.22.0** — **video quality now matches Parsec** (1920×1080 @
 ~37 Mbps, verified side-by-side on the same machines). Root cause the owner hit:
 on a flawless path (Network 11ms, 0% loss, 0ms jitter, direct P2P) the stream
 was still a blurry 480×270 @ 0.1 Mbps — WebRTC's bandwidth estimator (BWE)
@@ -226,10 +1275,17 @@ Also working since v1.16.0:
   in clipboard memory instead of the text (→ dangling-pointer crash AND
   cross-app paste never actually worked). Fix: inline UTF-16 code units via
   `koffi.array('uint16', n)`, reads bounded by `GlobalSize`, chunked string
-  building, `OpenClipboard(null)`. NOTE for future clipboard tests: the owner
-  sometimes runs Parsec, whose clipboard sync masks ours — close it first.
-  Cosmetic nit for later: helper's `clipboard.onopen` log is overwritten by
-  runClipboardSync, never prints.
+  building, `OpenClipboard(null)`. NOTE on the sync behavior (read before
+  diagnosing a "can't copy through remote"): `clipboardSyncCore` SEEDS
+  `lastSynced` from whatever is in the clipboard at connect, so text copied
+  BEFORE the session connects does NOT auto-sync — you must copy something NEW
+  after the session is up. It polls every 1s and skips text >256KB.
+  `clipboardSyncCore` now logs `[clipboard] ...` (seed/send/recv/write/skip) so
+  a future issue is diagnosable from the log instead of guessed. (2026-07-11: a
+  "can't copy" was WRONGLY blamed on Parsec masking the clipboard, then affirmed
+  without checking — Parsec was still running unchanged when it started working,
+  so it was NOT the cause. Lesson: verify from logs/process/code before asserting
+  a cause; macOS can't "lock" the pasteboard, so an idle app can't block a copy.)
 
 Since v1.17.0 — **house token** (one shared secret per household):
 - Gates register-agent, pair-request (checked BEFORE the PIN — no guessing
@@ -279,21 +1335,620 @@ Lessons:
 
 ## Backlog (rough priority)
 
-1. Verify file transfer with the agent window actually hidden (works via the
-   renderer video pc, which is subject to throttling — needs a real test).
+0. **Parsec-parity streaming roadmap** — Step 3 SHIPPED (v1.26.0). Full plan in
+   [`docs/streaming-improvements-plan.md`](docs/streaming-improvements-plan.md);
+   Step 3 detail in [`docs/step3-dxgi-capturer.md`](docs/step3-dxgi-capturer.md).
+   ✅ Step 0 (v1.25.0) → ✅ Step 1 (v1.25.1: `-g 120`, intra-refresh dropped) → ⏭️ Step 2
+   SKIPPED (no-op) → ✅ **Step 3 custom DXGI capturer (v1.26.0: change-detection +
+   locked-60 = "smooth like Parsec", owner-verified)** → Step 4 FEC (deferred).
+   **NEXT TWO (owner-requested 2026-07-08, spec in
+   [`docs/bwe-hevc-plan.md`](docs/bwe-hevc-plan.md)):** **(A) BWE auto-bitrate ≤60 Mbps**
+   — Mac receiver measures seq-gap loss → AIMD → target over signaling → agent forwards
+   `B<kbps>` to the capturer stdin. **(B) H.265** — the real remaining Parsec gap
+   (1.6× efficiency, ~half bitrate); needs codec-aware `nalSplitter.ts` + HEVC
+   `decoder.swift` (VideoToolbox HW-decodes HEVC on the M4 Pro). Do A first, then B.
+   - **(A) BWE — ✅ PRERELEASE v1.27.0-beta.3 (BWE bufferbloat fix + HUD telemetry),
+     WC-VERIFIED on real hardware, baseline captured — PROMOTABLE to full v1.27.0.**
+     BWE both halves landed (Mac AIMD `20e05bf`, agent forward
+     `3790ad2`). **ENABLE: launch the agent with `VIDEO_CAPTURER=1`** (default OFF =
+     ffmpeg = no BWE). Signaling server restarted (PID 39111 now relays BOTH
+     `video-bitrate` AND `video-sender-stats`).
+     - **BASELINE (WC, 2026-07-08, 330s continuous, Parsec running — full dataset in
+       [`docs/streaming-baseline-v1.27.0-beta.3.md`](docs/streaming-baseline-v1.27.0-beta.3.md)):**
+       `spawn capturer` (not ffmpeg), 2560×1440 H.264 VBR 25/35, gop 120 no-intra-refresh,
+       **locked-60 emit (avg 60.6/s)**, change-detection working (mouse-only = skip),
+       **enc_ms 3.4–6.6 (avg 5.6ms) — BELOW Parsec's 8.72ms**, GPU no longer downclocks to
+       210MHz under real use, **BWE ramps 21250→23250→25000 and stops at cap 25** (beta.2
+       fix confirmed, 0 bufferbloat backoffs on the good link), **error 0** across the
+       session, no double-cursor/freeze like beta.1. Owner: "ใช้งานได้ปกติ". The enc_ms
+       chain (capturer enc_ms → getEncodeMs → reportStats → AgentView relay → HUD) is
+       complete; only open item = owner reads the exact `Encode` number on the HUD
+       (~5–6ms) to close C 100%, then promote full v1.27.0.
+     - **beta.3 adds the HUD telemetry the owner asked for ("เพิ่มตัวดู Encode/Decode +
+       ขยายแถบตอน fullscreen"):** (1) **Encode ms** — the capturer measures pure HW
+       encode (nvEncEncodePicture→nvEncLockBitstream, excludes the fwrite/pipe-
+       backpressure wait that bloated the number before; WC `df75bbb`, ~3-7ms on the RTX
+       at 60fps), reports `enc_ms=` in its per-sec log → `frameSource.getEncodeMs()`
+       (ignores the 0.0 idle-window value) → `sender/index.ts` fills `encodeMs` →
+       AgentView forwards it over the new **`video-sender-stats`** signaling msg
+       (agent→controller, `packages/protocol` + server relay) → HUD shows `Encode X.Xms`
+       (Mac `92197a5`). (2) **Fullscreen HUD expand** — float rises to the top edge (drag
+       titlebar hidden there) + stats row grows (14px tabular). (3) **BWE target in HUD**
+       — `actual → target Mbps` so the owner watches auto-bitrate adapt. **Decode ms
+       deliberately NOT shown for native** — AVSampleBufferDisplayLayer has no decode-time
+       callback (real native decode = a VTDecompressionSession rewrite, deferred/offered);
+       WebRTC path still shows Decode. Controller-renderer bits also show on a plain
+       `start-controller.command` relaunch (dev), but Encode needs beta.3 on the agent.
+     - **beta.1 (`7cdea74`, cap 60, loss-only) = REGRESSION → BUFFERBLOAT (WC diagnosis
+       from `video-sender.log`):** capped BWE at 60 Mbps but the owner's link is ~40, so
+       a 60 Mbps VBR burst filled the queue → **3 symptoms, one cause:** double cursor
+       (instant local Mac cursor vs the delayed in-video cursor), higher end-to-end
+       latency, eventual freeze (queue finally overflows → packet loss → decoder waits
+       for IDR). Loss-only AIMD **never backed off** (bitrate pinned B60000, 2 backoffs
+       all session) because **bufferbloat is DELAY, not packet loss, until overflow.**
+       NOT an agent-forward bug (forward relayed every value correctly). Also: **cap 60
+     - **beta.1 (`7cdea74`, cap 60, loss-only) = REGRESSION → BUFFERBLOAT (WC diagnosis
+       from `video-sender.log`):** capped BWE at 60 Mbps but the owner's link is ~40, so
+       a 60 Mbps VBR burst filled the queue → **3 symptoms, one cause:** double cursor
+       (instant local Mac cursor vs the delayed in-video cursor), higher end-to-end
+       latency, eventual freeze (queue finally overflows → packet loss → decoder waits
+       for IDR). Loss-only AIMD **never backed off** (bitrate pinned B60000, 2 backoffs
+       all session) because **bufferbloat is DELAY, not packet loss, until overflow.**
+       NOT an agent-forward bug (forward relayed every value correctly). Also: **cap 60
+       was the wrong target from the start** — Parsec runs 1440p60 smooth at ~3 Mbps via
+       H.265, so the low-bitrate win is Feature B (H.265), NOT pushing H.264 to 60.
+       [[loss-only-bwe-misses-bufferbloat]]
+     - **beta.2 FIX (`baab0df`, `receiver/bwe.ts`):** (1) **CEIL 60 → 25 Mbps** =
+       v1.26.0's proven-smooth VBR target (maxrate ~40 on this link); **START = CEIL** so
+       BWE starts at the known-good point and can only back OFF, never overshoot into
+       bloat (worst case == v1.26.0 = smooth). (2) **Added a DELAY signal** — back off on
+       a frame-pacing **jitter spike (>30ms)**, not just loss; jitter climbs as the queue
+       builds, BEFORE loss → catches bufferbloat early. Probe up only when loss<2% AND
+       jitter<18ms (healthy active = 3-13ms). `tick(jitterMs)`; units 14/14 (incl.
+       jitter-only backoff + ramp-back-to-cap). **NEXT e2e (owner + WC, `VIDEO_CAPTURER=1`):
+       should now feel == v1.26.0 on a good link (no double cursor / no added latency /
+       no freeze) AND back off on a degrading link; WC tail `video-sender.log` for
+       `set-bitrate → sent B<kbps>`. If clean → promote full v1.27.0.** (WC offered to
+       roll the owner back to v1.26.0 for an immediate working session meanwhile — fine.)
+     Detail of each half below.
+   - **(A) BWE — MAC SIDE DONE (`20e05bf`):**
+     `receiver/bwe.ts` (NEW, pure, units 10/10) = wrap-aware `SeqExtender` +
+     seq-gap loss-fraction per 1s window + `AimdController` (clean <2% loss →
+     +2 Mbps additive; >5% → ×0.85; clamp **[5, 60] Mbps** (owner cap); start 25;
+     1 Mbps hysteresis). Static screen = no packets → `tick()` null → HOLD (don't
+     probe on silence). Wired end-to-end on Mac: `receiver/index.ts` observes RTP
+     seq (bytes 2-3) + emits `evt:'bitrate'` on a moved target → `ipc.ts` /
+     `videoReceiverHost` / `main` / `preload` / `ControllerSession` → signaling
+     **`video-bitrate` {deviceId, kbps, channel:'video-native'}** (new in
+     `packages/protocol`; server relays it in the sdp/ice `resolveRelayTarget`
+     group — **the live signaling server must be rebuilt/restarted to relay it**,
+     like `video-native` SDP needed; old servers just drop it → sender holds
+     launch bitrate = graceful).
+     - **AGENT SIDE DONE (WC) — the 7 forward points wired, typecheck+lint+units
+       clean, awaiting joint prerelease.** Signaling `video-bitrate` (channel
+       `video-native`) → `AgentView.tsx` handler → `videoSender.setBitrate` (preload
+       + `preload/index.d.ts`) → `ipcMain 'video-sender:set-bitrate'` (`main/index.ts`)
+       → `videoSenderHost.setBitrate` → IPC `{cmd:'set-bitrate', kbps}`
+       (`shared/ipc.ts` MainToVideoSender + VideoSenderHost) → `sender/index.ts`
+       switch → `FrameSource.setBitrate`. `CapturerFrameSource.setBitrate` writes
+       **`B<kbps>\n`** to the capturer stdin (mirrors `forceKeyframe`→`'I'`, rounds +
+       writable-guards, drops on wedged pipe); `FfmpegFrameSource`/`Synthetic` no-op
+       (ffmpeg can't retune live — BWE is a capturer-path feature). Capturer
+       `B<kbps>\n` live retune RE-VERIFIED locally on the RTX this session (drove
+       25→12→45→20 Mbps mid-stream via stdin: one process, exit 0, no respawn, output
+       decodes 100% clean). ⚠️ capturer prints NO retune log → judge e2e by the
+       bitrate that actually goes out, not a `[capturer]` log line. **NEXT = Mac
+       rebuild/restart the live signaling server (to relay `video-bitrate`) + build
+       the joint prerelease `VIDEO_CAPTURER=1` (golden rule #1), then owner e2e:
+       static→target holds, narrow net→loss→bitrate drops, open→ramps to 60 & holds;
+       pass = received fps ≈ emitted (net-drop 0) + smooth, NOT "locked 60".**
+   - **(B) H.265 — FULL CODE DONE both ends (`e825583`), Mac receiver half VERIFIED on
+     real hardware, → PRERELEASE v1.28.0-beta.1 (awaiting joint e2e).** HEVC is opt-in
+     `VIDEO_CODEC=hevc` on the AGENT (default byte-identical H.264); the Mac receiver
+     **auto-detects the codec from the offer SDP** (`H265/90000` rtpmap) so nothing needs
+     configuring on the controller. Full spec: [`docs/bwe-hevc-plan.md`](docs/bwe-hevc-plan.md).
+     - **Sender (TS, runs on agent):** `resolveCodec(env)` → node-datachannel
+       `addH265Codec` + `H265RtpPacketizer` (0.32.3 ships both; no depacketizer, same as
+       H.264); codec-aware `AccessUnitAssembler` (HEVC 2-byte NAL header, `type=(b0>>1)&0x3f`,
+       VCL 0-31, IDR 19/20); coherent ffmpeg fallback (`hevc_nvenc` + `-f hevc`;
+       `hevc_nvenc` never MF-fallbacks → the SDP codec can't disagree with the bitstream).
+       capturer `--codec h265` was already done (WC-verified valid HEVC Annex-B).
+     - **Receiver (Mac):** codec-aware `RtpDepacketizer` (RFC 7798 — AP 48 / FU 49 /
+       2-byte header / FU-header rebuild); HEVC `decoder.swift` (VPS 32+SPS 33+PPS 34 →
+       `CMVideoFormatDescriptionCreateFromHEVCParameterSets`, `nalUnitHeaderLength:4`) gated
+       by a new `rvr_set_codec` C ABI; HEVC SPS dimension parser (`videoDimensions(au,codec)`,
+       profile_tier_level skip + conformance window) for the HUD; codec plumbed
+       receiver→main→koffi (`evt:'codec'` → `setNativeCodec` → `rvr_set_codec`, guarded so a
+       stale dylib still loads H.264).
+     - **VERIFIED on the real Mac (golden rule #1, receiver half):** the render selftest
+       `--selftest-hevc` encodes HEVC via VideoToolbox and **decodes 120/120** through the
+       exact production `Decoder`; `videoDimensions()` parsed **1920×1080** from that real
+       VideoToolbox HEVC SPS. Sender + depacketizer unit tests cover BOTH codecs (all pass);
+       typecheck + source lint clean; `librvr.dylib` rebuilt with `rvr_set_codec`.
+     - **beta.1 e2e RESULT (WC, real hardware): DECODE PROVEN, one tuning bug fixed.**
+       ✅ A/B/E PASS — `startSession codec=hevc`, H265 offer (547B vs h264 629B),
+       `addH265Codec`+`H265RtpPacketizer` work on **ndc win32** (the never-verified risk),
+       `CODEC h265` in the HUD, image clean (no green/artefacts) = **HEVC FU-49/AP-48
+       depacketize + VideoToolbox decode PROVEN e2e — golden-rule-1 risk CLEARED.** enc_ms
+       10.1ms + GPU 45% (vs H.264 5.6ms/29%) = HEVC encode ~2× heavier (expected). ❌ D:
+       **~2s freezes** — ROOT CAUSE (WC from log): HEVC was capped at H.264's 25 Mbps, so a
+       VBR burst to maxrate at an IDR/scene-change overflowed the owner's Parsec-shared
+       ~35-45 Mbps link → seq-gap loss → VideoToolbox stalls on the broken reference until
+       the next periodic IDR (gop 2s). Tuning, not a code fault.
+     - **FIX (Mac-side, `c99e047`/`5e96d5d`, NO new agent build): codec-aware BWE ceiling
+       — HEVC caps at 15 Mbps (vs H.264 25).** HEVC@15 ≈ H.264@25 quality (its whole point),
+       and 15's maxrate burst stays under the link → no overflow → no loss → no stall. Plus
+       BWE now **emits its target on the first window** so the capturer (which launches at 25)
+       actually gets driven down to 15 (else the dead-band never sends B15000). Receiver-only
+       (BWE target rides signaling to the capturer live) → **owner just relaunches
+       `start-controller.command`**, agent stays on beta.1. Units cover the HEVC cap + first-emit.
+     - **cap-15 retest (WC): freeze STILL there → cap was NOT the cause.** loss stayed
+       ~1/min at 15 just like at 25 (BWE sent B15000, backoffs 12750=15000×0.85) → **loss is
+       bitrate-INDEPENDENT** (15 Mbps is well under the link). Kept the 15 cap anyway (it's
+       HEVC's correct quality/bitrate point) but it's not the freeze fix.
+     - **REAL ROOT CAUSE + FIX (`43fdd8b`, receiver-side): PLI-on-loss.** WC's clincher —
+       during every freeze the sender got **PLI=0** (only 1/connect). A lost packet breaks an
+       HEVC frame; inter frames reference it, so VideoToolbox stalls until the next decodable
+       entry = the periodic IDR (~2s @ gop 120) → the exact ~2s freeze. HEVC is more
+       loss-sensitive than H.264 (bigger frames), so H.264 on the same link never showed it.
+       Fix (the deferred Step 2/3 receiver work): the receiver detects a forward RTP seq gap
+       in REAL TIME (`seqForwardDistance`, wrap-aware, unit-tested) → `requestKeyframe` →
+       sender forces a cheap IDR via the capturer 'I' stdin (no respawn) → recovery in ~1 RTT
+       vs ~2s. Rate-limited ≤1/s; reorder/dup ignored. Helps H.264 too. Receiver-only — no
+       agent rebuild.
+     - **PLI-on-loss VERIFIED (WC): freeze GONE → PROMOTED full v1.28.0.** PLI 0→29 during
+       losses, recovery ~2s→~10ms, owner confirmed no long freeze; only a tiny ~10ms blip per
+       loss (loss still ~1/min, not eliminated, just recovered fast). enc_ms 9.9 / GPU 44% /
+       emit 60.5, errors 0. v1.28.0 = Latest (H.265 opt-in + PLI-on-loss + HEVC BWE cap 15).
+   - **AUTO-TEST tooling (owner asked "หาระบบที่เทสออโต้ได้ ขี้เกียจนั่งดูเอง ไม่เห็นตัวเลขลึกๆ"):**
+     `scripts/analyze-session.mjs` parses `video-receiver.log` (+ optional Windows
+     `video-sender.log`) into ONE report — fps/jitter/bitrate/BWE + loss rate + **per-hitch
+     recovery ms** + a plain **SMOOTH / MINOR JUDDER / FREEZING** verdict with next-step
+     notes. Run `node scripts/analyze-session.mjs` after a session instead of scrolling logs
+     (`--all` for reconnect-split sessions, `--json`). Backed by new receiver instrumentation:
+     a "hitch" line (loss→recovering-keyframe = the real perceived-freeze duration) + per-sec
+     `loss=/lostpkts=/pli=` in the stats line. Verified on the real 858s HEVC log (SMOOTH,
+     14.9 Mbps @ cap 15, jitter 4.4ms).
+   - **RESIDUAL-JUDDER tuning — reorder-tolerant loss detection (`af96f34`, receiver-only, no
+     rebuild):** WC's clue — the ~1/min loss is HEVC-SPECIFIC (H.264 same link = 0 loss), so
+     it's not plain network contention; a chunk is likely REORDER that the naive "any forward
+     seq gap = loss → PLI now" misread → an unnecessary forced IDR = self-inflicted judder.
+     New `LossDetector` holds a gap PENDING and only declares loss if the missing seq hasn't
+     arrived within a small reorder window (8 packets/~few ms), so reorder cancels the gap (no
+     PLI) while real loss still confirms fast. NO added latency (unlike PacingHandler, which
+     would delay big frames — wrong trade for a mouse-glued pipeline). Unit-tested. **NEXT:
+     owner relaunches `start-controller.command` → run `analyze-session.mjs` → see if loss/PLI/
+     hitch counts drop (reorder was the cause) or hold (real network loss → then FEC/accept the
+     ~10ms blip).** The auto-test now decides instead of eyeballing.
+   - **JUDDER DIAGNOSED via the live analyzer (owner ran a stress video) → tuning FLOOR hit,
+     then PIVOT to LTR.** The analyzer on the live HEVC session showed the residual = **total
+     link BLACKOUTS** (each loss = 130–163 CONSECUTIVE packets = the link goes dark ~90ms;
+     `loss=1 lostpkts=137` per 1s window = one gap, not scattered), **isolated ~every 20-60s**,
+     and **bitrate-INDEPENDENT** (62 pkts lost at 12.5 Mbps, 17 at 16.8) = EXTERNAL contention
+     (Parsec grabbing the shared ~40 Mbps link / Wi-Fi), not our encoder. So BWE/bitrate tuning
+     is proven futile (cap-15 + `HOLD_WINDOWS_AFTER_BACKOFF`=3 hold-after-backoff converge landed
+     but can't stop isolated external bursts). Recovery is already ~53ms; normal desktop use =
+     loss 0. **FEC REJECTED after the analysis:** it can't recover a total blackout (parity is in
+     the same dark window) without ~200ms interleaving latency = kills the mouse-glued feel.
+   - **PARSEC-PARITY RESEARCH (owner asked to research how to match Parsec) →
+     [`docs/parsec-parity-research.md`](docs/parsec-parity-research.md):** gap-analysis vs the
+     low-latency playbook (the owner's guide + NVENC/VideoToolbox docs + Moonlight LTR issue #120)
+     = **we already do ~90%** (zero-copy, HW codecs, low-latency present, BWE, reorder-tolerant
+     loss, H.265). **The ONE remaining Parsec technique = LTR (Long-Term Reference) recovery**:
+     on loss, encode a small P-frame from the last SAFE long-term reference instead of a full IDR
+     burst (no keyframe spike, no self-congesting cascade, faster). Owner picked "ลุย LTR เลย".
+   - **LTR recovery IN PROGRESS ([`docs/step-ltr-recovery.md`](docs/step-ltr-recovery.md)):**
+     - **Mac sender wiring DONE (`7cbe3b3`):** `FrameSource.ltrRecover()` (CapturerFrameSource
+       writes **`L`** to stdin; ffmpeg/synthetic fall back to `forceKeyframe`); `sender/index.ts`
+       PLI handler — `VIDEO_LTR=1` → answer a PLI with `ltrRecover()` (LTR-P), and a repeat PLI
+       within `LTR_ESCALATE_MS`=1200ms → escalate to a real IDR (guaranteed recovery). **No
+       per-frame ACK / no receiver protocol change** — reuses the existing PLI; only the sender's
+       response changes. Default (LTR off) = proven IDR path, byte-identical + safe with a
+       pre-LTR capturer. typecheck/units/lint clean.
+     - **Mac decode DE-RISKED (`299b0f8`, golden rule #1): VideoToolbox decodes an LTR stream
+       119/120** (`--selftest-ltr` — a VT low-latency encoder marks LTRs + forces an LTR-refresh
+       mid-stream; the production `Decoder` decodes it clean). So **LTR is VT-compatible** (unlike
+       intra-refresh, which failed to decode). Receiver needs NO change. (NB `EnableLTR` needs the
+       low-latency rate-control encoder spec first — was `-12900` without it.)
+     - **WC L1 DONE (`8e4f502`) → joint PRERELEASE v1.29.0-beta.1 (LTR) → e2e RESULT: LTR is
+       WORSE, left OFF.** capturer marks LTR every ~30f, on `L` encodes a P from the older LTR
+       (WC bitstream-verified: NVENC uses the LTR, requested=used=0x1; LTR-P 5-7× smaller than
+       IDR). But the Mac `analyze-session.mjs` on the stress video = **FREEZING, hitch avg 654ms
+       / max 1870ms** vs v1.28 fast-IDR's ~53ms. ROOT CAUSE: our loss is BLACKOUT (wipes the LTR
+       the LTR-P references) and, with **no per-frame ACK**, the sender guesses a "safe" LTR wrong
+       → the LTR-P is undecodable → the receiver's 1s PLI cooldown means the escalation-to-IDR
+       takes ~1-2s. **LTR fits SCATTERED loss, not our blackouts.** Verdict: `VIDEO_LTR` stays
+       **OFF by default** (= v1.28 fast-IDR, 53ms) — LTR code kept as a building block (WC's 2
+       polish fixes — mark sooner, `used=0x1` only — parked). Proper LTR needs ACK feedback (big).
+   - **THE PARSEC-FEC INSIGHT (WC measured Parsec on the SAME link) → the real gap + plan.**
+     Parsec during a high-motion video: **FPS locked 60, 0 dips, no spikes — yet it ALSO loses
+     packets** (its loss counter moves). A true external blackout would dip Parsec too; it doesn't
+     → **our 130-163-packet loss BURSTS are SELF-INDUCED** (we emit big frames; when one coincides
+     with link contention the whole burst drops). Parsec's small/paced/VBV≈1-frame frames + **FEC**
+     mean the same contention costs it only a few SCATTERED packets, which FEC repairs SILENTLY (no
+     round-trip, no hitch). Ours is REACTIVE (PLI→recovery = a hitch per loss). **So the last gap =
+     (1) our frames are too bursty + (2) no FEC.** Two-layer plan (full spec:
+     [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md)):
+     - **⭐ LAYER 1 (do FIRST, cheap): shrink the NVENC VBV** ~250ms→~2 frames (guide §4.1) so
+       every frame is small → the 130-packet bursts become **scattered single-digit losses like
+       Parsec**. `analyze-session.mjs` DECIDER: lostpkts/event 130→<10 (proves self-induced) +
+       hitches drop. May fix enough on its own; is ALSO the precondition for FEC (FEC can't recover
+       a 150-packet blackout — parity is in the same dark window).
+       - **BUILT BOTH ENDS + A/B ARMED (2026-07-08) — awaiting the run.** Root cause pinned:
+         Parsec on the SAME link doesn't drop → our 130-163-pkt bursts are self-induced = a single
+         ~290KB IDR (VBR under a 250ms VBV = maxrate/4) overflows the ~40 Mbps link in one shot.
+         - ✅ **WC (`95177e1`, pushed):** capturer `--vbv-ms <ms>` → `NvEncConfig.vbvMs` (Init +
+           BWE live-reconfigure both). Precedence: **CLI default 250 (byte-identical) → `--vbv-ms`
+           → tune-file `vbv=` / env `VIDEO_CAPTURER_VBV_MS`.** Standalone proof (1440p, gop 120,
+           VBR 25/35) max single frame: H.264 291→122KB (**2.4×**), HEVC 223→121KB (**1.85×**);
+           frame count identical (360, 3 IDR/357 P) = no structural change, valid Annex-B.
+         - ✅ **Mac (`capturerArgs.ts`):** `--vbv-ms` in the CLI contract + `NVENC_VBV_MS = 250`.
+           **Default stays 250 — the unvalidated 33 is NOT baked into a build** (golden rule #1);
+           the A/B runs on the CURRENT build (agent TS doesn't pass `--vbv-ms` yet → capturer's 250
+           default) via the tune-file, no rebuild. Flip after the analyzer validates → prerelease.
+           Unit-tested + typecheck clean.
+         - 🎯 **THE A/B (owner, no reinstall):** add `vbv=33` to `%LOCALAPPDATA%\pr-capturer-tune.txt`
+           → reconnect → same HEVC stress video (`VIDEO_CAPTURER=1 VIDEO_CODEC=hevc`, LTR OFF) → Mac
+           `node scripts/analyze-session.mjs`. Remove line = back to 250. **PASS if lostpkts/event
+           130-163 → single/low-double digits (scattered = self-induced confirmed) + hitches drop.**
+           Stays ~130 → real external contention → Layer 2 FEC. Shrinks → cheap fix closed it (then
+           judge if residual needs FEC). Detail: [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
+         - ❌ **RUN 1 (2026-07-08) CONTAMINATED — LTR was ON, discard.** Analyzer said FREEZING
+           (hitch avg 1115ms) but the cause was `VIDEO_LTR=1` still set on the agent, not vbv:
+           recovery was BIMODAL & size-uncorrelated (1-pkt loss→1019ms vs 226-pkt loss→51ms = the
+           LTR escalation signature, [[ltr-worse-than-idr-on-blackout-loss]]). vbv effect unreadable.
+         - 👉 **WC NEXT (clean re-run):** RELAUNCH the agent with NO `VIDEO_LTR` (`ltrEnabled()` reads
+           it at launch → a reconnect won't clear it), only `VIDEO_CAPTURER=1 VIDEO_CODEC=hevc`; keep
+           `vbv=33` in the tune-file; **grep the sender log for `vbv 33ms`** to confirm the tune took
+           (else it says `vbv 250ms`). Owner drives the stress video → Mac re-runs the analyzer.
+           Expected LTR-off: every recovery ~50ms → then the vbv burst-shrink read is clean. Full
+           recipe + the RUN-1 recovery table in [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
+         - **RUN-1 root cause (WC, 2026-07-09): `VIDEO_LTR=1` was PERSISTED in the registry
+           (`HKCU\Environment`), and the Track-1 self-relaunch scheduled task reads persisted env, so
+           a shell `set VIDEO_LTR=` got clobbered on the task handoff** (same class as the HKCU Run-key
+           race). Fix = delete the persisted value (User + Machine now empty) → `schtasks /run` fresh.
+           [[agent-env-overrides-must-be-persisted]] — applies to EVERY env-toggle (`VIDEO_CAPTURER`,
+           `VIDEO_CODEC`, `VIDEO_CAPTURER_*`).
+         - ✅ **RUN 2 (LTR OFF) = Layer 1 CONFIRMED (2026-07-09).** vbv is a monotonic lever → loss is
+           SELF-INDUCED (frame overflow), not external blackout: vbv 250→33→16 gave burst 130-163 →
+           ~90 → **3-46**, loss →1.7→**0.6/min**, verdict FREEZING→**MINOR JUDDER**, recovery ~50ms
+           (LTR-off restored fast IDR). At **vbv=16 fps is locked 60 for 97% of seconds**; dips
+           (56-57, ~1s) hit ONLY on a loss then snap back.
+         - ⭐ **CONFIG OPTION 2 (recorded, owner-requested): `vbv=16 + LTR off`** = near-Parsec, no FEC
+           (60@97%, jitter 4ms, loss 0.6/min@~50ms). Ship path = flip `NVENC_VBV_MS` 250→16 +
+           LTR-off default → prerelease. Kept as a strong FALLBACK while chasing true-0-dip. **WC
+           gating before bake: eyeball vbv=16 motion quality (back off to 24 if blocky) + confirm
+           `vbv 16ms` in the sender log.**
+         - 👉 **ENDGAME (revised, planned 2026-07-09 — see [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md)
+           "THE ENDGAME"):** residual after vbv=16 = 2 loss types → (1) scattered small (FEC/retransmit-
+           able now), (2) external blackout bursts (17:47Z 76-80 consec = link dark ~78ms; only fewer-
+           packets-in-flight helps). Sequenced: **STEP 2 (cheap) lower HEVC BWE cap 15→~8 Mbps** (Mac-
+           only; fewer pkt lost per blackout, Parsec's actual trick) → **STEP 3a (recommended over FEC)
+           NACK/RTX retransmit + shallow ~1-frame receive buffer** — RTT is only 11ms so re-send is
+           near-free, and the sender ALREADY has `RtcpNackResponder` (`sender/index.ts:233`); missing =
+           the receiver actually SENDING NACKs (today it PLI→IDRs every loss) + a small buffer so the
+           11ms-late resend lands. First = a SPIKE: does ndc `RtcpReceivingSession` emit NACKs w/ `nack`
+           fb? → **STEP 3b app-FEC only if 3a insufficient** (heavier, ndc has no raw-RTP/FEC API).
+         - ❌ **STEP 3a SPIKED (2026-07-09) → BLOCKED at the ndc surface.** `dev/spike-nack.mjs` (Mac
+           loopback) proved the **SDP negotiates `nack`** (offer+answer, H264+H265) ✅, BUT ndc 0.32.3
+           pins **libdatachannel v0.24.2** whose `RtcpReceivingSession` emits only RR+PLI+REMB — it
+           tracks seq gaps but **NEVER sends a Generic NACK**, and ndc gives JS no way to send raw RTCP.
+           So the sender's `RtcpNackResponder` is dead code (no NACK ever arrives). **Both silent-repair
+           endgames (NACK retransmit AND app-FEC) require a NATIVE ndc fork** (patch libdatachannel's
+           RtcpReceivingSession to emit NACK on a gap it already tracks + rebuild the addon for
+           darwin-arm64 + win32-x64 — golden rule #1, breaks "keep native minimal"). **Fork in the road
+           (owner decision):** (A) NOT forking → ship `vbv=16 + LTR off` (opt 2) + STEP 2 lower bitrate =
+           MINOR JUDDER/60@97%, done cheap; (B) all-the-way → the libdatachannel NACK-emit patch (most
+           contained native option, > app-FEC given RTT 11ms) + a shallow receive buffer. Detail +
+           spike in [`docs/step-fec-recovery.md`](docs/step-fec-recovery.md).
+         - ✅ **OWNER PICKED (B) — native NACK patch, "ไปให้สุดทาง" (2026-07-09). Full plan:
+           [`docs/step-nack-retransmit.md`](docs/step-nack-retransmit.md).** ⭐ KEY SIMPLIFICATION: the
+           RECEIVER (needs the NACK-emit patch) runs on the **Mac**; the SENDER (`RtcpNackResponder`,
+           retransmits) runs on the **Windows agent** and already works in stock v0.24.2 → **rebuild ndc
+           for darwin-arm64 ONLY; the Windows agent binary stays untouched** (halves the work, native
+           risk on one platform). Master libdatachannel ALSO doesn't emit NACK (checked) → no upgrade
+           shortcut. Phases: A baseline source build on Mac (de-risk toolchain FIRST — cmake+cmake-js+
+           OpenSSL; N-API 8 = ABI-stable across node/electron) → B patch `rtcpreceivingsession.cpp` to
+           emit Generic NACK on a tracked gap (reorder-tolerant, rate-limited) + rebuild → C Mac-receiver
+           shallow ~1-frame buffer + delay PLI ~1 RTT so the ~11ms retransmit lands → D prerelease +
+           real-hw verify (golden rule #1). Pair with STEP 2 (lower bitrate) for the blackout losses
+           NACK can't beat.
+         - ✅ **Phase A + B DONE (2026-07-09).** A: ndc v0.32.3 builds from source on Mac (cmake 4.3.4
+           + cmake-js + brew openssl@3 static); self-built `node_datachannel.node` (darwin-arm64, N-API
+           8) loads + spike passes. **Install gotcha:** `cp` over a validated signed mach-o →
+           `SIGKILL (Code Signature Invalid)` on dlopen → fix = `rm`+`cp`+`codesign --force --sign -`.
+           B: the patch (`apps/desktop/native/ndc-nack/rtcpreceivingsession-nack.patch`) adds `pushNACK`
+           + a gap-detector in `incoming()` (forward gap 2..64; bigger=blackout→PLI). Compiles clean;
+           **`nack-test.cpp` PASS** (emits exactly one Generic NACK for the missing seqs); patched
+           binary drop-in (regression spike clean). Artifacts + full build/apply/verify/install recipe:
+           [`apps/desktop/native/ndc-nack/README.md`](apps/desktop/native/ndc-nack/README.md). The
+           risky unknowns (can we build+patch ndc? does NACK emission work?) are now CLEARED.
+         - ✅ **Phase C DONE (2026-07-09)** — `receiver/reorderBuffer.ts` `SeqReorderBuffer` wired into
+           `receiver/index.ts` behind **`VIDEO_NACK_BUFFER=1`** (default OFF = byte-identical immediate-
+           PLI path). In-order = drain immediately (0 latency); small gap (≤64) HELD 30ms for the
+           retransmit → arrives = silent release (no PLI/hitch), else onGap→PLI; blackout gap (>64) =
+           skip now→PLI (no penalty). `lossDetector` still measures network loss (analyzer `loss=`);
+           `pli=`/`hitch` now = UNRECOVERED loss only. 11 reorder unit tests + typecheck + lint clean.
+         - ✅ **Phase D VERIFIED on real hardware (2026-07-09) — NACK retransmit works e2e.** Patched
+           darwin ndc installed in the controller (`rm`+`cp`+`codesign`, still installed now; backup at
+           `...node_datachannel.node.orig-prebuilt`), launched `VIDEO_NACK_BUFFER=1`, agent unchanged.
+           278s HEVC stress → `analyze-session.mjs`: **PLI-per-loss 1.0 → 0.3 (~66% of losses repaired
+           SILENTLY, no PLI/hitch)**. Raw pattern = the design exactly: loss ≤64 pkt (4/7/8/17/24/34/37)
+           = pli=0 silent; blackout >64 (93/101/106) = pli=1 fallback (~42ms). jitter 1.3ms (↓3.8),
+           MINOR JUDDER (only blackout hitches left). The silent-repair endgame is PROVEN.
+         - ✅ **NACK ENDGAME DONE + ACCEPTED (owner, 2026-07-09: "เท่านี้ใช้ได้แล้ว").** The flicker at
+           `vbv=16/33` (VBR bit-starvation, [[small-vbv-flickers]]) retired the tiny-VBV idea — but the
+           key finding: **losses stay small/scattered at the DEFAULT VBV too** (network drops, not
+           frame-overflow), so the VBV shrink fixed a non-problem. Re-ran at no-flicker VBV + buffer ON:
+           scattered losses (5/7/8 pkt) repaired SILENTLY (`pli=0`); only blackouts >64 (83/131) → PLI
+           (~50ms); fps 60 locked, jitter ~5ms. **STEP 2 (lower bitrate) REJECTED** — Parsec runs
+           bitrate up to ~60, so we don't trade quality to shrink the rare blackouts (the ~50ms blip
+           every ~40-50s is accepted).
+         - **FINAL SHIP CONFIG:** stock VBV (default 250 — `capturerArgs.ts` `NVENC_VBV_MS` never changed
+           off 250, no code change) + patched darwin ndc (committed `native/ndc-nack/bin/node_datachannel
+           .darwin-arm64.node`, **AUTO-reapplied by the desktop `postinstall` → `native/ndc-nack/
+           postinstall.mjs` after every `pnpm install`**; darwin-arm64-only, no-ops on Windows, never
+           fails install; manual fallback `install.sh`) + `VIDEO_NACK_BUFFER=1` on the controller launch
+           + LTR off. Windows agent = stock ndc
+           (RtcpNackResponder retransmits, untouched). Signed-.dmg packaging of the patched ndc deferred
+           (owner runs the controller from dev). Whole Parsec-parity streaming arc is now COMPLETE.
+     - **LAYER 2 (big, only if Layer 1 isn't enough): FEC.** ⚠️ **BLOCKER:** node-datachannel
+       exposes NO FEC and no raw-RTP send (Track = `sendMessageBinary`(whole AU) + `requestKeyframe`
+       only; ndc packetizes internally). So FEC needs one of: (a) VBV alone suffices; (b) a
+       DataChannel-side redundancy scheme on the media pc (least-invasive); (c) extend the ndc
+       native binding for FEC/raw-RTP (big C++); (d) own the transport (biggest). Sequence:
+       Layer 1 → measure → prototype (b) if needed. Adaptive RS/XOR block FEC design + the full
+       feasibility breakdown are in `docs/step-fec-recovery.md`.
+0b. **Game-mode keyboard (owner-requested 2026-07-08: "ปุ่มเดินในเกม w,a,s,d กดไม่ไป
+   + กดค้าง")** — deferred behind the fps-smoothness work. ROOT CAUSE (found by reading
+   code): (1) printable keys (WASD) route to the `t:'text'` Unicode path
+   (`ControllerSession.tsx:340`) — `KEYEVENTF_UNICODE` sends a CHARACTER, not a key
+   press, so games (DirectInput/scancode/GetAsyncKeyState) never see it, AND the text
+   path can't express a HOLD (always instant down+up). (2) `keyToggleWin32`
+   (`injectorWin32.ts:120`) sends VK, not `KEYEVENTF_SCANCODE` — many games read
+   scancodes. (3) `if(e.repeat) return` (`ControllerSession.tsx:344`) drops held-key
+   auto-repeat (Backspace-hold deletes once). FIX = a **Text⇄Game keyboard-mode toggle**
+   (Parsec-style, default Text): Game mode routes ALL keys through scancode keydown/keyup
+   (holds work, no Unicode → no Thai in-game, fine); Text mode keeps Unicode (Thai) +
+   forwards repeat for Backspace-hold; injectorWin32 → scancode-driven. Mac writes it all;
+   WC tests with a real game (WASD move/hold, shortcuts, Thai still types in Text mode) via
+   a prerelease. CAVEAT: kernel-anticheat games block ALL injected input (unfixable via
+   SendInput).
+   - **MAC SIDE DONE + shipped as PRERELEASE v1.30.0-beta.1 (2026-07-09, `feat/native-video`)
+     — awaiting WC real-game verify (golden rule #1: this is native key-injection FFI).**
+     Design: a **Text⇄Game toggle** (button in the in-session floating bar, 🎮 green when
+     Game; default Text; persisted per controller in `localStorage['pr-keyboard-mode']`).
+     New protocol field **`scan?: boolean` on keydown/keyup** (`inputProtocol.ts`) — absent =
+     the byte-identical VK path (normal typing/shortcuts UNCHANGED, zero regression); `true` =
+     GAME injection. Implementation:
+     - **Controller (`ControllerSession.tsx`):** `keyboardMode` state + `keyboardModeRef`
+       (synced via effect so the `[]`-deps key handlers read it live). **Game mode** = every
+       key routes through keydown/keyup with `scan:true` and `e.repeat` is SWALLOWED (a hold =
+       one keydown; the game reads held state). **Text mode** = unchanged Unicode path for
+       printables, PLUS the Backspace-hold fix (non-printable keydown now FORWARDS `e.repeat`
+       so hold-to-delete/arrow-repeat works). `held` is now a `Map<code, scanFlag>` so
+       panic-release (blur/hide) releases each key the same way it was pressed (no stuck key
+       across a mid-hold mode switch).
+     - **Injectors — `scan` → `KEYEVENTF_SCANCODE` (wVk=0, real scancode):** `keyToggleWin32`
+       (`injectorWin32.ts`) + `injectKey` (`rawInject.ts`) both branch on `scan`; DirectInput/
+       RawInput games (which ignore VK-flagged SendInput) now see a real holdable press, and
+       Windows still derives the VK from the scancode so GetAsyncKeyState games work too.
+       Threaded through all 3 agent injection paths: input-helper (`keyToggle`→win32),
+       AgentView IPC (`input.key(code,down,scan)` → preload → `input:key` main → `keyToggle`),
+       and the SYSTEM injector (`injectRaw`→`injectKey`).
+     - Mac verified: typecheck (node+web) clean, lint clean on all touched files (the only
+       remaining lint errors are PRE-EXISTING `react-hooks/refs` in AgentView, untouched).
+       Can't unit-test the koffi SendInput path on macOS (that's the golden-rule-#1 handoff).
+     - **v1.30.0-beta.1 VERIFIED on real hardware (WC):** scancode injection correct in the
+       build (`wVk:0, wScan=scancode` on the game path, `wVk:entry.vk` VK on the default path),
+       helper log showed `keydown code=KeyW scan` in Game vs `text len=...` in Text, WASD
+       held-walk worked, TH/EN typing worked. The 🎮 toggle mechanism is PROVEN.
+   - **PIVOT → PARSEC-100% keyboard (owner, 2026-07-09: "แบบ Parsec 100%" — คุมเกม + สลับ
+     ไทย/อังกฤษพร้อมกัน โดยไม่ต้องกดปุ่มโหมด). The Text/Game toggle is RETIRED: keyboard is now
+     ALWAYS scancode.** Parsec sends physical scancodes only (no Unicode); the HOST does
+     Scancode→VK→its-own-active-layout→character, so typing follows the HOST's layout and the
+     language toggle (Grave/Alt+Shift) is a real key the host's layout switcher sees — gaming
+     (holdable WASD) and TH/EN typing then coexist with NO mode. Windows agent + host already
+     ready (scancode inject verified in beta.1; host has th 041E Kedmanee + en-US 0409, Grave
+     toggles) — **no agent/FFI change.**
+     - **MAC SIDE DONE (`ControllerSession.tsx`):** every key (printable included) now forwards
+       as `{t:'keydown'/'keyup', code:e.code, scan:true}` — the `{t:'text'}` Unicode path is
+       GONE. OS auto-repeat is now FORWARDED (real-keyboard feel: text fields repeat the char;
+       games hold until keyup regardless). `held` back to a `Set` (uniform scancode) covering
+       ALL keys so panic-release (blur/Alt-Tab) can't leave a stuck key — printables included.
+       Escape stays LOCAL (disconnect), never forwarded. Removed the 🎮 Text/Game button +
+       `keyboardMode` state/persist/ref/sync-effect + its CSS + the `isPrintableKey` import.
+       Thai PASTE still works with no text path: clipboard sync mirrors Mac→Windows clipboard,
+       and a physical Ctrl+V (scancode) pastes it on the host (the Parsec model). Cmd already
+       maps to Ctrl VK in `keyMapWin32` so Cmd+C = Ctrl+C shortcut parity. Mac verified:
+       typecheck (node+web) + controller lint clean (only the pre-existing `sendInput`
+       exhaustive-deps warning).
+     - **VERIFIED on real hardware + PROMOTED to full v1.31.0 (owner, 2026-07-09: "ใช้งานได้"):**
+       Parsec-100% keyboard works — control a game + switch TH/EN at the same time with no mode
+       button. Backlog 0b is DONE. (kernel-anticheat games block ALL injected input = a known,
+       unfixable caveat, not a bug.)
+1. ✅ DONE (owner-verified 2026-07-09): file transfer with the agent window actually
+   hidden works normally (was a concern because it rides the renderer video pc, which
+   Chromium throttles when hidden — confirmed fine in real use).
 2. Computers-page search/sort; per-controller device visibility (family use).
 3. Known limitation: helper crash mid-session recovers input only at re-pair.
 4. No TURN relay (only matters for CGNAT↔CGNAT pairs).
 5. Mac installer (.dmg) — deferred by owner decision.
 6. Owner plans a UI redesign + playful feature additions next.
-7. **Native video pipeline** for Parsec-level "glued to the mouse" latency —
-   NOW A PLANNED PROJECT: full handoff plan at
+7. **Native video pipeline** — BUILT + working end-to-end on real hardware on
+   branch `feat/native-video` (see Current status); plan at
    [`docs/native-video-plan.md`](docs/native-video-plan.md). Owner chose the
-   native route (over a same-tech rebuild) 2026-07-06. Moves the video hot path
-   OUT of Chromium on both ends (Windows DXGI capture + MF/NVENC encode → RTP
-   over node-datachannel → Mac VideoToolbox decode + AVSampleBufferDisplayLayer
-   render), mirroring the input-helper pattern; keeps the whole UI + every
-   existing feature; WebRTC path stays the default fallback until native is
-   proven. Windows-side Claude owns the agent/sender half, Mac side owns the
-   controller/render half. Phase 0 is a de-risk spike. Encoder/bitrate tuning is
-   already maxed as of v1.22.0 — this is the only remaining lever.
+   native route 2026-07-06; the §3a compositing crux was solved 2026-07-07 by
+   rendering INSIDE the Electron window (no separate NSWindow). REMAINING TO SHIP:
+   (a) bundle `librvr.dylib` + `swiftc` build into the Mac app Resources +
+   codesign/notarize; (b) merge `feat/native-video`; (c) PRERELEASE per golden
+   rule #1 (default stays WebRTC) and verify on the real agent before a full
+   release; (d) optional polish — real decodeMs/renderMs in `stats`,
+   keyframe-needed signal from the decode path, Windows NVENC preset/bitrate sweep.
+8. **Input elevation (SYSTEM service)** — owner-picked 2026-07-07 after "open
+   Task Manager → mouse dies instantly". Root cause: Windows UIPI/integrity — our
+   medium-integrity injector can't `SendInput` into high-integrity windows (Task
+   Manager, admin apps, UAC, Ctrl+Alt+Del, lock). Mac wrote the scaffold; Windows-
+   Claude is building + testing it phase by phase on real hardware. Plan + phasing
+   + session-0 correction in
+   [`docs/input-elevation-plan.md`](docs/input-elevation-plan.md); code +
+   test-order in `apps/desktop/src/input-service/README.md`. Architecture (Parsec
+   model, corrected for session-0 isolation): a session-0 LocalSystem **launcher**
+   (`service.ts`) spawns via `CreateProcessAsUserW` an **injector-in-session**
+   (`index.ts`, SYSTEM/high) that hosts a named pipe, follows the active desktop
+   (`syncInputDesktop()`), and raw-`SendInput`s (`rawInject.ts`, mouse+kbd); the
+   medium helper forwards over the pipe (`serviceClient.ts`) with local-inject
+   fallback. SAFETY BAR: gated behind `PR_INPUT_SERVICE=1`, default build
+   byte-identical; both processes wired as electron-vite entries
+   (`input-service.js` + `input-injector.js`) but inert unless installed.
+   **PROGRESS (real hardware):**
+   - ✅ **Phase 0 DONE** — `rawInject` (raw SendInput) verified auto (GetCursorPos
+     px-exact, clipboard byte-compare for Thai text, EM_GETFIRSTVISIBLELINE for
+     wheel). koffi mouse+kbd struct/signature PROVEN on hardware. `WHEEL_DELTA=120`
+     = Windows-standard (no tuning). Bug fixed: `injectKey` evaluated `scanCodeFor`
+     before `sendKey`'s `ensureInit` → null `mapVirtualKeyFn` on a process's first
+     keydown; fixed by `ensureInit()` at the top of `scanCodeFor` (idempotent).
+   - ✅ **Phase 1 DONE** — pipe transport/framing/fallback verified: FrameDecoder
+     6/6 (partial/corrupt/malformed), forward helper→pipe→injector px-exact, 240-
+     move burst coalesced+split correctly, **fallback seamless (kill injector mid-
+     session → local inject, 0 frames dropped)**. koffi-under-plain-node OK.
+     Harnesses: `input-service/dev/phase{0,1}-*.ts` + `scripts/phase{0,1}.ps1`.
+   - ✅ **Phase 2 spawn primitive DONE (the riskiest FFI)** —
+     `spawnInjectorInSession()` implemented + verified in isolation: the token
+     dance + `CreateProcessAsUserW` spawns the injector as **SYSTEM-in-session**
+     (session 1, high integrity) which hosts the pipe. Chose SYSTEM-in-session
+     (retarget the SYSTEM token's `TokenSessionId` to the interactive session)
+     over `WTSQueryUserToken` — the latter gives the USER token = medium
+     integrity, not enough for Task Manager/UAC. `checkSpawnLayout()` asserts
+     every struct size/offset (STARTUPINFOW/PROCESS_INFORMATION/TOKEN_PRIVILEGES)
+     against known x64 values BEFORE any pointer is passed (golden-rule-1 guard).
+     Harness `dev/phase2-spawn.ts` + `scripts/phase2.ps1`.
+   - **BIG SIMPLIFICATION (owner tested 2026-07-07): running the AGENT elevated
+     (Run as administrator) ALREADY fixes Task Manager** — the forked input-helper
+     inherits the agent's high integrity, so its existing local `SendInput`
+     reaches Task Manager + every run-as-admin app. No service needed for that.
+     Covers everything EXCEPT the secure desktop (UAC consent / Ctrl+Alt+Del /
+     lock), which needs SYSTEM.
+   - **DECISION (owner, 2026-07-07):** ship BOTH, layered:
+     - **(TRACK 1) auto-elevate the agent — ✅ DONE + VERIFIED on real hardware
+       2026-07-07: controlling Task Manager over the remote now works** (the
+       owner's original "open Task Manager → mouse dies" bug is fixed). Shipped as
+       a **Scheduled Task `PersonalRemoteAgent`** (AtLogOn / LogonType=Interactive
+       / RunLevel=Highest → elevated, NO per-launch UAC nag). Commits `a146d1c`
+       (task + `scripts/install-agent-autostart.ps1`/uninstall; `main/index.ts`
+       drops `elevated-autostart.flag` when it runs elevated and then sets
+       `openAtLogin:false` so it never re-adds the medium HKCU Run key — the task
+       is the sole autostart) + `ec04135` (the crux). **Key finding: elevation
+       only sticks when the TASK launches the agent** — a shortcut click / Windows
+       "restart apps" / manual launch = Medium → helper Medium → Task Manager dead.
+       Fix in `ec04135`: on startup, BEFORE the single-instance lock, if
+       packaged+win32+not-elevated+task-exists → `schtasks /run` + exit, so the
+       task relaunches a High instance (30s guard + the elevated instance sees
+       itself elevated ⇒ no loop). Two bugs found+fixed while doing it: (1)
+       `isElevatedWindows()` via `net session` returns success even from Medium on
+       this machine (false "elevated") → handoff never fired; now reads token
+       integrity via `whoami /groups` (High = S-1-16-12288). (2) module-scope
+       `getPath('userData')` returns `...\Electron` before app-ready → gate on task
+       existence + a marker in `getPath('temp')`. input-helper integrity was NEVER
+       a problem — `child_process.fork` inherits the parent token, so helper+children
+       = High whenever main is High (verified). Only `main/index.ts` changed; built
+       via `build-win.sh`; default runtime unaffected. Caveat: dragging a file from
+       a medium Explorer ONTO the elevated agent window is UIPI-blocked (receiving
+       files from the controller is unaffected).
+     - **(TRACK 2) SYSTEM service for the secure desktop — ✅ CODE DONE + PROVEN
+       end-to-end on real hardware 2026-07-07: the owner locked the screen (Win+L)
+       and controlled input from the Mac.** All STEPs pass: A (Fix A pipe — helper
+       HOSTS, SYSTEM injector CONNECTS — the Phase-2 ACL blocker is gone; e2e
+       cursor px-exact), B (session-0 launcher as a `schtasks /ru SYSTEM /rl HIGHEST`
+       task, not an SCM service → no 1053), C (chain on the normal desktop), D
+       (`syncInputDesktop()` follows into `Winlogon` → UAC / Ctrl+Alt+Del / lock
+       take input; video stays frozen there = expected, SYSTEM-capture is separate).
+       Shipped as **PRERELEASE v1.23.0-beta.1** (golden rule #1) off
+       `feat/native-video @ 3a62001` via `build-win.sh` (node-datachannel + koffi
+       win32 verified packed, asar off) — gated behind `PR_INPUT_SERVICE=1` + the
+       SYSTEM service being installed; default runtime byte-identical. **NOT yet a
+       clean-install/reboot-permanent test**: the working setup was a dev rig (dev
+       agent + flag + service installed from the repo path). Windows-Claude to make
+       it permanent from the installed .exe: (1) install the prerelease over
+       v1.22.0; (2) set `PR_INPUT_SERVICE=1` on the Track-1 `PersonalRemoteAgent`
+       task's launched process + install the `PersonalRemoteInput` SYSTEM launcher
+       pointing `-ScriptPath` at the INSTALLED app's `input-service.js` (not the dev
+       repo path); (3) reboot → confirm Task Manager (T1) + lock/UAC (T2) both take
+       input with nothing set up by hand. If the SYSTEM service is down the helper
+       falls back to local High inject, so Track 1 still works (resilient layers).
+       Not yet auto-on for a plain install — enabling it (in-app toggle / default)
+       is a separate productization step.
+   - **Phase 2 e2e findings (real hardware):** ✅ service→CreateProcessAsUser→
+     injector-hosts-pipe auto-spawn works; ✅ full medium→medium chain injects
+     px-exact via pipe (forwarded, not fallback). **Two blockers found:**
+     1. **Pipe ACL** — a SYSTEM injector hosting a libuv/`net` pipe gets a default
+        DACL (SYSTEM+Admins only) → the medium helper is denied ("Access is
+        denied", node mangles to ENOENT). Cleanly isolated (medium-injector
+        connects, SYSTEM-injector denied). FIX: **A now** (swap roles: helper
+        hosts, SYSTEM injector connects — SYSTEM opens any user pipe), **B in
+        Phase 4** (injector owns pipe via koffi `CreateNamedPipeW`+SDDL+
+        `FIRST_PIPE_INSTANCE` — correct trust model). Residual same-user→SYSTEM
+        EoP with A is accepted for a sole-user home tool + documented.
+     2. **SCM 1053** — `service.ts` is plain Node with no `StartServiceCtrlDispatcher`,
+        so `sc start` times out (1053) and SCM kills it (injector orphaned). FIX:
+        run the session-0 launcher as a **Scheduled Task `/ru SYSTEM /rl HIGHEST`**
+        instead of an SCM service (no dispatcher needed; still session 0 → still
+        uses the working `CreateProcessAsUser` primitive). Do NOT hand-roll the
+        dispatcher in koffi (callback-from-native segfault risk).
+   - ✅ Phase 3 desktop-follow (UAC/lock via `syncInputDesktop()`) DONE (see Track 2
+     above). ⏭ REMAINING: reboot-permanent test from the installed prerelease (the
+     3 steps above), then Phase 4 harden (Fix B pipe SDDL + squat guard,
+     session-change re-target, injector crash-respawn, uninstall cleanup), then a
+     full release once the reboot test signs off.
+   - Golden rule #1 throughout: PRERELEASE + real-hardware before any full release.
+     Secure-desktop cases land input-only (video stays frozen = separate SYSTEM-
+     capture project).
+9. **Auto-reconnect resilience** — DONE this session (Mac repo, shared
+   `signalingClient.ts`): added a liveness watchdog. Root cause of "agent stayed
+   offline until I restarted it after closing the MacBook lid": the client pinged
+   every 25s but never checked for a pong and relied only on the WS `close` event,
+   which never fires on a HALF-OPEN socket (tunnel host sleeps → no FIN/RST). Now
+   force-closes + reconnects (re-resolving the URL) after 65s of silence. Benefits
+   agent + controller. **✅ VERIFIED on the real lid-close path (owner, 2026-07-09):**
+   after `git`-timestamping the signaling server's connection lifecycle logs
+   (`server/signaling/src/index.ts` `log()`/`logWarn()` helpers now prefix ISO time),
+   a lid-close test measured **disconnect 13:47:36Z → fully re-paired 13:48:08Z ≈ 31s
+   auto-recovery, no manual restart** (agent re-registered + controller re-paired on
+   its own). Observation: some connect/disconnect FLAPPING during the wake settle
+   (agent + controller + tunnel all reconnecting at once) before it stabilizes — not
+   harmful (ends paired) but the recovery isn't 100% clean; a follow-up could tighten
+   the initial reconnect backoff / de-flap if ~31s ever feels slow. Optional follow-up
+   the owner deferred: (ค) auto-fallback input→video pc if the input pc never opens.
+   - **RE-PAIR WATCHDOG — DONE (2026-07-09, `ControllerSession.tsx`, controller-side
+     only, NO build — owner relaunches `start-controller.command`):** fixes the "re-pair
+     hangs at connecting ~4min" the owner hit after some lid-close wakes. ROOT CAUSE: all
+     the controller's pair retries were REACTIVE — scheduled ONLY when a specific message
+     is RECEIVED (a `pair-result: unknown device id`, or a pc `failed` event). During the
+     wake FLAPPING (agent + controller + tunnel all reconnecting at once) a pair-request OR
+     its pair-result can simply be LOST → no reactive retry is ever scheduled → the session
+     strands "connected to signaling but never paired" with no timer to recover. FIX: a
+     proactive `setInterval` watchdog (`REPAIR_WATCHDOG_INTERVAL_MS`=6s) that runs the whole
+     session and, while NO pc is actually `'connected'` (checks both `pcRef` webrtc/non-helper
+     input AND `inputPcRef` helper input), re-sends pair-request (idempotent server-side) so a
+     lost message can't wedge us. Skips the nudge while a human approval is pending
+     (`pendingApprovalRef`, set on `pairing-pending` / cleared on any `pair-result`) or the WS
+     is down (`signalingOpenRef`, set/cleared in onReconnect/onDisconnect — signaling's own
+     reconnect handles that). 6s > a healthy direct-link negotiation (~1-2s) so it only nudges
+     genuinely-stuck sessions; cleared on unmount. typecheck(web) clean, lint = only the
+     pre-existing exhaustive-deps warning.
+   - **AUTO-TEST (2026-07-09, owner asked "ลองทำระบบมาเช็ค ขี้เกียจพับจอไปมา"):** the watchdog
+     logic + loop were EXTRACTED into a pure module
+     [`repairWatchdog.ts`](apps/desktop/src/renderer/src/controller/repairWatchdog.ts)
+     (`shouldNudgeRepair()` predicate + `startRepairWatchdog()` with injectable timers) so
+     ControllerSession just wires live refs into it. Test:
+     `node src/renderer/src/controller/dev/verify-repair-watchdog.mjs` (from apps/desktop; esbuild-
+     bundles the TS + a fake clock, ~1s, **14/14 PASS**). It reproduces THE BUG deterministically
+     with NO lid cycling: a pair-request lost during a flap (agent registered but no reactive
+     trigger) → the watchdog keeps nudging while the agent is offline → recovers on the first nudge
+     after the agent returns → quiesces (no runaway). Also covers the predicate truth table + the
+     approval/WS-down gating + stop(). Verifies the fix works even though the SERVER log can't show
+     watchdog nudges (unknown-device pair-requests aren't logged there). Live lid-close log
+     (2026-07-09 15:35Z) confirmed a normal re-pair still connects fine (~19s, no regression); the
+     multi-minute strand was captured pre-fix at 14:50Z (agent online 14:51 → paired 14:56 = 5m43s).
+     NEXT (optional): if a real strand ever recurs, owner relaunches + retests — but the auto-test
+     already proves the recovery path.

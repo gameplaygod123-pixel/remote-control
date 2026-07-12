@@ -1,0 +1,7 @@
+# Never commit the portable ffmpeg binary or spike capture output — drop your own
+# ffmpeg.exe in and run bench.ps1 (see RESULTS.md).
+ffmpeg.exe
+ffprobe.exe
+*.zip
+cap.mp4
+out.mp4

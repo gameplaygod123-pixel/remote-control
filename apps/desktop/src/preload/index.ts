@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { UpdaterStatus } from '../main/updater'
+import type {
+  IceServerConfig,
+  NativeVideoStats,
+  VideoConfig
+} from '../video-native/shared/contract'
 
 type AppMode = 'agent' | 'controller'
 
@@ -25,9 +30,10 @@ const api = {
     getPosition: (): Promise<{ x: number; y: number }> => ipcRenderer.invoke('input:get-position'),
     mouseButton: (button: 'left' | 'right' | 'middle', down: boolean): Promise<void> =>
       ipcRenderer.invoke('input:mouse-button', button, down),
-    scroll: (deltaY: number): Promise<void> => ipcRenderer.invoke('input:scroll', deltaY),
-    key: (code: string, down: boolean): Promise<void> =>
-      ipcRenderer.invoke('input:key', code, down),
+    scroll: (deltaY: number, deltaX = 0, px = false): Promise<void> =>
+      ipcRenderer.invoke('input:scroll', deltaY, deltaX, px),
+    key: (code: string, down: boolean, scan = false): Promise<void> =>
+      ipcRenderer.invoke('input:key', code, down, scan),
     getScreenSize: (): Promise<{ width: number; height: number }> =>
       ipcRenderer.invoke('input:get-screen-size')
   },
@@ -44,13 +50,21 @@ const api = {
     set: (theme: 'dark' | 'light' | 'glass'): Promise<void> =>
       ipcRenderer.invoke('theme:set', theme)
   },
+  pipeline: {
+    get: (): Promise<'webrtc' | 'native'> => ipcRenderer.invoke('pipeline:get'),
+    set: (pipeline: 'webrtc' | 'native'): Promise<void> =>
+      ipcRenderer.invoke('pipeline:set', pipeline)
+  },
   agent: {
     captureThumbnail: (): Promise<string | null> => ipcRenderer.invoke('agent:capture-thumbnail')
   },
   window: {
     setFullScreen: (value: boolean): Promise<void> =>
       ipcRenderer.invoke('window:set-fullscreen', value),
-    show: (): Promise<void> => ipcRenderer.invoke('window:show')
+    show: (): Promise<void> => ipcRenderer.invoke('window:show'),
+    onFullScreen: (handler: (value: boolean) => void): void => {
+      ipcRenderer.on('window:fullscreen', (_event, value) => handler(value))
+    }
   },
   trusted: {
     list: (): Promise<{ id: string; trustedAt: number }[]> => ipcRenderer.invoke('trusted:list'),
@@ -60,6 +74,19 @@ const api = {
   },
   controllerId: {
     get: (): Promise<string> => ipcRenderer.invoke('controller:get-id')
+  },
+  // Parsec-style window lifecycle for the controller. The renderer reports
+  // whether a remote session is live so the main process can decide what the
+  // window's X does: session live -> go back to the main page (not close);
+  // main page -> hide to the tray (keep running in the background). onGoHome is
+  // main telling the renderer to leave the session (the X-during-session case).
+  controller: {
+    setSessionActive: (active: boolean): void => {
+      ipcRenderer.send('controller:session-active', active)
+    },
+    onGoHome: (handler: () => void): void => {
+      ipcRenderer.on('controller:go-home', () => handler())
+    }
   },
   controllerMemory: {
     getCachedPin: (deviceId: string): Promise<string | undefined> =>
@@ -111,7 +138,8 @@ const api = {
       candidate: string,
       sdpMid: string | null,
       sdpMLineIndex: number | null
-    ): Promise<void> => ipcRenderer.invoke('input-helper:remote-ice', candidate, sdpMid, sdpMLineIndex),
+    ): Promise<void> =>
+      ipcRenderer.invoke('input-helper:remote-ice', candidate, sdpMid, sdpMLineIndex),
     onOffer: (handler: (sdp: string) => void): void => {
       ipcRenderer.on('input-helper:offer', (_event, sdp) => handler(sdp))
     },
@@ -124,6 +152,79 @@ const api = {
     },
     onDown: (handler: () => void): void => {
       ipcRenderer.on('input-helper:down', () => handler())
+    }
+  },
+  // Bridges the agent renderer to the native video-sender process (see
+  // main/videoSenderHost.ts). Always-not-ready unless VIDEO_PIPELINE=native
+  // spawned the host; controller mode never calls these.
+  videoSender: {
+    isReady: (): Promise<boolean> => ipcRenderer.invoke('video-sender:is-ready'),
+    startSession: (config: VideoConfig, iceServers?: IceServerConfig[]): Promise<void> =>
+      ipcRenderer.invoke('video-sender:start-session', config, iceServers),
+    stopSession: (): Promise<void> => ipcRenderer.invoke('video-sender:stop-session'),
+    remoteAnswer: (sdp: string): Promise<void> =>
+      ipcRenderer.invoke('video-sender:remote-answer', sdp),
+    remoteIce: (
+      candidate: string,
+      sdpMid: string | null,
+      sdpMLineIndex: number | null
+    ): Promise<void> =>
+      ipcRenderer.invoke('video-sender:remote-ice', candidate, sdpMid, sdpMLineIndex),
+    setBitrate: (kbps: number): Promise<void> =>
+      ipcRenderer.invoke('video-sender:set-bitrate', kbps),
+    onOffer: (handler: (sdp: string) => void): void => {
+      ipcRenderer.on('video-sender:offer', (_event, sdp) => handler(sdp))
+    },
+    onIce: (
+      handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+    ): void => {
+      ipcRenderer.on('video-sender:ice', (_event, candidate, sdpMid, sdpMLineIndex) =>
+        handler(candidate, sdpMid, sdpMLineIndex)
+      )
+    },
+    onStats: (handler: (stats: NativeVideoStats) => void): void => {
+      ipcRenderer.on('video-sender:stats', (_event, stats) => handler(stats))
+    },
+    onDown: (handler: () => void): void => {
+      ipcRenderer.on('video-sender:down', () => handler())
+    }
+  },
+  // Bridges the controller renderer to the native video-receiver process (see
+  // main/videoReceiverHost.ts). Always-not-ready unless VIDEO_PIPELINE=native
+  // spawned the host; agent mode never calls these.
+  videoReceiver: {
+    isReady: (): Promise<boolean> => ipcRenderer.invoke('video-receiver:is-ready'),
+    startSession: (): Promise<void> => ipcRenderer.invoke('video-receiver:start-session'),
+    stopSession: (): Promise<void> => ipcRenderer.invoke('video-receiver:stop-session'),
+    remoteOffer: (sdp: string): Promise<void> =>
+      ipcRenderer.invoke('video-receiver:remote-offer', sdp),
+    remoteIce: (
+      candidate: string,
+      sdpMid: string | null,
+      sdpMLineIndex: number | null
+    ): Promise<void> =>
+      ipcRenderer.invoke('video-receiver:remote-ice', candidate, sdpMid, sdpMLineIndex),
+    onAnswer: (handler: (sdp: string) => void): void => {
+      ipcRenderer.on('video-receiver:answer', (_event, sdp) => handler(sdp))
+    },
+    onIce: (
+      handler: (candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) => void
+    ): void => {
+      ipcRenderer.on('video-receiver:ice', (_event, candidate, sdpMid, sdpMLineIndex) =>
+        handler(candidate, sdpMid, sdpMLineIndex)
+      )
+    },
+    onFirstFrame: (handler: () => void): void => {
+      ipcRenderer.on('video-receiver:first-frame', () => handler())
+    },
+    onStats: (handler: (stats: NativeVideoStats) => void): void => {
+      ipcRenderer.on('video-receiver:stats', (_event, stats) => handler(stats))
+    },
+    onBitrate: (handler: (kbps: number) => void): void => {
+      ipcRenderer.on('video-receiver:bitrate', (_event, kbps) => handler(kbps))
+    },
+    onDown: (handler: () => void): void => {
+      ipcRenderer.on('video-receiver:down', () => handler())
     }
   }
 }

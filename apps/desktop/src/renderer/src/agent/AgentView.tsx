@@ -17,6 +17,8 @@ import { useVideoStats } from '../shared/webrtc/useVideoStats'
 import { attachClipboardChannel } from '../shared/clipboard/clipboardSync'
 import type { RemoteInputMessage } from '../shared/input/inputProtocol'
 import { INPUT_HELPER_CAP } from '../shared/input/capabilities'
+import { NATIVE_VIDEO_CAP, DEFAULT_VIDEO_CONFIG } from '../../../video-native/shared/contract'
+import type { IceServerConfig, NativeVideoStats } from '../../../video-native/shared/contract'
 
 // Cached after the first remote input message -- the agent's screen doesn't
 // resize mid-session, and re-querying nut.js on every mousemove would add
@@ -38,11 +40,11 @@ async function handleRemoteInput(message: RemoteInputMessage): Promise<void> {
       await window.api.input.mouseButton(message.button, message.t === 'down')
       break
     case 'wheel':
-      await window.api.input.scroll(message.dy)
+      await window.api.input.scroll(message.dy, message.dx ?? 0, message.px === true)
       break
     case 'keydown':
     case 'keyup':
-      await window.api.input.key(message.code, message.t === 'keydown')
+      await window.api.input.key(message.code, message.t === 'keydown', message.scan === true)
       break
     case 'text':
       await window.api.input.type(message.text)
@@ -128,6 +130,10 @@ function AgentView(): React.JSX.Element {
   // read activePc state directly without going stale -- same rationale as
   // clientRef/deviceIdRef just below.
   const pcRef = useRef<RTCPeerConnection | null>(null)
+  // TURN/STUN delivered by the signaling server (get-ice-servers). Passed to the
+  // native video sender so a symmetric-NAT/CGNAT controller can relay. Undefined
+  // until the reply lands; the sender falls back to its baked STUN meanwhile.
+  const iceServersRef = useRef<IceServerConfig[] | undefined>(undefined)
   const [incomingRequest, setIncomingRequest] = useState(false)
   // The server rejected our saved house token (someone rotated it, or it was
   // mistyped on setup). Routes back to the token screen -- without this the
@@ -152,6 +158,17 @@ function AgentView(): React.JSX.Element {
   // agent's actual behavior always matches what it told the controller in
   // connection-response.caps.
   const useHelperRef = useRef(false)
+  // Whether THIS session moved the video HOT PATH to the native video-sender
+  // process (controller advertised native-video AND our host is ready). Decided
+  // at accept time alongside useHelperRef; read in pair-result. False unless
+  // VIDEO_PIPELINE=native spawned the host (isReady() is otherwise always false),
+  // so the default build never sets it -- the WebRTC video path is untouched.
+  // NOTE: even when true, the renderer "video" pc still exists for file transfer
+  // (and input/clipboard when not using the input-helper); native only takes the
+  // video MEDIA, on the separate 'video-native' signaling channel.
+  const useNativeVideoRef = useRef(false)
+  // Latest sender-side telemetry from the native video helper (see onStats).
+  const nativeStatsRef = useRef<NativeVideoStats | null>(null)
   const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
     useFileTransferChannel()
 
@@ -242,7 +259,17 @@ function AgentView(): React.JSX.Element {
       controllerCapsRef.current.includes(INPUT_HELPER_CAP) &&
       (await window.api.inputHelper.isReady())
     useHelperRef.current = useHelper
-    return useHelper ? [INPUT_HELPER_CAP] : []
+    // Native video engages only when the controller advertised the cap AND our
+    // sender host is ready (which requires VIDEO_PIPELINE=native to have spawned
+    // it -- otherwise isReady() is false and this is always webrtc). Both sides
+    // must agree, so the cap we advertise here is the single source of truth the
+    // controller echoes back. cap string 'native-video' vs channel 'video-native'
+    // are intentionally distinct (mirrors 'input-helper' cap / 'input' channel).
+    const useNativeVideo =
+      controllerCapsRef.current.includes(NATIVE_VIDEO_CAP) &&
+      (await window.api.videoSender.isReady())
+    useNativeVideoRef.current = useNativeVideo
+    return [...(useHelper ? [INPUT_HELPER_CAP] : []), ...(useNativeVideo ? [NATIVE_VIDEO_CAP] : [])]
   }
 
   async function handleAccept(): Promise<void> {
@@ -298,6 +325,60 @@ function AgentView(): React.JSX.Element {
         channel: 'input'
       })
     })
+    // Native video-sender relays -- same lifetime as the input-helper ones: the
+    // forked process outlives any pairing, so its offer/ice go to whichever
+    // signaling client is current. All on the SEPARATE 'video-native' channel so
+    // the renderer 'video' pc (file transfer) is never touched. No-ops unless the
+    // host was spawned (VIDEO_PIPELINE=native); the callbacks simply never fire.
+    window.api.videoSender.onOffer((sdp) => {
+      clientRef.current?.send({
+        type: 'sdp-offer',
+        deviceId: deviceIdRef.current ?? '',
+        sdp,
+        channel: 'video-native'
+      })
+    })
+    window.api.videoSender.onIce((candidate, sdpMid, sdpMLineIndex) => {
+      clientRef.current?.send({
+        type: 'ice-candidate',
+        deviceId: deviceIdRef.current ?? '',
+        candidate,
+        sdpMid,
+        sdpMLineIndex,
+        channel: 'video-native'
+      })
+    })
+    window.api.videoSender.onStats((stats) => {
+      // Sender-side pipeline telemetry (fps/kbps + encode/capture ms). The unified
+      // HUD lives on the CONTROLLER, so relay the encode/capture split over signaling
+      // ('video-sender-stats', channel:'video-native') for the HUD to show alongside
+      // the receiver numbers. Only while native is live and there's something to show
+      // (encodeMs is null on ffmpeg -> no traffic). Kept in a ref too for any
+      // agent-side readout.
+      nativeStatsRef.current = stats
+      if (useNativeVideoRef.current && (stats.encodeMs != null || stats.captureMs != null)) {
+        clientRef.current?.send({
+          type: 'video-sender-stats',
+          deviceId: deviceIdRef.current ?? '',
+          encodeMs: stats.encodeMs,
+          captureMs: stats.captureMs,
+          channel: 'video-native'
+        })
+      }
+    })
+    window.api.videoSender.onDown(() => {
+      // The sender host auto-respawns and restarts capture with the last config
+      // (videoSenderHost.ts), so a crash self-heals into a fresh 'video-native'
+      // offer. We only surface a status hint; the renderer 'video' pc (file
+      // transfer) is unaffected, so we deliberately do NOT tear it down here.
+      if (useNativeVideoRef.current) {
+        setStatus((current) =>
+          current.startsWith('paired') || current.startsWith('connection')
+            ? `${current} (native video restarting)`
+            : current
+        )
+      }
+    })
     window.api.inputHelper.onDown(() => {
       // Safety net (see docs/native-input-plan.md): a helper crash used to
       // leave an active helper-backed session silently input-dead -- video
@@ -341,8 +422,20 @@ function AgentView(): React.JSX.Element {
     // (pc.connectionState === 'connected') since the controller already has
     // full live video at that point and there's no point spending capture
     // time/bandwidth on a thumbnail nobody's looking at.
+    //
+    // ALSO paused whenever the native video pipeline is engaged
+    // (useNativeVideoRef): captureThumbnail() drives Chromium's DXGI Desktop
+    // Duplication (desktopCapturer.getSources), and the forked video-sender's
+    // ffmpeg ddagrab holds its own DXGI duplication of the same output. Two
+    // duplicators race the frame's keyed mutex -> "keyed mutex was abandoned"
+    // (HRESULT 0x887A0026) -> ddagrab dies -> ffmpeg exits -> respawn loop
+    // (seen on the first real-hardware run). ffmpeg only ever runs inside the
+    // `if (useNativeVideoRef.current)` branch below, so gating on the same flag
+    // guarantees the two never capture at once. (Trade-off: this machine shows
+    // no live idle thumbnail once native is negotiated -- MonitorIcon fallback
+    // instead; a ddagrab-sourced thumbnail is a follow-up.)
     const thumbnailInterval = setInterval(async () => {
-      if (cancelled || pc?.connectionState === 'connected') return
+      if (cancelled || pc?.connectionState === 'connected' || useNativeVideoRef.current) return
       const image = await window.api.agent.captureThumbnail()
       if (image) client?.send({ type: 'device-thumbnail', deviceId: agentDeviceId, image })
     }, THUMBNAIL_INTERVAL_MS)
@@ -393,7 +486,10 @@ function AgentView(): React.JSX.Element {
         if (!parsed.success) return
         const message = parsed.data
 
-        if (message.type === 'register-result') {
+        if (message.type === 'ice-servers') {
+          // Cache the delivered STUN+TURN for the next sender start-session.
+          iceServersRef.current = message.iceServers
+        } else if (message.type === 'register-result') {
           setStatus(
             message.ok ? 'waiting for controller to pair' : `register failed: ${message.reason}`
           )
@@ -475,88 +571,91 @@ function AgentView(): React.JSX.Element {
             }
           }
 
-          // frameRate: without an explicit ask, Chromium's screen-capture
-          // default can be quite conservative (sometimes ~5fps), which reads
-          // as "laggy" even though the connection itself is fine. Pushed to
-          // 60fps (from 30) since a smooth cursor/motion feel matters more
-          // for remote *control* than per-frame sharpness -- paired with
-          // capping resolution to 1080p below so the extra frames don't
-          // just double the encoder's/network's workload at full native
-          // resolution (which on a high-res monitor was likely the actual
-          // bottleneck behind feeling laggy, not the frame rate cap itself).
-          const stream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-              frameRate: { ideal: 60, max: 60 },
-              width: { ideal: 1920, max: 1920 },
-              height: { ideal: 1080, max: 1080 }
+          if (useNativeVideoRef.current) {
+            // Native video pipeline: the video HOT PATH moves to the forked
+            // video-sender process (DXGI capture -> ffmpeg HW encode -> RTP on
+            // the separate 'video-native' channel). Deliberately NO
+            // getDisplayMedia / addTrack here -- the renderer pc carries no video
+            // in native mode; it stays only for file transfer (and input/
+            // clipboard when the input-helper isn't engaged). stopSession() first
+            // clears any stale capture from a previous pairing, then startSession
+            // makes the helper create its own offer (relayed on 'video-native').
+            void window.api.videoSender.stopSession()
+            window.api.videoSender.startSession(DEFAULT_VIDEO_CONFIG, iceServersRef.current)
+          } else {
+            // frameRate: without an explicit ask, Chromium's screen-capture
+            // default can be quite conservative (sometimes ~5fps), which reads
+            // as "laggy" even though the connection itself is fine. Pushed to
+            // 60fps (from 30) since a smooth cursor/motion feel matters more
+            // for remote *control* than per-frame sharpness -- paired with
+            // capping resolution to 1080p below so the extra frames don't
+            // just double the encoder's/network's workload at full native
+            // resolution (which on a high-res monitor was likely the actual
+            // bottleneck behind feeling laggy, not the frame rate cap itself).
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+              video: {
+                frameRate: { ideal: 60, max: 60 },
+                width: { ideal: 1920, max: 1920 },
+                height: { ideal: 1080, max: 1080 }
+              }
+            })
+            const [videoTrack] = stream.getVideoTracks()
+            // Tells the encoder to prioritize smooth motion (cursor movement,
+            // scrolling) over per-frame sharpness -- the right tradeoff for a
+            // remote-control session, not a screen-recording.
+            if (videoTrack) videoTrack.contentHint = 'motion'
+
+            stream.getTracks().forEach((track) => {
+              const sender = pc!.addTrack(track, stream)
+              if (track.kind !== 'video') return
+              // WebRTC's default bandwidth estimate ramps up slowly and starts
+              // conservative, especially over a TURN relay -- a stale/blurry
+              // low-bitrate stream is easy to misread as network lag. Raising
+              // the ceiling lets it settle on a sharper, more responsive
+              // stream sooner once real available bandwidth allows it. Bumped
+              // again (6Mbps -> 15Mbps) after comparing against Parsec's own
+              // stats readout -- WebRTC's own congestion control still pulls
+              // this down automatically if the real path can't sustain it, so
+              // raising the ceiling only helps when bandwidth actually allows
+              // more, never hurts otherwise.
+              const params = sender.getParameters()
+              if (!params.encodings?.length) params.encodings = [{}]
+              params.encodings[0].maxBitrate = 30_000_000
+              // The WebRTC path is the FALLBACK for hard-NAT pairs that native
+              // (node-datachannel/libjuice) can't traverse but Chromium can (e.g. a
+              // cross-carrier-NAT pair). On those, BWE settles low (~3 Mbps) on a
+              // jittery link, so the priority flips vs the old good-link tuning:
+              // SMOOTH 60fps first, resolution second.
+              // - maxFramerate 60: aim for 60fps.
+              params.encodings[0].maxFramerate = 60
+              // - 'maintain-framerate': under bandwidth pressure keep 60fps and let
+              //   resolution drop (a soft-but-smooth 720p@60 beats a sharp-but-choppy
+              //   1080p@19 -- the exact stuck-at-19fps case the owner saw). On a good
+              //   link there's no pressure, so it stays full 1080p60 anyway.
+              params.degradationPreference = 'maintain-framerate'
+              // - NO scaleResolutionDownBy lock: maintain-framerate MUST be allowed
+              //   to scale resolution down to hold fps. The old `=1` lock forbade
+              //   that, which is why the fallback jammed at 1080p/19fps instead of
+              //   dropping res to reach 60. (Native is the path that holds full res.)
+              sender.setParameters(params).catch(() => {})
+            })
+
+            // Prefer H.264 over Chromium's default (often VP8, typically
+            // software-encoded) -- H.264 gets hardware encode/decode on both
+            // macOS (VideoToolbox) and Windows (Media Foundation) via
+            // Chromium's WebRTC stack, which is the closest this
+            // WebRTC-based app can get to what a native tool like Parsec
+            // does with a dedicated hardware encoder. No-ops harmlessly if
+            // H.264 isn't in this build's capability list.
+            const videoTransceiver = pc
+              .getTransceivers()
+              .find((t) => t.sender.track?.kind === 'video')
+            const capabilities = RTCRtpSender.getCapabilities('video')
+            const h264Codecs = capabilities?.codecs.filter((c) => c.mimeType === 'video/H264') ?? []
+            if (videoTransceiver && h264Codecs.length > 0 && capabilities) {
+              const otherCodecs = capabilities.codecs.filter((c) => c.mimeType !== 'video/H264')
+              videoTransceiver.setCodecPreferences([...h264Codecs, ...otherCodecs])
             }
-          })
-          const [videoTrack] = stream.getVideoTracks()
-          // Tells the encoder to prioritize smooth motion (cursor movement,
-          // scrolling) over per-frame sharpness -- the right tradeoff for a
-          // remote-control session, not a screen-recording.
-          if (videoTrack) videoTrack.contentHint = 'motion'
-
-          stream.getTracks().forEach((track) => {
-            const sender = pc!.addTrack(track, stream)
-            if (track.kind !== 'video') return
-            // WebRTC's default bandwidth estimate ramps up slowly and starts
-            // conservative, especially over a TURN relay -- a stale/blurry
-            // low-bitrate stream is easy to misread as network lag. Raising
-            // the ceiling lets it settle on a sharper, more responsive
-            // stream sooner once real available bandwidth allows it. Bumped
-            // again (6Mbps -> 15Mbps) after comparing against Parsec's own
-            // stats readout -- WebRTC's own congestion control still pulls
-            // this down automatically if the real path can't sustain it, so
-            // raising the ceiling only helps when bandwidth actually allows
-            // more, never hurts otherwise.
-            const params = sender.getParameters()
-            if (!params.encodings?.length) params.encodings = [{}]
-            params.encodings[0].maxBitrate = 30_000_000
-            // WebRTC's BWE was collapsing the stream to ~0.1 Mbps / 480x270 on
-            // a flawless 10ms/0%-loss path (Parsec pushes 30 Mbps / 1440p on
-            // the SAME path) -- it starts conservative and never probes back up
-            // when the link is quiet, so the picture stayed a blurry postage
-            // stamp for no reason. Forbid the encoder from scaling resolution
-            // down; combined with the SDP min/start bitrate floor below (and
-            // maintain-resolution) this holds full capture resolution.
-            params.encodings[0].scaleResolutionDownBy = 1
-            // Real test showed only ~25fps actually achieved despite the
-            // 60fps capture request and plenty of unused bitrate headroom
-            // (bitrate was sitting right at the ceiling) -- the encoder was
-            // evidently choosing fewer, higher-quality frames over more
-            // frequent ones. `degradationPreference` alone is only a hint
-            // about what to sacrifice *under bandwidth pressure*; it
-            // doesn't set an actual frame rate target. `maxFramerate` is
-            // the direct way to tell the encoder what it should be aiming
-            // for regardless of how much bitrate headroom it thinks it has.
-            params.encodings[0].maxFramerate = 60
-            // Even with a 30Mbps ceiling + bitrate floor, 'maintain-framerate'
-            // still let WebRTC's quality scaler downscale to 720p to protect
-            // 60fps -- on a flawless 10ms/0%-loss path that trade is pure lost
-            // sharpness. 'maintain-resolution' holds full 1080p and flexes
-            // frame rate only if it ever genuinely can't keep up (which, given
-            // ~4.5ms hardware encode + 30Mbps headroom, it shouldn't need to).
-            // Verified against Parsec on the same machines: 1920x1080 @ 37Mbps.
-            params.degradationPreference = 'maintain-resolution'
-            sender.setParameters(params).catch(() => {})
-          })
-
-          // Prefer H.264 over Chromium's default (often VP8, typically
-          // software-encoded) -- H.264 gets hardware encode/decode on both
-          // macOS (VideoToolbox) and Windows (Media Foundation) via
-          // Chromium's WebRTC stack, which is the closest this
-          // WebRTC-based app can get to what a native tool like Parsec
-          // does with a dedicated hardware encoder. No-ops harmlessly if
-          // H.264 isn't in this build's capability list.
-          const videoTransceiver = pc
-            .getTransceivers()
-            .find((t) => t.sender.track?.kind === 'video')
-          const capabilities = RTCRtpSender.getCapabilities('video')
-          const h264Codecs = capabilities?.codecs.filter((c) => c.mimeType === 'video/H264') ?? []
-          if (videoTransceiver && h264Codecs.length > 0 && capabilities) {
-            const otherCodecs = capabilities.codecs.filter((c) => c.mimeType !== 'video/H264')
-            videoTransceiver.setCodecPreferences([...h264Codecs, ...otherCodecs])
           }
 
           const offer = await pc.createOffer()
@@ -572,7 +671,7 @@ function AgentView(): React.JSX.Element {
             (line) =>
               line.includes('x-google-min-bitrate')
                 ? line
-                : `${line};x-google-min-bitrate=6000;x-google-start-bitrate=20000;x-google-max-bitrate=30000`
+                : `${line};x-google-min-bitrate=6000;x-google-start-bitrate=30000;x-google-max-bitrate=30000`
           )
           await pc.setLocalDescription({ type: 'offer', sdp: tunedSdp })
           transport.send({
@@ -583,8 +682,23 @@ function AgentView(): React.JSX.Element {
           })
         } else if (message.type === 'sdp-answer' && message.channel === 'input') {
           void window.api.inputHelper.remoteAnswer(message.sdp)
+        } else if (message.type === 'sdp-answer' && message.channel === 'video-native') {
+          // Native video answer -> the forked sender's pc, NOT the renderer pc.
+          // Must be checked before the generic `&& pc` branch below (which has no
+          // channel guard and would otherwise swallow it).
+          void window.api.videoSender.remoteAnswer(message.sdp)
         } else if (message.type === 'sdp-answer' && pc) {
           await pc.setRemoteDescription({ type: 'answer', sdp: message.sdp })
+        } else if (message.type === 'ice-candidate' && message.channel === 'video-native') {
+          void window.api.videoSender.remoteIce(
+            message.candidate,
+            message.sdpMid,
+            message.sdpMLineIndex
+          )
+        } else if (message.type === 'video-bitrate' && message.channel === 'video-native') {
+          // BWE: the Mac receiver's AIMD target -> forward to the sender helper,
+          // which writes 'B<kbps>' to the capturer stdin for a live NVENC retune.
+          void window.api.videoSender.setBitrate(message.kbps)
         } else if (message.type === 'ice-candidate' && message.channel === 'input') {
           void window.api.inputHelper.remoteIce(
             message.candidate,
@@ -608,6 +722,9 @@ function AgentView(): React.JSX.Element {
         name: nameRef.current,
         os: AGENT_OS
       })
+      // Fetch TURN early (before any pairing) so it's cached by the time the
+      // sender starts. Old servers don't know this message -> no reply -> STUN.
+      transport.send({ type: 'get-ice-servers', token: houseToken })
     }
 
     start().catch((error) => setStatus(`error: ${String(error)}`))
@@ -619,6 +736,9 @@ function AgentView(): React.JSX.Element {
       pc?.close()
       client?.close()
       void window.api.inputHelper.stopSession()
+      // Stop the native video capture too (mirror of inputHelper): on a reconnect
+      // or unmount, leave no ffmpeg/ddagrab holding DXGI + an NVENC session.
+      if (useNativeVideoRef.current) void window.api.videoSender.stopSession()
     }
   }, [deviceId, pin, attachChannel])
 

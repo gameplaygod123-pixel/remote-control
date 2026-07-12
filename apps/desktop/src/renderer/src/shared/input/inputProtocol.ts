@@ -11,14 +11,65 @@ export type MouseButton = 'left' | 'right' | 'middle'
 // a newer one -- the agent uses the sequence number to drop it instead of
 // jerking the cursor backwards. Optional so an older controller build
 // (no seq) still works against a newer agent.
+// `scan` on keydown/keyup: GAME-MODE key injection. When true the agent
+// injects the key as a raw HARDWARE SCAN CODE (KEYEVENTF_SCANCODE, wVk=0)
+// instead of a virtual-key event, so DirectInput / RawInput / GetAsyncKeyState
+// games all see it as a real keyboard press that can be HELD -- the plain VK
+// path and, worse, the Unicode `text` path (a character, not a key press) are
+// invisible to most games. Absent/false keeps the byte-identical VK path used
+// for normal typing and shortcuts (no regression). Optional so an older agent
+// (no scan handling) still injects the key via the VK path -- graceful.
+//
+// `wheel`: `dy`/`dx` and the `px` flag pick the scroll semantics.
+//   - `px: true`  (MAC TRACKPAD PATH): dy/dx are RAW pixel deltas (floats, never
+//     rounded). The agent scrolls smoothly via a fractional accumulator ->
+//     SendInput with mouseData that can be < WHEEL_DELTA (120), and maps dx to a
+//     horizontal wheel (MOUSEEVENTF_HWHEEL). Momentum comes for free (macOS keeps
+//     firing decaying wheel events after the finger lifts).
+//   - `px` absent/false (LEGACY NOTCH PATH): dy is already in ~nut.js "step"
+//     units (browser deltaY / 40); dx is ignored. This is what a NON-Mac
+//     controller sends, so a Windows controller stays byte-identical to before.
+//   Only a Mac controller sets `px:true`, and only a new agent honors it -- an
+//   older agent ignores `px`/`dx` and scrolls vertically (graceful downgrade).
 export type RemoteInputMessage =
   | { t: 'move'; x: number; y: number; seq?: number }
   | { t: 'down'; button: MouseButton }
   | { t: 'up'; button: MouseButton }
-  | { t: 'wheel'; dy: number }
-  | { t: 'keydown'; code: string }
-  | { t: 'keyup'; code: string }
+  | { t: 'wheel'; dy: number; dx?: number; px?: boolean }
+  | { t: 'keydown'; code: string; scan?: boolean }
+  | { t: 'keyup'; code: string; scan?: boolean }
   | { t: 'text'; text: string }
+
+// The remote machine's CURRENT cursor SHAPE, reported agent -> controller by
+// the input helper (Windows) so the controller can draw the matching NATIVE
+// cursor. The native video ships WITHOUT a composited cursor (ddagrab
+// draw_mouse=0) so a mouse-only move isn't a "desktop change" and NVENC sits
+// near-idle on a static screen -- the Parsec-style GPU win. Each value is a
+// valid CSS `cursor` keyword, applied verbatim on the video element, so macOS
+// renders the real shape itself (crisp, 0-latency, correct hotspot); 'none'
+// hides it (the remote app hid its cursor). Unknown/custom app cursors fall
+// back to 'default'. Only standard system cursors are recognised -- shape, not
+// pixels, crosses the wire, so the FFI stays a single GetCursorInfo call (no
+// bitmap plumbing, which is what segfaulted the v1.15.0 clipboard FFI).
+export type CursorShape =
+  | 'default'
+  | 'text'
+  | 'pointer'
+  | 'wait'
+  | 'progress'
+  | 'help'
+  | 'crosshair'
+  | 'move'
+  | 'not-allowed'
+  | 'ns-resize'
+  | 'ew-resize'
+  | 'nwse-resize'
+  | 'nesw-resize'
+  | 'none'
+
+// Sent over the dedicated 'cursor' data channel (helper mode only), reliable/
+// ordered and only on change -- negligible traffic.
+export type RemoteCursorMessage = { shape: CursorShape }
 
 // Physical-key-code injection (nut.js's Key enum) only covers a fixed,
 // US-layout-shaped set of keys -- there's no way to express "type a Thai

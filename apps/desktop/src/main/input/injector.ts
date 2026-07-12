@@ -8,7 +8,7 @@ import {
   providerRegistry
 } from '@nut-tree-fork/nut-js'
 import { CODE_TO_KEY } from './keyMap'
-import { typeTextWin32, keyToggleWin32 } from './injectorWin32'
+import { typeTextWin32, keyToggleWin32, injectWheelWin32 } from './injectorWin32'
 
 // libnut-win32's keyboard calls resolve without throwing but silently fail
 // to deliver most/all keystrokes when this process has never owned a
@@ -87,7 +87,15 @@ export async function mouseButtonToggle(
   else await mouse.releaseButton(BUTTON_MAP[button])
 }
 
-export async function scrollMouse(deltaY: number): Promise<void> {
+export async function scrollMouse(deltaY: number, deltaX = 0, px = false): Promise<void> {
+  // Mac trackpad path (px:true): raw pixel deltas -> smooth high-resolution wheel
+  // via raw SendInput (horizontal too). Only on Windows, where injectWheelWin32
+  // exists. Everything else (non-Mac controller / non-win32 agent) keeps the
+  // legacy nut.js whole-notch scroll below, byte-identical to before.
+  if (isWin32 && px) {
+    injectWheelWin32(deltaX, deltaY)
+    return
+  }
   const steps = Math.round(Math.abs(deltaY))
   if (steps === 0) return
   if (deltaY > 0) await mouse.scrollDown(steps)
@@ -97,9 +105,9 @@ export async function scrollMouse(deltaY: number): Promise<void> {
 // Real key-hold semantics (press/release as separate events) rather than
 // keyboard.type() -- required for modifier combos (Ctrl+C) and any key held
 // across time, neither of which typeText() can express.
-export async function keyToggle(code: string, down: boolean): Promise<void> {
+export async function keyToggle(code: string, down: boolean, scan = false): Promise<void> {
   if (isWin32) {
-    keyToggleWin32(code, down)
+    keyToggleWin32(code, down, scan)
     return
   }
   const key = CODE_TO_KEY[code]

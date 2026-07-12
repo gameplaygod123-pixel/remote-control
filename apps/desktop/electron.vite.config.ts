@@ -14,7 +14,25 @@ export default defineConfig({
         // deps externalized) so it needs no separate build step.
         input: {
           index: resolve('src/main/index.ts'),
-          'input-helper': resolve('src/input-helper/index.ts')
+          'input-helper': resolve('src/input-helper/index.ts'),
+          // Native video SENDER helper (Windows agent) -> out/main/video-sender.js,
+          // spawned by main/videoSenderHost.ts. Same pure-Node build target as the
+          // input helper; uses node-datachannel's raw media API + a bundled ffmpeg.
+          // See src/video-native/sender/index.ts and docs/native-video-plan.md.
+          'video-sender': resolve('src/video-native/sender/index.ts'),
+          // Native video RECEIVER helper (Mac controller) -> out/main/video-receiver.js,
+          // spawned by main/videoReceiverHost.ts. Answers on channel:'video-native',
+          // reassembles RTP -> Annex-B, and drives the Swift render binary.
+          // See src/video-native/receiver/index.ts.
+          'video-receiver': resolve('src/video-native/receiver/index.ts'),
+          // Elevated input feature (Windows), both pure-Node Node-target like the
+          // input-helper. Always BUILT but inert -- nothing spawns them unless the
+          // LocalSystem service is installed (scripts/install-input-service.ps1) and
+          // the agent runs with PR_INPUT_SERVICE=1. See docs/input-elevation-plan.md.
+          // 'input-service' = session-0 launcher (service.ts); 'input-injector' =
+          // the SYSTEM injector-in-session it spawns (index.ts). UNTESTED.
+          'input-service': resolve('src/input-service/service.ts'),
+          'input-injector': resolve('src/input-service/index.ts')
         }
       }
     }

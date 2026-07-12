@@ -44,33 +44,9 @@ setting that closes this — only leaving the `<video>`/capture path does.
 **Goal:** get "glued to the mouse" feel by moving the *video hot path* out of
 Chromium on both ends, while keeping the current UI and every existing feature.
 
-**Non-goals:** replacing signaling, replacing the input helper (it already
-works), or supporting new platforms in this project. The Electron **lobby** UI
-(device list, file transfer, settings, themes) is kept as-is; only the in-session
-screen moves to a native window (§3).
-
-## 1.5 North Star — what "best" means here (owner: "ทำให้ดีที่สุดไปเลย")
-
-Since we're rewriting the video path anyway, aim for genuinely best-in-class, not
-just parity. Concrete bar:
-
-| Target | Bar | Status in foundation |
-|---|---|---|
-| Latency | within **~1 frame of Parsec** glass-to-glass | the whole point (native capture+render) |
-| Cursor feel | **instant local cursor** (`cursor:'separate'`) | reserved in `VideoConfig.cursor` |
-| Text sharpness | **4:4:4** chroma option (Parsec is 4:2:0) | reserved in `VideoConfig.chroma` |
-| Color | **10-bit / HDR** option | reserved in `VideoConfig.bitDepth` |
-| Codec | H.264 **and** HEVC, negotiated | reserved in `VideoCodec` |
-| Resolution / fps | up to **1440p / 4K**, **120/144 fps** | parameterized in `VideoConfig` |
-| Multi-monitor | pick which display | reserved in `VideoConfig.displayId` |
-| Audio | Opus stereo, in sync | reserved as a parallel track (`SessionConfig.audio`) |
-| Resilience | clean reconnect; no wedge on loss | Phase 3 |
-
-**Discipline:** everything above is *anticipated by the frozen foundation now*
-(so nothing needs a rearchitect later), but **implemented in phases** — do NOT
-build all of it before the core path works. Default config ships conservative
-(1080p60, H.264, 4:2:0, 8-bit, no audio); the "best" knobs turn on as each is
-proven on real hardware. Best foundation now; best features incrementally.
+**Non-goals:** rewriting the UI (keep the Electron shell exactly), replacing
+signaling, replacing the input helper (it already works), or supporting new
+platforms in this project.
 
 ---
 
@@ -146,25 +122,13 @@ Keep the entire control plane; replace only the video hot path.
   session area of the Electron controller window (Electron draws the chrome:
   floating controls, sidebar; the native layer draws the video underneath/inside).
 
-**The session view becomes its own native window (owner OK'd rewriting it,
-2026-07-06 — "เขียนใหม่ให้เหมาะกับงานใหม่ก็ได้ถ้ามีผลกับความสามารถ").** This is
-the preferred approach and it *removes* what was the riskiest part of the
-project. Instead of fighting to composite a native layer *inside* the Electron
-`BrowserWindow` (chasing the compositor's rect on every resize/move), the
-**session is a purpose-built native window**:
-- `AVSampleBufferDisplayLayer` (Metal) fills it — video presented direct-to-
-  screen, tuned for low latency / fullscreen / vsync, no `<video>`, no browser
-  compositor. This is how Parsec structures its own session window.
-- The floating controls (Back / stats / status pill) ride on top as either a
-  **transparent click-through Electron overlay** (reuses today's React
-  `ControllerSession` controls — keeps the exact look) **or** native controls.
-  Overlay-vs-native decided in a short Phase 2 spike.
-- The **Electron lobby stays untouched**: device list, file transfer, settings,
-  themes (incl. glass). Only the in-session screen moves to native.
-
-Net effect: Phase 2 risk drops from "fragile Electron compositing sync" to
-"build a native window + overlay" — more upfront native code, but a proven
-pattern with no ongoing sync fight and a better latency ceiling.
+**The hard part (flagged early): native video *inside* the Electron window on
+Mac.** Two candidate approaches — pick during Phase 2 after a spike:
+- (a) **Child NSWindow overlay:** a borderless native window tracked to the
+  Electron window's session-view rect; Electron controls float above it.
+- (b) **Transparent Electron region + native layer behind:** make the session
+  area transparent, put the native `AVSampleBufferDisplayLayer` window behind.
+Both are proven techniques; (a) is usually simpler to keep in sync.
 
 ---
 
@@ -255,15 +219,11 @@ The whole project rests on two unproven assumptions; prove them cheaply first.
 ### Phase 2 — Mac native receiver + render (MAC CLAUDE / OWNER)
 - [ ] Native receiver: node-datachannel media recv → VideoToolbox decode →
       `AVSampleBufferDisplayLayer`.
-- [ ] Build the **native session window** (§3): a dedicated Metal/
-      AVSampleBufferDisplayLayer window the video fills. The Electron lobby
-      opens it on connect and closes it on Back.
-- [ ] Floating controls over it — spike overlay-vs-native, then reuse the
-      React `ControllerSession` controls as a transparent click-through
-      Electron overlay if that wins (keeps the current look).
-- [ ] Wire session lifecycle: connect (open native window), Back (close +
-      tear down cleanly), fullscreen, multi-display — all owned by the native
-      window now, no compositor-rect chasing.
+- [ ] Integrate the native layer into the Electron controller session view
+      (approach a or b from §3); keep the floating controls, Back, stats, and
+      fullscreen working over/around it.
+- [ ] Wire session lifecycle: connect, Back (tear down cleanly), fullscreen,
+      window resize/move all keep the native layer correctly placed.
 - [ ] Feed real pipeline numbers back to the existing HUD (decode/render ms from
       VideoToolbox/AVSampleBufferDisplayLayer instead of `<video>` stats).
 - **Gate:** full native path end-to-end (DXGI → native render), and **glass-to-

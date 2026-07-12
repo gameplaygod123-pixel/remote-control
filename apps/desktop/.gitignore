@@ -5,3 +5,8 @@ out
 .eslintcache
 *.log*
 *.tsbuildinfo
+.verify-tmp
+# Staged by build-win.sh from the cached LGPL ffmpeg (~109MB, never committed).
+ffmpeg/
+# Staged by build-win.sh from native/dxgi-capturer/bin/capturer.exe (Step 3).
+capturer/

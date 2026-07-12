@@ -1,0 +1,13 @@
+# build artifacts
+capturer.exe
+# EXCEPTION: the committed built binary Mac's build-win.sh packs into resources/
+!bin/capturer.exe
+*.obj
+*.pdb
+*.ilk
+*.h264
+build/
+
+# vendored NVIDIA header (redistributable MIT header from FFmpeg/nv-codec-headers,
+# auto-fetched by build.ps1 — not committed, like build-win.sh does for ffmpeg)
+third_party/

@@ -56,7 +56,18 @@ export const PairResultMessage = z.object({
 // process -- see docs/native-input-plan.md). Absent/omitted means "video",
 // so every message an old client ever sent -- none of which know this field
 // exists -- still parses and routes exactly as before.
-export const SignalChannel = z.enum(["video", "input"]);
+//
+// "video-native" is the NATIVE video pipeline's own PC (agent's forked
+// video-sender process -> Mac native receiver; see docs/native-video-plan.md).
+// It's a SEPARATE channel from "video" on purpose: in native mode the renderer
+// "video" PC still exists to carry file transfer (and input/clipboard when the
+// input-helper isn't engaged), so the native video PC needs its own tag or the
+// two collide. Same three message types (sdp-offer/answer/ice-candidate), just a
+// new channel value -- additive, exactly like "input" was. NOTE: the server
+// validates messages against this enum (server/signaling/src/index.ts drops
+// invalid ones), so a deployed server must be rebuilt/restarted to relay
+// "video-native" (same redeploy that "input" needed).
+export const SignalChannel = z.enum(["video", "input", "video-native"]);
 
 export const SdpOfferMessage = z.object({
   type: z.literal("sdp-offer"),
@@ -78,6 +89,34 @@ export const IceCandidateMessage = z.object({
   candidate: z.string(),
   sdpMid: z.string().nullable(),
   sdpMLineIndex: z.number().nullable(),
+  channel: SignalChannel.optional(),
+});
+
+// BWE (native video): the controller's loss-based estimator tells the agent's
+// sender what bitrate to encode at (≤60 Mbps cap). The native video pc is
+// media-only (no data channel), so the target rides the signaling channel like
+// SDP/ICE -- the server just relays it between the paired sockets (resolveRelayTarget),
+// never inspecting it. `channel` is 'video-native' (additive, like the SDP types).
+// Old servers drop unknown message types on parse, so a server that hasn't been
+// rebuilt simply never relays it -> the sender stays at its fixed launch bitrate
+// (graceful degrade, exactly like 'video-native' SDP needed a server rebuild).
+export const VideoBitrateMessage = z.object({
+  type: z.literal("video-bitrate"),
+  deviceId: z.string(),
+  kbps: z.number(),
+  channel: SignalChannel.optional(),
+});
+
+// Native-video sender telemetry (agent -> controller): the encode/capture time per
+// frame that only the agent's capturer/NVENC knows, surfaced in the controller's HUD
+// (the media-only native pc has no back-channel, so it rides signaling like
+// video-bitrate). Relayed unchanged by the server (resolveRelayTarget). Values are
+// nullable -- ffmpeg exposes no per-frame split; the custom capturer fills encodeMs.
+export const VideoSenderStatsMessage = z.object({
+  type: z.literal("video-sender-stats"),
+  deviceId: z.string(),
+  encodeMs: z.number().nullable(),
+  captureMs: z.number().nullable(),
   channel: SignalChannel.optional(),
 });
 
@@ -208,6 +247,31 @@ export const ServerErrorMessage = z.object({
   reason: z.string(),
 });
 
+// A single ICE server entry, browser-RTCIceServer-shaped so the renderer can use
+// it directly and the node/ndc paths can convert it. Delivered by the server so
+// short-lived TURN credentials (Cloudflare) can be minted centrally and refreshed
+// without any client holding the TURN API token.
+export const IceServerConfig = z.object({
+  urls: z.array(z.string()),
+  username: z.string().optional(),
+  credential: z.string().optional(),
+});
+export type IceServerConfig = z.infer<typeof IceServerConfig>;
+
+// Client asks the server for the current ICE servers (STUN + freshly-minted TURN).
+// Token-gated like every other privileged request.
+export const GetIceServersMessage = z.object({
+  type: z.literal("get-ice-servers"),
+  token: z.string(),
+});
+
+// Server's reply: the ICE servers to use. Empty/absent TURN (server has no TURN
+// configured) just leaves clients on their baked-in STUN -- graceful, no break.
+export const IceServersMessage = z.object({
+  type: z.literal("ice-servers"),
+  iceServers: z.array(IceServerConfig),
+});
+
 export const SignalingMessage = z.discriminatedUnion("type", [
   ServerErrorMessage,
   RegisterAgentMessage,
@@ -217,6 +281,8 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   SdpOfferMessage,
   SdpAnswerMessage,
   IceCandidateMessage,
+  VideoBitrateMessage,
+  VideoSenderStatsMessage,
   PingMessage,
   PongMessage,
   ListDevicesMessage,
@@ -229,6 +295,8 @@ export const SignalingMessage = z.discriminatedUnion("type", [
   PairingPendingMessage,
   RemoveDeviceMessage,
   DeviceRemovedMessage,
+  GetIceServersMessage,
+  IceServersMessage,
 ]);
 
 export type SignalingMessage = z.infer<typeof SignalingMessage>;

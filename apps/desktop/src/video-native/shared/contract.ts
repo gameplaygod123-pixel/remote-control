@@ -36,18 +36,14 @@ export const VIDEO_PIPELINE_ENV = 'VIDEO_PIPELINE'
  */
 export type VideoCodec = 'h264' | 'hevc'
 
-/**
- * Chroma subsampling. 4:2:0 is universal hardware; 4:4:4 keeps text and thin UI
- * lines razor-sharp (Parsec's readout showed "4:2:0 Full Range" — 4:4:4 is a
- * real step up for a remote *desktop*). Needs encode + decode support on BOTH
- * ends, so it's negotiated, never assumed. Carried here so "best quality" is a
- * config flip + capability probe, not a rearchitect.
- */
-export type Chroma = '4:2:0' | '4:4:4'
-
-/** 8-bit SDR (default, universal) or 10-bit for HDR / deep-color displays.
- *  10-bit needs HW support both ends — negotiated in the Phase 1 probe. */
-export type BitDepth = 8 | 10
+// A single ICE server (browser-RTCIceServer-shaped). Delivered by the signaling
+// server so short-lived TURN creds are minted centrally; the ndc paths convert
+// the turn: entries to their `turn:user:cred@host:port` string form.
+export interface IceServerConfig {
+  urls: string[]
+  username?: string
+  credential?: string
+}
 
 /**
  * Capture + encode parameters the controller requests and the agent's sender
@@ -56,12 +52,10 @@ export type BitDepth = 8 | 10
  * known-good numbers instead of re-discovering them.
  */
 export interface VideoConfig {
-  width: number // 1920 — ceiling is parameterized: 1440p/4K are just bigger numbers
+  width: number // 1920
   height: number // 1080
-  fps: number // 60 — 120/144 is a number change, not an architecture change
+  fps: number // 60
   codec: VideoCodec
-  chroma: Chroma // '4:2:0' default; '4:4:4' when both ends support it
-  bitDepth: BitDepth // 8 default; 10 for HDR/deep-color when supported
   /** Floor that stops the encoder collapsing to a blurry trickle on a quiet
    *  link -- the exact failure v1.22.0 fixed with x-google-min-bitrate. */
   minBitrateKbps: number // 6000
@@ -75,48 +69,42 @@ export interface VideoConfig {
    * carries it from day one so neither side has to change shape later.
    */
   cursor: 'composited' | 'separate'
-  /** Which display to capture on a multi-monitor agent; undefined = primary.
-   *  Displays are enumerated via a separate capability (Phase 3). Reserved now
-   *  so multi-monitor doesn't reshape the config later. */
-  displayId?: string
 }
 
 export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   width: 1920,
   height: 1080,
+  // 60 fps: 120 was proven encodable (NVENC had headroom) but drove GPU load hard
+  // and, with fixed 60 Mbps CBR, stressed the link (ICE "Lost connectivity"). The
+  // owner chose 60 fps + auto bitrate ≤40. The NVENC path ignores width/height
+  // (encodes at native capture res) but honors fps via ddagrab framerate + 1s GOP.
   fps: 60,
   codec: 'h264',
-  chroma: '4:2:0',
-  bitDepth: 8,
-  minBitrateKbps: 6_000,
-  startBitrateKbps: 20_000,
-  maxBitrateKbps: 30_000,
+  // Auto (VBR) bitrate: NVENC spends bits only on motion (a static screen drops to
+  // a few Mbps like Parsec) and caps at maxBitrateKbps -- far less average traffic
+  // than the old fixed 60 Mbps CBR, which is what strained ICE. startBitrateKbps =
+  // VBR target average, maxBitrateKbps = the hard cap (owner: "ไม่เกิน 40"). The
+  // env VIDEO_NVENC_BITRATE_KBPS still overrides the target for live sweeps.
+  minBitrateKbps: 10_000,
+  startBitrateKbps: 25_000,
+  // maxBitrateKbps 40→50 (owner, 2026-07-10: "auto to max 50Mbps"). This is the capturer's
+  // VBR --maxrate = the BURST/peak cap. With startBitrateKbps 25 it makes a 2.0 target:max
+  // ratio, so the AIMD average (BWE_CEIL_KBPS 25) bursts to 50 on motion while the average
+  // stays a link-safe 25. NB: raising this to 50 while ALSO raising BWE_CEIL to 50 double-
+  // stacks to a 100 Mbps maxrate (WC saw it live) — keep BWE_CEIL at 25.
+  maxBitrateKbps: 50_000,
+  // 'composited' (reverted from the beta.4 'separate' experiment): ddagrab bakes
+  // the OS cursor into the frame. beta.4 tried 'separate' (draw_mouse=0 + a native
+  // CSS cursor on the Mac) to cut GPU, but on ddagrab it gave ZERO benefit --
+  // DXGI emits a frame on every pointer-move and ddagrab passes it through
+  // regardless (draw_mouse 0 vs 1 = identical frame count on real hardware), so
+  // the encoder never idled AND we got a double-cursor-on-drag artifact. The real
+  // Parsec-GPU fix needs change-detection at the capture layer (skip pointer-only
+  // frames) -- a custom DXGI capturer, Step 3 of docs/streaming-improvements-plan.md.
+  // The cursor-overlay plumbing (input-helper cursor channel + Mac CSS overlay) is
+  // kept but DORMANT (gated behind PR_CURSOR_OVERLAY) and reused in Step 3d.
   cursor: 'composited'
 }
-
-/**
- * Audio is out of scope for the first native milestone, but the architecture
- * RESERVES a parallel audio track negotiated over the same signaling so adding
- * it later is additive, not a rearchitect. Opus is the natural choice (what
- * Parsec uses). Kept in the frozen contract precisely so the day audio lands,
- * no interface has to change shape.
- */
-export interface AudioConfig {
-  codec: 'opus'
-  sampleRate: 48_000
-  channels: 1 | 2
-}
-
-/**
- * Everything a session may carry. `start-session` takes this (not a bare
- * VideoConfig) so audio slots in later with zero IPC churn.
- */
-export interface SessionConfig {
-  video: VideoConfig
-  audio?: AudioConfig
-}
-
-export const DEFAULT_SESSION_CONFIG: SessionConfig = { video: DEFAULT_VIDEO_CONFIG }
 
 /**
  * Per-second pipeline telemetry each helper reports to its Electron main,
@@ -134,6 +122,7 @@ export interface NativeVideoStats {
   encodeMs: number | null // sender: HW encode time / frame
   decodeMs: number | null // receiver: VideoToolbox decode / frame
   renderMs: number | null // receiver: decode -> on-screen present (the <video> wall we're removing)
-  rttMs: number | null
+  rttMs: number | null // receiver: ICE round-trip (pc.rtt(), network latency)
+  jitterMs: number | null // receiver: frame-pacing jitter (variation in AU inter-arrival)
   codec: VideoCodec | null
 }

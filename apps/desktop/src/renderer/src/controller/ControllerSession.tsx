@@ -8,15 +8,22 @@ import TransferStatus from '../shared/components/TransferStatus'
 import { useFileTransferChannel } from '../shared/fileTransfer/useFileTransferChannel'
 import { findDroppedDirectory } from '../shared/fileTransfer/fileTransferChannel'
 import { getConnectionType, type ConnectionType } from '../shared/webrtc/connectionType'
-import { useVideoStats } from '../shared/webrtc/useVideoStats'
+import { useVideoStats, type VideoStats } from '../shared/webrtc/useVideoStats'
 import { attachClipboardChannel } from '../shared/clipboard/clipboardSync'
 import {
   RemoteInputMessage,
-  isPrintableKey,
+  type CursorShape,
+  type RemoteCursorMessage,
   isEditableTarget,
   videoRelativePosition
 } from '../shared/input/inputProtocol'
 import { INPUT_HELPER_CAP } from '../shared/input/capabilities'
+import { NATIVE_VIDEO_CAP, type NativeVideoStats } from '../../../video-native/shared/contract'
+import {
+  startRepairWatchdog,
+  REPAIR_WATCHDOG_INTERVAL_MS,
+  type RepairWatchdogHandle
+} from './repairWatchdog'
 
 // Mousemove fires far more often than the remote side needs to react to --
 // this caps how frequently position updates cross the data channel without
@@ -25,6 +32,19 @@ import { INPUT_HELPER_CAP } from '../shared/input/capabilities'
 // responsiveness now that the video itself can keep up at that rate.
 const MOUSE_MOVE_THROTTLE_MS = 16
 
+// Smooth-trackpad scroll (Mac controllers only). A Mac trackpad emits fine
+// high-resolution pixel wheel deltas with momentum; forwarding them raw (px:true)
+// lets the agent scroll smoothly via a fractional accumulator + horizontal wheel.
+// A non-Mac controller (e.g. a Windows machine driving the session) keeps the
+// legacy notch path, so it is byte-identical to before -- no regression for
+// controllers on other platforms. Detected from the Electron renderer UA.
+const IS_MAC_CONTROLLER = /Macintosh|Mac OS X/.test(navigator.userAgent)
+
+// Pinch-to-zoom: macOS delivers a trackpad pinch as a `wheel` event with
+// ctrlKey=true (no physical key). We hold a synthetic Ctrl on the agent for the
+// pinch, then release it this many ms after the last pinch wheel (the burst end).
+const PINCH_IDLE_MS = 140
+
 // After a network drop -- or the agent machine being restarted by hand,
 // which can take an arbitrarily long time -- the controller and agent
 // reconnect independently with no ordering guarantee. Retry indefinitely on
@@ -32,6 +52,35 @@ const MOUSE_MOVE_THROTTLE_MS = 16
 // error, not a timing/availability issue) rather than giving up on what's
 // virtually always just the agent not being back yet.
 const PAIR_RETRY_DELAY_MS = 3000
+
+// The proactive re-pair watchdog (fixes the "connected to signaling but never
+// paired" strand after a lid-close flap) lives in ./repairWatchdog, extracted so
+// its decision + loop are unit-testable (dev/verify-repair-watchdog.mjs).
+
+// Maps a live link-quality metric to a health tint class for the HUD (good/warn/
+// crit -> green/amber/red; '' = no tint). Only the metrics that actually reflect
+// link health are colored (Encode/Network/Jitter/Loss/Bitrate); Res/FPS/Codec stay
+// neutral. Thresholds are deliberately generous so green = genuinely fine.
+type StatKind = 'encode' | 'net' | 'jitter' | 'loss' | 'bitrate'
+function statHealth(kind: StatKind, v: number, fps = 60): '' | 'is-good' | 'is-warn' | 'is-crit' {
+  switch (kind) {
+    case 'encode': {
+      // Green while encode fits the per-frame budget (1000/fps); amber up to 2×.
+      const budget = 1000 / (fps || 60)
+      return v <= budget ? 'is-good' : v <= budget * 2 ? 'is-warn' : 'is-crit'
+    }
+    case 'net':
+      return v < 40 ? 'is-good' : v < 80 ? 'is-warn' : 'is-crit'
+    case 'jitter':
+      return v < 15 ? 'is-good' : v < 30 ? 'is-warn' : 'is-crit'
+    case 'loss':
+      return v < 1 ? 'is-good' : v < 3 ? 'is-warn' : 'is-crit'
+    case 'bitrate':
+      // High bitrate isn't "broken", just worth watching for bufferbloat on a
+      // slow link -> amber >= 35 Mbps, no crit.
+      return v >= 35 ? 'is-warn' : 'is-good'
+  }
+}
 
 export default function ControllerSession({
   deviceId,
@@ -54,6 +103,38 @@ export default function ControllerSession({
   // mutating a ref doesn't trigger a re-render on its own.
   const [activePc, setActivePc] = useState<RTCPeerConnection | null>(null)
   const videoStats = useVideoStats(activePc, 'inbound')
+  // Native pipeline stats come over IPC from the receiver helper (not from a
+  // WebRTC pc), so they live in their own state; the HUD shows whichever path
+  // is live. Null in the default WebRTC build -- displayStats then == videoStats.
+  const [nativeStats, setNativeStats] = useState<VideoStats | null>(null)
+  const displayStats = nativeStats ?? videoStats
+  // True for this session once BOTH ends advertised native-video (set in
+  // pair-result). Gates the native-only signaling branches below.
+  const useNativeVideoRef = useRef(false)
+  // Reactive mirror of useNativeVideoRef used only for styling: when true, the
+  // session shell + video area go transparent so the native render window (which
+  // sits BEHIND the transparent macOS window) shows through, while the opaque
+  // floating controls stay on top and clickable.
+  const [nativeActive, setNativeActive] = useState(false)
+  // The remote machine's current cursor SHAPE (helper mode), applied as a CSS
+  // `cursor` on the video element so macOS draws the matching native cursor
+  // while the native video ships without a composited one (draw_mouse=0). Null
+  // until the first shape arrives -> the local OS cursor shows meanwhile, so a
+  // never-connecting cursor channel (or a non-Windows agent) degrades to the
+  // plain local arrow instead of no cursor at all.
+  const [remoteCursor, setRemoteCursor] = useState<CursorShape | null>(null)
+  // OS fullscreen state. Native video composites inside this window now, so
+  // fullscreen "just works" (one window); we only use this to hide the drag
+  // titlebar in fullscreen, where the OS traffic-lights/exit are available.
+  const [fullscreen, setFullscreen] = useState(false)
+  // Sender-side (agent) encode time per frame, relayed over signaling from the
+  // agent's video-sender ('video-sender-stats'); null until the capturer reports it
+  // (H.264/NVENC encode ms). Shown in the HUD next to the receiver-side numbers so
+  // the owner can see the encode cost at a glance (Parsec-overlay style).
+  const [senderEncodeMs, setSenderEncodeMs] = useState<number | null>(null)
+  // The live BWE bitrate target (kbps) the receiver's AIMD is asking the sender for,
+  // so the HUD can show "actual → target" and the owner can watch auto-bitrate adapt.
+  const [bweTargetKbps, setBweTargetKbps] = useState<number | null>(null)
   // Fetched from a main-process file rather than localStorage, which is
   // scoped to the Vite dev server's origin and would reset this identity
   // if the dev-server port ever shifted between runs.
@@ -69,6 +150,12 @@ export default function ControllerSession({
   // cover the screen), expanded on click when the person wants the
   // Back/name/stats/status controls.
   const [panelOpen, setPanelOpen] = useState(false)
+  // Whether the reliable 'input' data channel is currently open. Input rides a
+  // SEPARATE peer connection from video (the native input-helper's own pc in
+  // helper mode), so it can be dead while the video looks perfectly connected --
+  // the exact "mouse+keyboard die but the screen streams fine" symptom. Surface
+  // it in the HUD so that state is visible at a glance instead of guessed.
+  const [inputReady, setInputReady] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const clientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -81,7 +168,24 @@ export default function ControllerSession({
   const inputChannelRef = useRef<RTCDataChannel | null>(null)
   const moveChannelRef = useRef<RTCDataChannel | null>(null)
   const lastMoveSentRef = useRef(0)
+  const pendingWheelRef = useRef({ dx: 0, dy: 0 })
+  // Physically-held key codes, shared between the keyboard effect (panic-release)
+  // and the wheel handler (so pinch-zoom can tell a real Ctrl+scroll from a
+  // synthetic pinch -- see handlePinchZoom).
+  const heldKeysRef = useRef<Set<string>>(new Set())
+  // Pinch-to-zoom (Mac trackpad): whether we currently hold a SYNTHETIC Ctrl on
+  // the agent for an in-progress pinch, + the idle timer that releases it once
+  // the pinch burst ends.
+  const pinchCtrlRef = useRef(false)
+  const pinchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const moveSeqRef = useRef(0)
+  // Re-pair watchdog state (see REPAIR_WATCHDOG_INTERVAL_MS). signalingOpenRef
+  // tracks whether our WS is up (nudging while it's down is pointless);
+  // pendingApprovalRef is true only while a human must approve on the other
+  // machine (don't re-send pair-request into that wait).
+  const repairWatchdogRef = useRef<RepairWatchdogHandle | null>(null)
+  const signalingOpenRef = useRef(false)
+  const pendingApprovalRef = useRef(false)
   const { transfer, attachChannel, sendFiles, rejectDrop, cancelTransfer } =
     useFileTransferChannel()
 
@@ -89,6 +193,35 @@ export default function ControllerSession({
     const trimmed = nameDraft.trim()
     setNameDraft(trimmed)
     clientRef.current?.send({ type: 'set-device-name', deviceId, name: trimmed })
+  }
+
+  // Stores the reliable 'input' channel AND mirrors its open/closed state into
+  // inputReady for the HUD. Used at both spots that receive it (the video pc in
+  // non-helper mode, and the separate input pc in helper mode) so the indicator
+  // is correct regardless of which path this session negotiated.
+  function trackInputChannel(channel: RTCDataChannel): void {
+    inputChannelRef.current = channel
+    setInputReady(channel.readyState === 'open')
+    channel.addEventListener('open', () => setInputReady(true))
+    channel.addEventListener('close', () => setInputReady(false))
+  }
+
+  // Remote cursor SHAPE channel (agent's input-helper -> here). Each message is
+  // a semantic cursor id we apply as a CSS `cursor`, so macOS renders the real
+  // shape at 0 latency and the correct hotspot -- the native video carries no
+  // composited cursor (draw_mouse=0, the Parsec-style GPU win).
+  function trackCursorChannel(channel: RTCDataChannel): void {
+    channel.addEventListener('message', (e: MessageEvent) => {
+      try {
+        const msg = JSON.parse(e.data as string) as RemoteCursorMessage
+        if (msg && typeof msg.shape === 'string') setRemoteCursor(msg.shape)
+      } catch {
+        /* ignore a malformed cursor frame */
+      }
+    })
+    // If the channel closes (session torn down / re-paired), drop back to the
+    // local OS cursor rather than freezing on a stale remote shape.
+    channel.addEventListener('close', () => setRemoteCursor(null))
   }
 
   function handleDragOver(e: React.DragEvent<HTMLVideoElement>): void {
@@ -157,10 +290,59 @@ export default function ControllerSession({
     return null
   }
 
+  // Mouse -> remote position. The WebRTC path derives it from the <video>'s
+  // intrinsic size (videoWidth/Height) for object-fit letterboxing. In native
+  // mode that element carries NO video track (videoWidth=0), so we can't read the
+  // frame size from it -- instead we take the remote frame dimensions from the
+  // native stats and reproduce the SAME letterbox math.
+  //
+  // The native surface (AVSampleBufferDisplayLayer, embed.swift) draws with
+  // `.resizeAspect` -- it preserves the frame aspect and letterboxes inside the
+  // element box. That box is the whole session window, which the aspect lock
+  // (main setAspectRatio) only APPROXIMATELY holds at the remote's ratio, so the
+  // drawn video rect can be a hair shorter/narrower than the box. Mapping the
+  // pointer over the full box (the old code) then drifts symmetrically from centre
+  // over the bars -- the exact "Y offset grows toward top/bottom" bug. So map over
+  // the ACTUAL letterboxed video rect, mirroring videoRelativePosition's object-fit
+  // handling; a pointer on the black bars returns null (no move), like the bars
+  // aren't part of the remote screen.
+  function relativePosition(
+    el: HTMLVideoElement,
+    clientX: number,
+    clientY: number
+  ): { x: number; y: number } | null {
+    if (useNativeVideoRef.current) {
+      const rect = el.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return null
+      const vw = nativeStats?.width ?? 0
+      const vh = nativeStats?.height ?? 0
+      const videoAspect = vw > 0 && vh > 0 ? vw / vh : 16 / 9
+      const boxAspect = rect.width / rect.height
+      let contentW = rect.width
+      let contentH = rect.height
+      let offX = 0
+      let offY = 0
+      if (boxAspect > videoAspect) {
+        // Pillarbox: bars left/right, video is full height.
+        contentW = rect.height * videoAspect
+        offX = (rect.width - contentW) / 2
+      } else if (boxAspect < videoAspect) {
+        // Letterbox: bars top/bottom, video is full width.
+        contentH = rect.width / videoAspect
+        offY = (rect.height - contentH) / 2
+      }
+      const x = (clientX - rect.left - offX) / contentW
+      const y = (clientY - rect.top - offY) / contentH
+      if (x < 0 || x > 1 || y < 0 || y > 1) return null
+      return { x, y }
+    }
+    return videoRelativePosition(el, clientX, clientY)
+  }
+
   function handleMouseMove(e: React.MouseEvent<HTMLVideoElement>): void {
     const now = performance.now()
     if (now - lastMoveSentRef.current < MOUSE_MOVE_THROTTLE_MS) return
-    const pos = videoRelativePosition(e.currentTarget, e.clientX, e.clientY)
+    const pos = relativePosition(e.currentTarget, e.clientX, e.clientY)
     if (!pos) return
     lastMoveSentRef.current = now
     sendInput({ t: 'move', x: pos.x, y: pos.y })
@@ -176,7 +358,7 @@ export default function ControllerSession({
     // reliable channel, ordered right before the 'down' -- stamped from the
     // same seq counter so the agent won't later apply an older in-flight
     // move on top of it.
-    const pos = videoRelativePosition(e.currentTarget, e.clientX, e.clientY)
+    const pos = relativePosition(e.currentTarget, e.clientX, e.clientY)
     const channel = inputChannelRef.current
     if (pos && channel?.readyState === 'open') {
       channel.send(JSON.stringify({ t: 'move', x: pos.x, y: pos.y, seq: ++moveSeqRef.current }))
@@ -192,50 +374,137 @@ export default function ControllerSession({
 
   function handleWheel(e: React.WheelEvent<HTMLVideoElement>): void {
     e.preventDefault()
-    // Normalize a raw pixel delta down to roughly nut.js's "step" unit.
+    if (IS_MAC_CONTROLLER) {
+      // Pinch-to-zoom: a trackpad pinch arrives as a wheel with ctrlKey set, so
+      // wrapping it in a synthetic Ctrl makes the remote treat it as Ctrl+wheel
+      // (= zoom). The wheel itself is still forwarded below as a normal scroll.
+      handlePinchZoom(e)
+      // Forward the RAW high-resolution pixel delta (deltaMode normalized to px)
+      // with px:true, so the agent scrolls smoothly. Momentum arrives for free
+      // as more decaying wheel events. deltaMode 1=line (~16px), 2=page.
+      const scale =
+        e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? e.currentTarget.clientHeight || 800 : 1
+      sendWheel(e.deltaY * scale, e.deltaX * scale)
+      return
+    }
+    // Legacy notch path (non-Mac controller): normalize a raw pixel delta down
+    // to roughly nut.js's "step" unit. Byte-identical to the prior behavior.
     sendInput({ t: 'wheel', dy: e.deltaY / 40 })
   }
 
-  // Forwards key events to the agent while the session is mounted. Escape is
-  // deliberately excluded -- it's reserved locally for disconnecting (see
-  // the effect below), not meant to reach the remote machine.
-  // preventDefault stops browser-native side effects (Backspace navigating
-  // back, Tab shifting focus, F5 reloading, arrow keys scrolling) that
-  // would otherwise fire alongside the forwarded key.
+  // Smooth-scroll sender: rides the reliable/ordered input channel (a lost
+  // scroll delta would jump the page), but under backlog it SUMS the pending
+  // delta instead of queuing many stale messages -- never dropping scroll
+  // travel, unlike moves (a newer position supersedes an old one, but scroll
+  // is cumulative). Flushes the accumulated total once the channel drains.
+  function sendWheel(dy: number, dx: number): void {
+    const channel = inputChannelRef.current
+    if (!channel || channel.readyState !== 'open') return
+    const pending = pendingWheelRef.current
+    pending.dy += dy
+    pending.dx += dx
+    if (channel.bufferedAmount > INPUT_BUFFERED_AMOUNT_THRESHOLD) return
+    channel.send(JSON.stringify({ t: 'wheel', dy: pending.dy, dx: pending.dx, px: true }))
+    pending.dy = 0
+    pending.dx = 0
+  }
+
+  // Pinch-to-zoom (Mac trackpad, Mac controller only). macOS surfaces a pinch as
+  // a `wheel` with ctrlKey=true and NO physical key event, so the agent never
+  // sees Ctrl and just scrolls. We synthesize a real Ctrl (scancode, the same
+  // path normal keys use) held for the duration of the pinch burst, so the
+  // remote reads it as Ctrl+wheel = zoom.
+  function handlePinchZoom(e: React.WheelEvent<HTMLVideoElement>): void {
+    // A genuine physical Ctrl+scroll also sets ctrlKey -- but there the key path
+    // already forwarded a real Ctrl, so we must NOT add a second synthetic one
+    // (its idle-release would fight the real key). Only synthesize for a pinch
+    // (ctrlKey set with no physical Ctrl held).
+    const physicalCtrl =
+      heldKeysRef.current.has('ControlLeft') || heldKeysRef.current.has('ControlRight')
+    if (!e.ctrlKey || physicalCtrl) return
+    if (!pinchCtrlRef.current) {
+      pinchCtrlRef.current = true
+      sendInput({ t: 'keydown', code: 'ControlLeft', scan: true })
+    }
+    if (pinchTimerRef.current !== null) clearTimeout(pinchTimerRef.current)
+    pinchTimerRef.current = setTimeout(releasePinchCtrl, PINCH_IDLE_MS)
+  }
+
+  // Drop the synthetic pinch Ctrl (burst ended, or focus loss / panic-release).
+  function releasePinchCtrl(): void {
+    if (pinchTimerRef.current !== null) {
+      clearTimeout(pinchTimerRef.current)
+      pinchTimerRef.current = null
+    }
+    if (pinchCtrlRef.current) {
+      pinchCtrlRef.current = false
+      sendInput({ t: 'keyup', code: 'ControlLeft', scan: true })
+    }
+  }
+
+  // Forwards key events to the agent while the session is mounted. PARSEC-STYLE:
+  // EVERY key is sent as a physical SCANCODE (t:'keydown'/'keyup', scan:true) --
+  // there is no Unicode `text` path and no Text/Game mode. The remote HOST does
+  // Scancode -> VK -> its own ACTIVE layout -> character, so typing follows the
+  // host's layout and the language toggle (Grave / Alt+Shift) is a real key the
+  // host's layout switcher sees. Result: holdable WASD (games) and TH/EN typing
+  // work at the same time with no mode switch, exactly like Parsec.
   //
-  // Printable characters (including non-Latin text like Thai) go through
-  // `text` + nut.js's Unicode-aware type() -- see isPrintableKey. Repeat is
-  // allowed through for these so holding a key retypes it, like a real
-  // keyboard. Everything else (modifiers, arrows, function keys, and any
-  // Ctrl/Alt/Meta shortcut) goes through the physical-key hold path so
-  // combos and held state are real on the agent's OS.
+  // Escape is the one exception -- reserved locally for disconnecting (see the
+  // effect below), so it is never forwarded. preventDefault stops browser-native
+  // side effects (Backspace navigating back, Tab shifting focus, F5 reloading,
+  // arrows scrolling) that would otherwise fire alongside the forwarded key.
   useEffect(() => {
+    // Every physical key currently held down on the agent, so focus loss can
+    // panic-release all of them (printable keys included, now that they take
+    // the same scancode hold path as everything else). Shared via a ref so the
+    // wheel handler can read physical-Ctrl state for pinch-zoom detection.
+    const held = heldKeysRef.current
+    function releaseAllHeld(): void {
+      for (const code of held) sendInput({ t: 'keyup', code, scan: true })
+      held.clear()
+      // Also drop any synthetic pinch-zoom Ctrl so it can't stick across a blur.
+      releasePinchCtrl()
+    }
     function handleKeyDown(e: KeyboardEvent): void {
-      // The device-name field is a real local <input> in this same
-      // window -- without this check, typing into it (or into any future
-      // local field) gets hijacked and forwarded to the remote machine
-      // instead, making local text entry look completely broken.
+      // The device-name field is a real local <input> in this same window --
+      // without this check, typing into it gets hijacked and forwarded to the
+      // remote machine instead, making local text entry look completely broken.
       if (isEditableTarget(e.target)) return
       if (e.code === 'Escape') return
       e.preventDefault()
-      if (isPrintableKey(e)) {
-        sendInput({ t: 'text', text: e.key })
-        return
-      }
-      if (e.repeat) return
-      sendInput({ t: 'keydown', code: e.code })
+      // Forward OS auto-repeat too: in a text field the host repeats the char
+      // (like a real keyboard); a game holds the key until keyup regardless of
+      // the extra keydowns. held is a Set, so re-adding on repeat is harmless.
+      held.add(e.code)
+      sendInput({ t: 'keydown', code: e.code, scan: true })
     }
     function handleKeyUp(e: KeyboardEvent): void {
       if (isEditableTarget(e.target)) return
-      if (e.code === 'Escape' || isPrintableKey(e)) return
+      if (e.code === 'Escape') return
       e.preventDefault()
-      sendInput({ t: 'keyup', code: e.code })
+      held.delete(e.code)
+      sendInput({ t: 'keyup', code: e.code, scan: true })
+    }
+    // When our window loses focus (Alt-Tab, clicking into Parsec, minimizing),
+    // the OS delivers the physical keyup to the NEW foreground window, not us --
+    // so any key held at that instant sticks "down" on the agent forever (the
+    // classic "Shift stuck"). Panic-release everything on blur / tab-hide /
+    // pagehide.
+    function handleVisibility(): void {
+      if (document.visibilityState === 'hidden') releaseAllHeld()
     }
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', releaseAllHeld)
+    window.addEventListener('pagehide', releaseAllHeld)
+    document.addEventListener('visibilitychange', handleVisibility)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', releaseAllHeld)
+      window.removeEventListener('pagehide', releaseAllHeld)
+      document.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [])
 
@@ -264,9 +533,30 @@ export default function ControllerSession({
       // House token rides every pair-request -- the server rejects the PIN
       // check outright without it. Guaranteed present by App.tsx's gate.
       const houseToken = (await window.api.houseToken.get()) ?? ''
+
+      // Native video path opt-in resolves once per session: true only if THIS
+      // build spawned the receiver helper (VIDEO_PIPELINE=native -> isReady()).
+      // caps then advertise native-video; the agent must advertise it too
+      // (checked in pair-result) for the native branch to actually engage.
+      // Default build: isReady()=false -> caps unchanged -> every session is
+      // WebRTC (the controller-side SAFETY BAR).
+      const nativeReady = await window.api.videoReceiver.isReady()
+      const sessionCaps = (): string[] =>
+        nativeReady ? [INPUT_HELPER_CAP, NATIVE_VIDEO_CAP] : [INPUT_HELPER_CAP]
+
+      // Native video now composites INSIDE this window (main pushes each AU into
+      // the in-process render surface), so the renderer no longer positions a
+      // separate window -- no render-rect / reposition plumbing at all.
+
       const client = await connectSignaling(resolveSignalingUrl, {
-        onDisconnect: () => setStatus('disconnected, reconnecting...'),
+        onDisconnect: () => {
+          signalingOpenRef.current = false
+          pendingApprovalRef.current = false
+          setStatus('disconnected, reconnecting...')
+        },
         onReconnect: () => {
+          signalingOpenRef.current = true
+          pendingApprovalRef.current = false
           // The server forgets pairing on disconnect, and the old peer
           // connection(s) (if any) are no longer valid -- start over.
           pcRef.current?.close()
@@ -276,6 +566,7 @@ export default function ControllerSession({
           setActivePc(null)
           inputChannelRef.current = null
           moveChannelRef.current = null
+          setInputReady(false)
           if (videoRef.current) videoRef.current.srcObject = null
           setStatus('reconnected, pairing')
           client.send({
@@ -284,7 +575,7 @@ export default function ControllerSession({
             deviceId,
             pin,
             controllerId,
-            caps: [INPUT_HELPER_CAP]
+            caps: sessionCaps()
           })
         }
       })
@@ -293,10 +584,79 @@ export default function ControllerSession({
         return
       }
       clientRef.current = client
+      signalingOpenRef.current = true
 
       const transport: SignalTransport = {
         send: (message) => client.send(message),
         onMessage: (handler) => client.onMessage(handler)
+      }
+
+      // Native video signaling: the receiver helper produces the answer + ICE
+      // for the video-native pc; relay them on channel:'video-native' (the
+      // agent's sender consumes them, kept separate from the renderer 'video' pc
+      // that still carries file transfer). Registered once per session. All
+      // dormant in a default build -- these events never fire (host not spawned).
+      if (nativeReady) {
+        window.api.videoReceiver.onAnswer((sdp) =>
+          transport.send({ type: 'sdp-answer', deviceId, sdp, channel: 'video-native' })
+        )
+        window.api.videoReceiver.onIce((candidate, sdpMid, sdpMLineIndex) =>
+          transport.send({
+            type: 'ice-candidate',
+            deviceId,
+            candidate,
+            sdpMid,
+            sdpMLineIndex,
+            channel: 'video-native'
+          })
+        )
+        window.api.videoReceiver.onFirstFrame(() => {
+          setStatus('connection: connected (native video)')
+        })
+        window.api.videoReceiver.onStats(async (s: NativeVideoStats) => {
+          // The native video pc is media-only (no SCTP), so its pc.rtt() is
+          // always null. Read the network RTT off the input pc instead -- same
+          // two machines / same path, and it always has a data channel so its
+          // candidate-pair currentRoundTripTime is populated (mirrors useVideoStats).
+          let rttMs = s.rttMs
+          const ipc = inputPcRef.current
+          if (rttMs == null && ipc) {
+            try {
+              const report = await ipc.getStats()
+              report.forEach((entry) => {
+                if (
+                  entry.type === 'candidate-pair' &&
+                  entry.nominated &&
+                  typeof entry.currentRoundTripTime === 'number'
+                ) {
+                  rttMs = Math.round(entry.currentRoundTripTime * 1000)
+                }
+              })
+            } catch {
+              // getStats can throw if the pc closed mid-tick -- leave rtt as-is
+            }
+          }
+          setNativeStats({
+            fps: s.fps,
+            width: s.width,
+            height: s.height,
+            kbps: s.kbps,
+            processingMs: s.decodeMs ?? 0,
+            rttMs,
+            codec: s.codec,
+            lossPct: null,
+            jitterMs: s.jitterMs
+          })
+        })
+        // BWE: the receiver's loss-based AIMD target -> relay to the agent's sender
+        // on channel:'video-native' (server just forwards it; the agent forwards it
+        // to the capturer stdin as 'B<kbps>'). Dormant unless native is engaged.
+        window.api.videoReceiver.onBitrate((kbps) => {
+          setBweTargetKbps(kbps)
+          transport.send({ type: 'video-bitrate', deviceId, kbps, channel: 'video-native' })
+        })
+        window.api.videoReceiver.onDown(() => setStatus('native video down -- repairing'))
+        window.api.window.onFullScreen((v) => setFullscreen(v))
       }
 
       transport.onMessage(async (raw) => {
@@ -305,8 +665,10 @@ export default function ControllerSession({
         const message = parsed.data
 
         if (message.type === 'pairing-pending') {
+          pendingApprovalRef.current = true
           setStatus('waiting for approval on the other computer...')
         } else if (message.type === 'pair-result') {
+          pendingApprovalRef.current = false
           if (!message.ok) {
             if (message.reason === 'unknown device id') {
               setStatus(`pairing failed: ${message.reason} (waiting for agent, retrying...)`)
@@ -317,7 +679,7 @@ export default function ControllerSession({
                   deviceId,
                   pin,
                   controllerId,
-                  caps: [INPUT_HELPER_CAP]
+                  caps: sessionCaps()
                 })
               }, PAIR_RETRY_DELAY_MS)
               return
@@ -340,6 +702,24 @@ export default function ControllerSession({
           // never double-injected.
           const useHelper = message.caps?.includes(INPUT_HELPER_CAP) ?? false
 
+          // Native video engages only when BOTH ends advertised it: we did
+          // (nativeReady) AND the agent did (echoed in message.caps). Then the
+          // agent sends its native offer on channel:'video-native' and the
+          // receiver helper answers it; the renderer 'video' pc below still gets
+          // created for file transfer, it just carries no video track. Default
+          // build: nativeReady=false -> this stays false -> pure WebRTC video.
+          const useNativeVideo = nativeReady && (message.caps?.includes(NATIVE_VIDEO_CAP) ?? false)
+          useNativeVideoRef.current = useNativeVideo
+          setNativeActive(useNativeVideo)
+          if (useNativeVideo) {
+            void window.api.videoReceiver.startSession()
+            // NOTE: auto-fullscreen was tried but macOS fullscreen Spaces + the
+            // separate .floating render window broke mouse routing to the <video>
+            // hit-target. Left windowed (mouse works); polishing the overlay
+            // compositing (fullscreen mouse, hide-on-blur, rounded corners) is
+            // the native-video-plan §3a crux, deferred to a focused pass.
+          }
+
           // The input PC itself is NOT created here -- it's built fresh from
           // whichever sdp-offer (channel:'input') actually arrives, below.
           // The helper may retry its own negotiation (closing and recreating
@@ -358,9 +738,7 @@ export default function ControllerSession({
                 // (drag-and-drop, needs a visible window) stays on the video pc.
                 { onFileChannel: attachChannel }
               : {
-                  onInputChannel: (channel) => {
-                    inputChannelRef.current = channel
-                  },
+                  onInputChannel: trackInputChannel,
                   onMoveChannel: (channel) => {
                     moveChannelRef.current = channel
                   },
@@ -394,6 +772,7 @@ export default function ControllerSession({
               setActivePc(null)
               inputChannelRef.current = null
               moveChannelRef.current = null
+              setInputReady(false)
               setConnectionType(null)
               if (videoRef.current) videoRef.current.srcObject = null
               setTimeout(() => {
@@ -403,7 +782,7 @@ export default function ControllerSession({
                   deviceId,
                   pin,
                   controllerId,
-                  caps: [INPUT_HELPER_CAP]
+                  caps: sessionCaps()
                 })
               }, PAIR_RETRY_DELAY_MS)
             }
@@ -446,11 +825,10 @@ export default function ControllerSession({
           // in the gap before the new one's channels actually open.
           inputChannelRef.current = null
           moveChannelRef.current = null
+          setInputReady(false)
           const pc = createPeerConnection(transport, deviceId, {
             channel: 'input',
-            onInputChannel: (channel) => {
-              inputChannelRef.current = channel
-            },
+            onInputChannel: trackInputChannel,
             onMoveChannel: (channel) => {
               moveChannelRef.current = channel
             },
@@ -459,13 +837,30 @@ export default function ControllerSession({
             // hidden -- the agent's helper process owns the other end. This
             // controller side stays in the renderer, which is fine: the
             // controller window is focused while controlling, never throttled.
-            onClipboardChannel: attachClipboardChannel
+            onClipboardChannel: attachClipboardChannel,
+            // Remote cursor shape (native video draws no cursor of its own).
+            onCursorChannel: trackCursorChannel
           })
           inputPcRef.current = pc
           await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
           transport.send({ type: 'sdp-answer', deviceId, sdp: answer.sdp, channel: 'input' })
+        } else if (message.type === 'sdp-offer' && message.channel === 'video-native') {
+          // Native video offer -> the receiver helper (VideoToolbox), NOT the
+          // WebRTC pc. Must precede the generic sdp-offer branch below, which
+          // would otherwise apply it to the renderer 'video' pc.
+          void window.api.videoReceiver.remoteOffer(message.sdp)
+        } else if (message.type === 'ice-candidate' && message.channel === 'video-native') {
+          void window.api.videoReceiver.remoteIce(
+            message.candidate,
+            message.sdpMid,
+            message.sdpMLineIndex
+          )
+        } else if (message.type === 'video-sender-stats') {
+          // Sender-side encode telemetry relayed from the agent (media-only pc has
+          // no back-channel). Surfaced in the HUD next to the receiver numbers.
+          setSenderEncodeMs(message.encodeMs)
         } else if (message.type === 'sdp-offer' && pcRef.current) {
           const pc = pcRef.current
           await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
@@ -498,7 +893,34 @@ export default function ControllerSession({
         deviceId,
         pin,
         controllerId,
-        caps: [INPUT_HELPER_CAP]
+        caps: sessionCaps()
+      })
+
+      // Proactive re-pair watchdog: while nothing is actually 'connected', keep
+      // nudging pair-request so a message lost during reconnect flapping can't
+      // strand the session. Reads LIVE state each tick -- a live pc on either
+      // path (pcRef for webrtc / non-helper input; inputPcRef for helper input)
+      // reaching 'connected' means we're paired, then it does nothing. Logic +
+      // test in ./repairWatchdog (dev/verify-repair-watchdog.mjs).
+      repairWatchdogRef.current = startRepairWatchdog({
+        intervalMs: REPAIR_WATCHDOG_INTERVAL_MS,
+        getState: () => ({
+          pcConnected: pcRef.current?.connectionState === 'connected',
+          inputConnected: inputPcRef.current?.connectionState === 'connected',
+          signalingOpen: signalingOpenRef.current,
+          pendingApproval: pendingApprovalRef.current
+        }),
+        sendPairRequest: () => {
+          if (cancelled) return
+          transport.send({
+            type: 'pair-request',
+            token: houseToken,
+            deviceId,
+            pin,
+            controllerId,
+            caps: sessionCaps()
+          })
+        }
       })
     }
 
@@ -506,20 +928,35 @@ export default function ControllerSession({
 
     return () => {
       cancelled = true
+      if (repairWatchdogRef.current) {
+        repairWatchdogRef.current.stop()
+        repairWatchdogRef.current = null
+      }
       clientRef.current?.close()
       pcRef.current?.close()
       inputPcRef.current?.close()
       inputPcRef.current = null
       inputChannelRef.current = null
       moveChannelRef.current = null
+      // No-op in a default build (host never spawned -> optional-chained away).
+      void window.api.videoReceiver.stopSession()
       window.api.window.setFullScreen(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId, pin, controllerId])
 
+  // Video is up (status went past pairing into a real connection) but the input
+  // channel isn't open -- the "screen streams, mouse+keyboard dead" case. Worth
+  // shouting about: force the floating pill fully visible + flag it red so it's
+  // obvious without expanding the panel.
+  const connectionLive = status.startsWith('connection')
+  const inputAlert = connectionLive && !inputReady
+
   return (
-    <div className="session-shell">
-      <div className={`session-float${panelOpen ? ' is-open' : ''}`}>
+    <div className={`session-shell${nativeActive ? ' native-video' : ''}`}>
+      <div
+        className={`session-float${panelOpen ? ' is-open' : ''}${inputAlert ? ' input-alert' : ''}${fullscreen ? ' is-fullscreen' : ''}`}
+      >
         {panelOpen ? (
           <div className="session-float__panel">
             <span className="session-float__grip" title="Drag to move the window">
@@ -537,17 +974,101 @@ export default function ControllerSession({
               onBlur={commitName}
               onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
             />
-            {videoStats && videoStats.fps > 0 && (
+            {/* Which video path is ACTUALLY live this session (not just the saved
+                preference the sidebar bolt shows). nativeActive is true only when
+                both ends negotiated native-video AND the receiver engaged; if
+                native was selected but fell back to WebRTC, this reads WebRTC. */}
+            <span
+              className={`pipeline-badge is-${nativeActive ? 'native' : 'webrtc'}`}
+              title={
+                nativeActive
+                  ? 'วิดีโอกำลังวิ่งผ่าน Native (ลื่นสุด)'
+                  : 'วิดีโอกำลังวิ่งผ่าน WebRTC (มาตรฐาน / fallback)'
+              }
+            >
+              {nativeActive ? '⚡ NATIVE' : 'WebRTC'}
+            </span>
+            {displayStats && displayStats.fps > 0 && (
               <span
-                className="connection-type-badge"
+                className="stats-badge"
                 title="What's actually being received -- not just what was requested"
               >
-                Decode {videoStats.processingMs}ms · Network {videoStats.rttMs ?? '?'}ms ·{' '}
-                {videoStats.jitterMs != null ? `Jitter ${videoStats.jitterMs}ms · ` : ''}
-                {videoStats.lossPct != null ? `Loss ${videoStats.lossPct.toFixed(1)}% · ` : ''}
-                {videoStats.fps}fps · {videoStats.width}×{videoStats.height} ·{' '}
-                {(videoStats.kbps / 1000).toFixed(1)} Mbps
-                {videoStats.codec ? ` · ${videoStats.codec}` : ''}
+                {/* Each metric is a labeled chip (dim label + bright value) so the row
+                    reads at a glance and can space out cleanly when it grows in
+                    fullscreen. Encode (agent, relayed) shows once the capturer reports
+                    it; Decode is receiver-side and only exists on the WebRTC path
+                    (AVSampleBufferDisplayLayer exposes no native decode time). */}
+                {nativeActive && (
+                  <span className="stat">
+                    <span className="stat__k">Encode</span>
+                    <span
+                      className={`stat__v ${
+                        senderEncodeMs != null
+                          ? statHealth('encode', senderEncodeMs, displayStats.fps)
+                          : ''
+                      }`}
+                    >
+                      {senderEncodeMs != null ? `${senderEncodeMs.toFixed(1)}ms` : '—'}
+                    </span>
+                  </span>
+                )}
+                {displayStats.processingMs > 0 && (
+                  <span className="stat">
+                    <span className="stat__k">Decode</span>
+                    <span className="stat__v">{displayStats.processingMs}ms</span>
+                  </span>
+                )}
+                <span className="stat">
+                  <span className="stat__k">Network</span>
+                  <span
+                    className={`stat__v ${
+                      displayStats.rttMs != null ? statHealth('net', displayStats.rttMs) : ''
+                    }`}
+                  >
+                    {displayStats.rttMs ?? '?'}ms
+                  </span>
+                </span>
+                {displayStats.jitterMs != null && (
+                  <span className="stat">
+                    <span className="stat__k">Jitter</span>
+                    <span className={`stat__v ${statHealth('jitter', displayStats.jitterMs)}`}>
+                      {displayStats.jitterMs}ms
+                    </span>
+                  </span>
+                )}
+                {displayStats.lossPct != null && (
+                  <span className="stat">
+                    <span className="stat__k">Loss</span>
+                    <span className={`stat__v ${statHealth('loss', displayStats.lossPct)}`}>
+                      {displayStats.lossPct.toFixed(1)}%
+                    </span>
+                  </span>
+                )}
+                <span className="stat">
+                  <span className="stat__k">FPS</span>
+                  <span className="stat__v">{displayStats.fps}</span>
+                </span>
+                <span className="stat">
+                  <span className="stat__k">Res</span>
+                  <span className="stat__v">
+                    {displayStats.width}×{displayStats.height}
+                  </span>
+                </span>
+                <span className="stat">
+                  <span className="stat__k">Bitrate</span>
+                  {/* actual → BWE target: watch auto-bitrate adapt to the link.
+                      Amber tint when it climbs high (bufferbloat watch on a slow link). */}
+                  <span className={`stat__v ${statHealth('bitrate', displayStats.kbps / 1000)}`}>
+                    {(displayStats.kbps / 1000).toFixed(1)}
+                    {bweTargetKbps != null ? ` → ${(bweTargetKbps / 1000).toFixed(0)}` : ''} Mbps
+                  </span>
+                </span>
+                {displayStats.codec && (
+                  <span className="stat">
+                    <span className="stat__k">Codec</span>
+                    <span className="stat__v">{displayStats.codec}</span>
+                  </span>
+                )}
               </span>
             )}
             {connectionType && (
@@ -556,6 +1077,18 @@ export default function ControllerSession({
                 title="Affects file transfer speed -- relay is shared/bandwidth-limited"
               >
                 {connectionType === 'relay' ? 'via relay' : 'direct connection'}
+              </span>
+            )}
+            {connectionLive && (
+              <span
+                className={`session-float__input is-${inputReady ? 'ok' : 'down'}`}
+                title={
+                  inputReady
+                    ? 'Mouse + keyboard channel is open'
+                    : 'INPUT DEAD -- video is connected but the input channel never opened (native input-helper pc not established). Check %TEMP%\\input-helper.log on the agent.'
+                }
+              >
+                ⌨ {inputReady ? 'input ✓' : 'input ✕'}
               </span>
             )}
             <StatusPill status={status} />
@@ -570,18 +1103,49 @@ export default function ControllerSession({
         ) : (
           <button
             className="session-float__toggle"
-            title={`${nameDraft || deviceId} · ${status} · Esc = disconnect`}
+            title={`${nameDraft || deviceId} · ${status}${
+              inputAlert ? ' · INPUT DEAD (see panel)' : ''
+            } · Esc = disconnect`}
             onClick={() => setPanelOpen(true)}
           >
             <span className={`session-float__dot is-${classify(status)}`} />
+            {connectionLive && (
+              <span
+                className={`session-float__dot session-float__dot--input is-${
+                  inputReady ? 'ok' : 'error'
+                }`}
+              />
+            )}
           </button>
         )}
       </div>
+
+      {/* App title bar for the session. Carries the app name, clears the macOS
+          traffic lights, and is the one window-drag handle for the frameless
+          window (in native mode the video composites behind this transparent web
+          UI, so there's no other frame to grab). Sits BELOW the floating controls
+          (z-index) so they stay clickable. Shown whenever windowed; hidden only in
+          fullscreen (the OS provides its own chrome there). */}
+      {!fullscreen && (
+        <div className="session-titlebar">
+          <span className="session-titlebar__title">
+            <span className="session-titlebar__app">Personal Remote</span>
+            {(nameDraft || deviceId) && (
+              <span className="session-titlebar__device">· {nameDraft || deviceId}</span>
+            )}
+          </span>
+        </div>
+      )}
 
       <div className="session-video-area">
         <video
           ref={videoRef}
           autoPlay
+          // Native mode: the video carries NO cursor (draw_mouse=0), so we draw
+          // the remote shape natively here -- macOS renders the real cursor at
+          // 0 latency + correct hotspot. Null (or WebRTC mode, whose video has
+          // the cursor composited in) -> unset -> the plain local OS cursor.
+          style={nativeActive && remoteCursor ? { cursor: remoteCursor } : undefined}
           onMouseMove={handleMouseMove}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}

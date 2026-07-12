@@ -21,18 +21,20 @@
      data-theme block below and is toggled by the sidebar switch (persisted
      per machine via main/themeConfig). Everything themable references these
      tokens so one attribute flip re-skins the whole controller shell. */
-  --dl-bg: #171210;
-  --dl-text: #f0e6dc;
-  --dl-rail: #120e0b;
-  --dl-thumb: #120d0b;
+  /* Neutral grays matching VS Code's dark theme (editor #1e1e1e / sidebar
+     #252526 / text #d4d4d4), keeping the amber accent for brand identity. */
+  --dl-bg: #1e1e1e;
+  --dl-text: #d4d4d4;
+  --dl-rail: #181818;
+  --dl-thumb: #181818;
   --dl-accent: #e0793f;
   --dl-accent-ink: #1a1008;
-  --dl-accent-dim: #8a6a52;
-  --dl-text-dim: #9c8a7c;
-  --dl-border: #332822;
-  --dl-card-bg: #1f1712;
+  --dl-accent-dim: #6e6e6e;
+  --dl-text-dim: #858585;
+  --dl-border: #2d2d2d;
+  --dl-card-bg: #252526;
   --dl-ok: #4ade80;
-  --dl-idle: #6b6058;
+  --dl-idle: #6e6e6e;
   --dl-hover: rgba(255, 255, 255, 0.06);
   transition: background 0.25s ease, color 0.25s ease;
 }
@@ -130,103 +132,96 @@
   margin-top: auto;
 }
 
-/* Glass (see-through) theme toggle -- a droplet button above the sun/moon
-   slider. Accented when glass is active. */
-.glass-toggle {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--dl-text-dim);
-  cursor: pointer;
-}
-.glass-toggle:hover {
-  background: var(--dl-hover);
-  color: var(--dl-text);
-}
-.glass-toggle.is-on {
-  background: color-mix(in srgb, var(--dl-accent) 20%, transparent);
-  color: var(--dl-accent);
-}
-.glass-toggle svg {
-  width: 20px;
-  height: 20px;
-  display: block;
-}
-/* When glass is active the sun/moon slider doesn't apply -- dim it. */
-:root[data-theme='glass'] .theme-toggle {
-  opacity: 0.45;
-}
-
-/* Sliding sun/moon switch (see ThemeToggle.tsx). Track shows both icons
-   faintly; the accent knob slides over the active one. */
-.theme-toggle {
+/* Triangular 3-way theme switch (see ThemeTriToggle.tsx): Glass at the top,
+   Light bottom-left, Dark bottom-right, with an accent knob that slides to the
+   active corner. Replaces the old sun/moon slider + droplet button. */
+.tri-theme {
   position: relative;
-  width: 44px;
-  height: 24px;
+  width: 56px;
+  height: 50px;
   flex-shrink: 0;
-  border-radius: 999px;
-  border: 1px solid var(--dl-border);
-  background: var(--dl-thumb);
-  cursor: pointer;
-  padding: 0;
-  display: block;
+  color: var(--dl-accent-dim); /* faint track colour */
 }
-.theme-toggle:focus-visible {
-  outline: 2px solid var(--dl-accent);
-  outline-offset: 2px;
-}
-.theme-toggle__icon {
+.tri-theme__track {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 12px;
-  height: 12px;
-  color: var(--dl-text-dim);
-  opacity: 0.5;
-}
-.theme-toggle__icon svg {
+  inset: 0;
   width: 100%;
   height: 100%;
-  display: block;
+  opacity: 0.4;
+  pointer-events: none;
 }
-.theme-toggle__sun {
-  left: 5px;
-}
-.theme-toggle__moon {
-  right: 5px;
-}
-.theme-toggle__knob {
+.tri-theme__knob {
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: var(--dl-accent);
-  color: var(--dl-accent-ink);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  z-index: 1;
+  transition: left 0.28s cubic-bezier(0.34, 1.3, 0.5, 1),
+    top 0.28s cubic-bezier(0.34, 1.3, 0.5, 1);
+}
+.tri-theme.is-glass .tri-theme__knob {
+  left: 15px;
+  top: 0;
+}
+.tri-theme.is-light .tri-theme__knob {
+  left: 2px;
+  top: 23px;
+}
+.tri-theme.is-dark .tri-theme__knob {
+  left: 28px;
+  top: 23px;
+}
+
+.tri-theme__opt {
+  position: absolute;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-  transform: translateX(20px);
-  transition: transform 0.24s cubic-bezier(0.34, 1.3, 0.5, 1), background 0.25s ease;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--dl-text-dim);
+  z-index: 2; /* icons sit above the knob so the active one shows on the accent */
+  transition: color 0.2s ease;
 }
-.theme-toggle__knob svg {
-  width: 12px;
-  height: 12px;
+.tri-theme__opt svg {
+  width: 15px;
+  height: 15px;
   display: block;
 }
-:root[data-theme='light'] .theme-toggle__knob {
-  transform: translateX(0);
+.tri-theme__opt:focus-visible {
+  outline: 2px solid var(--dl-accent);
+  outline-offset: 1px;
+  border-radius: 50%;
+}
+.tri-theme__glass {
+  left: 17px;
+  top: 2px;
+}
+.tri-theme__light {
+  left: 4px;
+  top: 25px;
+}
+.tri-theme__dark {
+  left: 30px;
+  top: 25px;
+}
+.tri-theme__opt:hover {
+  color: var(--dl-text);
+}
+/* The active corner's icon rides the accent knob -> ink colour. */
+.tri-theme.is-glass .tri-theme__glass,
+.tri-theme.is-light .tri-theme__light,
+.tri-theme.is-dark .tri-theme__dark {
+  color: var(--dl-accent-ink);
 }
 @media (prefers-reduced-motion: reduce) {
-  .theme-toggle__knob {
+  .tri-theme__knob {
     transition: none;
   }
 }
@@ -527,6 +522,20 @@
 
 .dl-card__remove:hover {
   color: #f87171;
+}
+
+/* Armed second-step: unmistakably a warning so the confirm is deliberate. */
+.dl-card__remove.is-confirming {
+  color: #fff;
+  font-weight: 700;
+  background: #dc2626;
+  border-radius: 6px;
+  padding: 4px 0;
+  margin-top: 4px;
+}
+.dl-card__remove.is-confirming:hover {
+  color: #fff;
+  background: #b91c1c;
 }
 
 .dl-pin-prompt {

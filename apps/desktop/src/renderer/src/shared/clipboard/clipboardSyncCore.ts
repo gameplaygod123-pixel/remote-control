@@ -41,6 +41,13 @@ function byteLength(text: string): number {
   return new TextEncoder().encode(text).length
 }
 
+// Log lengths/events only, never the clipboard TEXT (privacy). Prefixed so it's
+// greppable in either host (renderer console or the input-helper's stdout log).
+// Exists so a "can't copy through remote" is diagnosed from the log, not guessed.
+function clog(msg: string): void {
+  console.log(`[clipboard] ${msg}`)
+}
+
 // Returns a cleanup function that stops the poll and detaches handlers.
 export function runClipboardSync(
   channel: ClipboardChannelLike,
@@ -56,21 +63,37 @@ export function runClipboardSync(
 
   channel.onmessage = (event) => {
     const text = typeof event.data === 'string' ? event.data : ''
-    if (!text || text === lastSynced) return
+    if (!text) return
+    if (text === lastSynced) {
+      clog(`recv len=${text.length} (echo, ignored)`)
+      return
+    }
+    clog(`recv len=${text.length} -> writing to local clipboard`)
     lastSynced = text
-    void access.write(text)
+    void Promise.resolve(access.write(text)).then(
+      () => clog(`write ok len=${text.length}`),
+      (e) => clog(`write FAILED: ${(e as Error)?.message ?? e}`)
+    )
   }
 
   function start(): void {
+    clog('sync started (waiting for seed)')
     void Promise.resolve(access.read()).then((initial) => {
-      if (lastSynced === null) lastSynced = initial ?? ''
+      if (lastSynced === null) {
+        lastSynced = initial ?? ''
+        clog(`seeded len=${lastSynced.length} (copies BEFORE now won't sync — copy something new)`)
+      }
     })
     interval = setInterval(async () => {
       if (channel.readyState !== 'open') return
       if (lastSynced === null) return // initial seed hasn't resolved yet
       const text = await access.read()
       if (!text || text === lastSynced) return
-      if (byteLength(text) > MAX_TEXT_BYTES) return
+      if (byteLength(text) > MAX_TEXT_BYTES) {
+        clog(`skip local change len=${text.length} bytes=${byteLength(text)} (>256KB cap)`)
+        return
+      }
+      clog(`local change len=${text.length} -> sending`)
       lastSynced = text
       channel.send(text)
     }, POLL_INTERVAL_MS)
@@ -82,6 +105,7 @@ export function runClipboardSync(
   const stop = (): void => {
     if (interval) clearInterval(interval)
     interval = null
+    clog('sync stopped (channel closed)')
   }
   channel.onclose = stop
   return stop

@@ -137,6 +137,27 @@
   white-space: nowrap;
 }
 
+/* Live video-path badge in the session HUD: which pipeline is ACTUALLY running
+   (native vs webrtc/fallback), distinct from the sidebar bolt's saved intent. */
+.pipeline-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+.pipeline-badge.is-native {
+  color: #0b0b0b;
+  background: #ffcf3f;
+  box-shadow: 0 0 10px rgba(255, 207, 63, 0.45);
+}
+.pipeline-badge.is-webrtc {
+  color: var(--ev-c-text-3);
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .connection-request {
   padding: 16px;
   border-radius: 14px;
@@ -523,17 +544,134 @@
    region would swallow mouse events meant for the remote machine. */
 .session-float {
   position: absolute;
-  top: 8px;
+  /* Below the 34px app title bar so the pill/controls sit clear of it and stay
+     clickable (they used to overlap and read as "stuck in the bar"). */
+  top: 42px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
-  opacity: 0.45;
+  opacity: 0.5; /* status bar sits at 50% until hovered/opened (owner request) */
   transition: opacity 0.15s ease;
 }
 
 .session-float:hover,
 .session-float:focus-within,
 .session-float.is-open {
+  opacity: 1;
+}
+
+/* Fullscreen: the drag titlebar is hidden (the OS provides its own chrome), so the
+   float becomes a full-width bar across the top -- everything on ONE row, spread
+   out, so the readout reads like a proper HUD strip instead of a cramped wrapping
+   pill (the owner's "make it long when fullscreen" ask). */
+.session-float.is-fullscreen {
+  top: 10px;
+  left: 12px;
+  right: 12px;
+  transform: none; /* stretch edge-to-edge instead of centered-auto width */
+  /* Center the child: the collapsed two-dot toggle sits top-CENTER (was left) while
+     the expanded panel is width:100% so it's unaffected. */
+  display: flex;
+  justify-content: center;
+}
+.session-float.is-fullscreen .session-float__panel {
+  width: 100%;
+  max-width: none; /* override the windowed "never wider than the window" clamp */
+  justify-content: center;
+  gap: 8px 12px;
+  padding: 9px 18px;
+  border-radius: 16px;
+}
+/* The stats get their OWN full-width row (flex-basis 100% forces the break) and
+   spread edge-to-edge -- a proper long telemetry strip, the owner's "make it long
+   in fullscreen" ask -- while the Back/NATIVE/status controls wrap on their own
+   rows above/below (kept wrapping so the long "connection: connected" pill never
+   overflows the bar). */
+.session-float.is-fullscreen .stats-badge {
+  /* Second tier: order sorts it AFTER the nav+status items (order 0) so those fill
+     the top row and the telemetry drops to its own bottom row (flex-basis 100%),
+     separated by a hairline -- the owner's approved two-tier layout. */
+  order: 10;
+  flex: 1 1 100%;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  margin-top: 5px;
+  padding: 8px 6px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+.session-float.is-fullscreen .connection-type-badge,
+.session-float.is-fullscreen .session-float__input {
+  font-size: 14px;
+  padding: 5px 11px;
+  flex-shrink: 0;
+}
+.session-float.is-fullscreen .session-float__name {
+  font-size: 15px;
+}
+
+/* Live telemetry as a row of labeled chips (dim uppercase label + bright value),
+   split by thin dividers -- reads at a glance instead of a run-on "·" string. No
+   background of its own (it sits ON the float panel; a second pill looked nested
+   and awkward). Always-dark surface, so colors are fixed light, not themed. */
+.stats-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 0;
+  font-variant-numeric: tabular-nums; /* digits don't jitter as they update */
+}
+.stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 10px;
+}
+.stat + .stat {
+  border-left: 1px solid rgba(255, 255, 255, 0.12); /* thin divider between chips */
+}
+.stat__k {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+.stat__v {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: nowrap;
+}
+/* Health tint on link-quality values (Encode/Network/Jitter/Loss/Bitrate) so the
+   link's state reads at a glance. Res/FPS/Codec stay neutral (not health metrics).
+   Semantic colors, kept distinct from the amber accent. */
+.stat__v.is-good {
+  color: #6ee7a8;
+}
+.stat__v.is-warn {
+  color: #ffcf3f;
+}
+.stat__v.is-crit {
+  color: #ff8a8a;
+}
+
+/* Fullscreen: step the chip type up so encode/network/bitrate read from across the
+   screen (layout/spread is handled by the full-width bar rules above). */
+.session-float.is-fullscreen .stat {
+  padding: 2px 8px;
+  gap: 7px;
+}
+.session-float.is-fullscreen .stat__k {
+  font-size: 11px;
+}
+.session-float.is-fullscreen .stat__v {
+  font-size: 17px;
+}
+
+/* Input-dead alarm: video is connected but the input channel never opened
+   (see ControllerSession inputAlert). Never let the pill fade -- it's the one
+   moment the person NEEDS to notice the controls. */
+.session-float.input-alert {
   opacity: 1;
 }
 
@@ -569,16 +707,70 @@
   background: rgba(255, 255, 255, 0.35);
 }
 
+/* Second dot in the collapsed pill: input-channel health, next to the status
+   dot. Red (+glow) means input is dead while the screen is streaming. */
+.session-float__dot--input {
+  margin-left: 4px;
+}
+.session-float__dot--input.is-error {
+  box-shadow: 0 0 6px var(--err);
+}
+
+/* Input health pill in the expanded panel. is-down is loud on purpose: a red
+   fill so "input is dead" reads instantly, not as one more faint badge. */
+.session-float__input {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 3px 8px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.session-float__input.is-ok {
+  color: var(--ok);
+  background: rgba(34, 197, 94, 0.15);
+}
+.session-float__input.is-down {
+  color: #fff;
+  background: var(--err);
+}
+
 .session-float__panel {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap; /* wrap to more rows on a narrow window instead of overflowing */
+  gap: 6px 10px; /* row-gap col-gap */
   padding: 6px 10px;
-  background: rgba(20, 21, 26, 0.92);
+  /* Never wider than the window -- the whole point of "usable when shrunk". */
+  max-width: calc(100vw - 24px);
+  /* Frosted glass: translucent (was 0.92 = near-solid) with a stronger blur and a
+     top highlight so it reads as glass over the video, not a solid slab. */
+  background: rgba(18, 19, 24, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(255, 255, 255, 0.2);
   border-radius: 12px;
-  backdrop-filter: blur(16px);
-  white-space: nowrap;
+  backdrop-filter: blur(22px) saturate(1.3);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
+}
+
+/* Amber left accent when the NATIVE pipeline is actually live (mirrors the ⚡NATIVE
+   badge); the neutral 1px border stays on the WebRTC/fallback path. */
+.session-shell.native-video .session-float__panel {
+  border-left: 2px solid #ffcf3f;
+}
+
+/* The long diagnostic/connection badges shrink + wrap their text first (before
+   the essential buttons) so a small window stays operable. */
+.session-float__panel .connection-type-badge {
+  white-space: normal;
+  text-align: center;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .session-float__grip {
@@ -588,6 +780,7 @@
   font-size: 14px;
   padding: 0 2px;
   user-select: none;
+  flex-shrink: 0;
 }
 
 .session-float__btn {
@@ -611,7 +804,9 @@
 }
 
 .session-float__name {
+  flex: 0 1 130px;
   width: 130px;
+  min-width: 60px;
   font-family: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -647,6 +842,105 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/* Native video mode: decoded frames are composited by an AVSampleBufferDisplayLayer
+   subview added INSIDE this window, BEHIND the web content (embed.swift). Clear
+   every opaque layer from the window down to the <video> so those frames show
+   through, while the floating controls (opaque) stay visible + clickable on top.
+   The <video> element stays laid out at opacity 0 so it still captures mouse
+   events for input -- and because the session window is locked to the remote's
+   aspect (main setAspectRatio) it fills the window exactly, so the input mapping
+   is pixel-accurate. Scoped to .native-video: the WebRTC path is untouched. */
+body:has(.session-shell.native-video),
+#root:has(.session-shell.native-video) {
+  background: transparent !important;
+}
+.session-shell.native-video,
+.session-shell.native-video .session-video-area {
+  background: transparent;
+}
+.session-shell.native-video .session-video-area video {
+  opacity: 0;
+}
+
+/* App title bar shown in native mode (see ControllerSession). An ABSOLUTE overlay
+   (not a flex child) so the video area stays the FULL window -- the native subview
+   fills it edge-to-edge and the <video> hit-target maps 1:1. It's a slim strip on
+   top carrying the app name, clearing the macOS traffic lights, and is the one
+   -webkit-app-region drag handle for the frameless transparent window. z-index is
+   BELOW .session-float (10) so the floating controls stay clickable over it. */
+.session-titlebar {
+  /* A REAL top strip in the column flow (was an absolute overlay) so the video area
+     sits BELOW it and the bar never clips the top of the remote screen (owner: "ตอน
+     ย่อจอแถบลากทับภาพ"). Main insets the native surface + aspect lock by this same 34px
+     (SESSION_TITLEBAR_PX) so the video fills the area under the bar with no letterbox. */
+  position: relative;
+  flex-shrink: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 82px; /* clear the traffic lights on the left */
+  padding-right: 12px;
+  -webkit-app-region: drag;
+  /* Opaque chrome: the mac window is transparent in native mode, and the video now
+     sits below this strip (nothing behind it), so a see-through bar would show the
+     desktop. Light/Glass overrides below. */
+  background: #17181c;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  user-select: none;
+  z-index: 8;
+}
+/* Fullscreen: no traffic lights to clear, so the app name starts at the edge. */
+.session-titlebar.is-fullscreen {
+  padding-left: 16px;
+}
+/* Window title centered in the WINDOW (macOS convention), independent of the
+   traffic-light padding -- absolute-centered so it sits mid-bar, not pushed right. */
+.session-titlebar__title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 180px); /* never collide with the traffic lights */
+  -webkit-app-region: drag;
+}
+.session-titlebar__app {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #e0793f; /* brand accent -- reads well on every theme */
+}
+.session-titlebar__device {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: rgba(232, 224, 216, 0.62);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The title bar follows the controller theme (dark default above) so switching to
+   Light / Glass stays consistent into a live session -- matches deviceList.css's
+   --dl-* palette. data-theme lives on <html>, set by ThemeToggle/main themeConfig. */
+:root[data-theme='light'] .session-titlebar {
+  background: #f4ede3;
+  border-bottom-color: rgba(60, 40, 25, 0.12);
+}
+:root[data-theme='light'] .session-titlebar__app {
+  color: #cf5f26;
+}
+:root[data-theme='light'] .session-titlebar__device {
+  color: rgba(44, 33, 25, 0.58);
+}
+/* Glass: translucent bar so the see-through aesthetic carries onto the video. */
+:root[data-theme='glass'] .session-titlebar {
+  background: linear-gradient(to bottom, rgba(23, 18, 15, 0.5), rgba(23, 18, 15, 0.24));
+  border-bottom-color: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(14px);
 }
 
 /* Shared by UpdateBadge and SwitchModeLink -- deliberately unstyled beyond

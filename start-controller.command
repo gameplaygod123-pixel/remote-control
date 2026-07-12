@@ -15,4 +15,34 @@ unset ELECTRON_RUN_AS_NODE
 # signaling-url.json on GitHub at runtime.
 export VITE_SIGNALING_URL="ws://localhost:8080"
 export APP_MODE=controller
+
+# Silent NACK loss repair (docs/step-nack-retransmit.md): the patched darwin ndc
+# (auto-reapplied by the desktop postinstall -> native/ndc-nack/postinstall.mjs) emits
+# NACKs on a lost packet, and this shallow seq-ordered receive buffer holds the gap ~1
+# RTT so the retransmit fills it before the frame is presented -> scattered losses are
+# repaired with no PLI/IDR/fps-dip. Safe to leave on: with the patched ndc present the
+# retransmit arrives; on the rare chance it isn't, a gap just PLIs after the 30ms hold.
+export VIDEO_NACK_BUFFER=1
+
+# TURN relay for peers behind symmetric NAT / CGNAT (this home is AIS CGNAT, so
+# any pair where the other side also has a hard NAT can't STUN-hole-punch and
+# needs a relay). Sources a gitignored local secret that mints a fresh short-lived
+# Cloudflare TURN credential per launch and exports PR_TURN_* (the forked native/
+# input helpers inherit it). Absent file -> STUN-only = byte-identical (no TURN).
+if [ -f "../../turn-creds.sh" ]; then
+  source ../../turn-creds.sh
+fi
+
+# Prep the native render surface so the in-app video toggle (PipelineToggle) can
+# engage Native without a second launcher. We deliberately DON'T set
+# VIDEO_PIPELINE here -- the saved per-machine preference (video-pipeline.txt,
+# flipped by the sidebar bolt) decides webrtc vs native; the env var stays a
+# test-only override (see start-controller-native.command). Building the dylib is
+# cheap + safe every launch; guarded so a machine without swiftc/CLT just skips it
+# and native quietly falls back to WebRTC.
+if command -v swiftc >/dev/null 2>&1; then
+  bash ../../scripts/build-render-mac.sh || echo "[launcher] render build failed; native will fall back to WebRTC"
+  export VIDEO_RENDER_LIB="$(cd ../.. && pwd)/apps/desktop/out/video-render/librvr.dylib"
+fi
+
 pnpm dev

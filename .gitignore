@@ -11,3 +11,6 @@ build/Release/
 
 # House token -- the real pre-shared secret, must never reach the public repo
 /token
+
+# Local TURN secret (Cloudflare API token) -- never commit
+/turn-creds.sh*

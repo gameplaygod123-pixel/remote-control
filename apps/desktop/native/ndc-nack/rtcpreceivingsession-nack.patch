@@ -1,0 +1,72 @@
+diff --git a/include/rtc/rtcpreceivingsession.hpp b/include/rtc/rtcpreceivingsession.hpp
+index 4e81fa1d..5771f02a 100644
+--- a/include/rtc/rtcpreceivingsession.hpp
++++ b/include/rtc/rtcpreceivingsession.hpp
+@@ -49,6 +49,9 @@ protected:
+ 	void pushREMB(const message_callback &send, unsigned int bitrate);
+ 	void pushRR(const message_callback &send,unsigned int lastSrDelay);
+ 	void pushPLI(const message_callback &send);
++	// PATCH (Personal Remote): emit a Generic NACK (RFC 4585) for a small forward
++	// seq gap so the sender's RtcpNackResponder retransmits, instead of only PLI.
++	void pushNACK(const message_callback &send, const std::vector<uint16_t> &missingSeqs);
+ 
+ 	void initSeq(uint16_t seq);
+ 	bool updateSeq(uint16_t seq);
+diff --git a/src/rtcpreceivingsession.cpp b/src/rtcpreceivingsession.cpp
+index 0c1ed318..00dbc47b 100644
+--- a/src/rtcpreceivingsession.cpp
++++ b/src/rtcpreceivingsession.cpp
+@@ -67,6 +67,27 @@ void RtcpReceivingSession::incoming(message_vector &messages, const message_call
+ 
+ 			mSsrc = rtp->ssrc();
+ 
++			// PATCH (Personal Remote): NACK a small forward seq gap for retransmission.
++			// Stock libdatachannel only sends RR/PLI/REMB; it tracks gaps but never
++			// requests a resend. We detect a forward jump past mMaxSeq (a real loss, not
++			// reorder/wrap) and emit a Generic NACK so the sender's RtcpNackResponder
++			// resends those packets. Only SMALL gaps (scattered loss); larger gaps
++			// (blackouts) are left to the existing PLI->IDR path. Detect BEFORE updateSeq
++			// (which advances mMaxSeq). RTC_NACK_MAX_GAP bounds the NACK size.
++			{
++				static const uint16_t RTC_NACK_MAX_GAP = 64;
++				uint16_t seq = rtp->seqNumber();
++				if (mProbation == 0 && mReceived > 0) {
++					uint16_t udelta = uint16_t(seq - mMaxSeq); // forward distance (wraps)
++					if (udelta >= 2 && udelta <= RTC_NACK_MAX_GAP) {
++						std::vector<uint16_t> missing;
++						for (uint16_t s = uint16_t(mMaxSeq + 1); s != seq; ++s)
++							missing.push_back(s);
++						pushNACK(send, missing);
++					}
++				}
++			}
++
+ 			updateSeq(rtp->seqNumber());
+ 
+ 			result.push_back(std::move(message));
+@@ -183,6 +204,25 @@ void RtcpReceivingSession::pushPLI(const message_callback &send) {
+ 	send(message);
+ }
+ 
++// PATCH (Personal Remote): build + send a Generic NACK (RTPFB PT=205 FMT=1) listing
++// the missing sequence numbers, so the peer's RtcpNackResponder retransmits them.
++// Mirrors pushPLI; addMissingPacket compresses runs into PID+BLP FCI parts.
++void RtcpReceivingSession::pushNACK(const message_callback &send,
++                                    const std::vector<uint16_t> &missingSeqs) {
++	if (missingSeqs.empty())
++		return;
++	// Worst case = one FCI part per missing packet; trim to the real count after packing.
++	auto message = make_message(RtcpNack::Size(missingSeqs.size()), Message::Control);
++	auto *nack = reinterpret_cast<RtcpNack *>(message->data());
++	unsigned int fciCount = 0;
++	uint16_t fciPID = 0;
++	for (uint16_t seq : missingSeqs)
++		nack->addMissingPacket(&fciCount, &fciPID, seq);
++	nack->preparePacket(mSsrc, fciCount);
++	message->resize(RtcpNack::Size(fciCount));
++	send(message);
++}
++
+ void RtcpReceivingSession::initSeq(uint16_t seq) {
+ 	mBaseSeq = seq;
+ 	mMaxSeq = seq;

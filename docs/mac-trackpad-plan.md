@@ -1,0 +1,161 @@
+# Mac-native control — smooth trackpad plan
+
+Goal (owner, 2026-07-09): controlling the Windows agent **from the Mac** should
+feel 100% like using a Mac — above all the **trackpad must scroll smoothly**
+(fluid two-finger scroll with momentum, horizontal scroll, pinch-zoom), not the
+current chunky notch-scroll.
+
+## Why it's janky today (root cause)
+
+The whole scroll pipeline throws away the trackpad's high-resolution signal:
+
+1. **Controller** (`ControllerSession.tsx:314`): `sendInput({t:'wheel', dy: e.deltaY / 40})`
+   — only `deltaY`, no `deltaX`; a fixed `/40`.
+2. **Agent input-helper** (`injector.ts:90` `scrollMouse`): `steps = Math.round(Math.abs(dy))`
+   then `nut.js mouse.scrollDown/Up(steps)`.
+   - `Math.round` **drops any sub-step scroll**: a gentle trackpad flick
+     (deltaY≈8px → dy=0.2 → round=0) scrolls **nothing**.
+   - nut.js only scrolls in **whole 120-unit notches** (no sub-notch), so even
+     when it does move it jumps a full line/notch at a time = chunky.
+3. **No horizontal scroll** at all (`deltaX` never sent; no `MOUSEEVENTF_HWHEEL`).
+4. **No momentum**: macOS keeps firing decaying `wheel` events after the finger
+   lifts — but rounding to integer notches destroys the fine tail, so inertia
+   never reaches the remote.
+5. **No pinch-zoom**: Chromium delivers a trackpad pinch as a `wheel` event with
+   `ctrlKey=true`; we ignore the modifier, so pinch does nothing (or scrolls).
+
+Windows itself is NOT the limit: `SendInput` `MOUSEEVENTF_WHEEL` accepts a
+`mouseData` **smaller than `WHEEL_DELTA` (120)**. Sending many small fractional
+deltas = genuine high-resolution smooth scroll that every modern app (browsers,
+Explorer, Office) honors. The bottleneck is purely nut.js's notch API + our
+rounding. (Confirmed: MS docs on WM_MOUSEWHEEL; the "delta 120 so finer wheels
+send smaller values" design note.)
+
+## Design principle — no mode button (auto, like the Parsec keyboard)
+
+The owner asked for a "Mac mode", but a manual toggle isn't needed and a
+high-resolution accumulator serves **both** input devices:
+- a **trackpad**'s fine pixel deltas → smooth continuous scroll;
+- a **real mouse**'s discrete notch (one ~120px/wheelDelta event) → accumulates
+  to one chunk = the correct notchy mouse feel.
+
+So we make the scroll pipeline high-resolution **always-on**, with no user-facing
+toggle — the same philosophy that retired the Text/Game keyboard toggle. (If the
+owner still wants an explicit switch, it's a thin wrapper on top; noted, not
+recommended.)
+
+## Plan (phased; native FFI ⇒ golden rule #1 prerelease each time)
+
+### Phase 1 — high-resolution smooth scroll (the 90% win)
+
+**Protocol** (`inputProtocol.ts`) — extend the wheel message, backward-compatible:
+```ts
+// dy/dx are RAW pixel deltas (deltaMode-normalized), floats, NOT rounded.
+// `dx` absent on an older controller => agent scrolls vertical only (graceful).
+| { t: 'wheel'; dy: number; dx?: number }
+```
+Keep `dy` meaning the same *sign* it has today so an un-upgraded agent still
+scrolls (just chunkier).
+
+**Controller** (`ControllerSession.tsx handleWheel`):
+- Forward the raw high-res delta, no rounding: normalize `deltaMode` to pixels
+  (`deltaMode===1` line → ×16; `===2` page → ×height), send `{t:'wheel', dy, dx}`.
+- **Backpressure/coalesce** on the reliable input channel: wheel rides the
+  ordered channel (like keys), so under jitter a fast flick could backlog. If
+  `bufferedAmount` is high, **sum** the pending wheel delta into one message
+  instead of queuing many (never drop scroll — summing preserves total travel).
+
+**Agent — Win32 high-res wheel via koffi** (the core fix, native FFI):
+- New `injectWheelWin32(dx, dy)` doing `SendInput`:
+  - vertical → `MOUSEEVENTF_WHEEL`, `mouseData = accumulate(dy)`
+  - horizontal → `MOUSEEVENTF_HWHEEL (0x01000)`, `mouseData = accumulate(dx)`
+  - **fractional accumulator**: `acc += px * GAIN`; emit `trunc(acc)` (can be
+    < 120), keep the remainder — so slow scrolls aren't lost and fast ones are
+    smooth. Sign: Windows wheel +up, browser deltaY +down ⇒ negate (as today);
+    HWHEEL +right matches deltaX +right (no negate).
+- Route the Windows `scrollMouse` (input-helper path) to `injectWheelWin32`,
+  **bypassing nut.js** — mirrors how the keyboard already moved to koffi
+  SendInput (`injectorWin32.ts`). Non-Windows keeps nut.js.
+- **SYSTEM injector** (`rawInject.ts injectWheel`): add the same accumulator +
+  `MOUSEEVENTF_HWHEEL` so the secure-desktop path matches.
+- **Agent coalescing** (`input-helper/index.ts`): the queue already collapses
+  consecutive `move`s; do the same for `wheel` — sum dx/dy of queued wheels so a
+  burst never builds a stale backlog.
+
+**Feel tuning**: expose `GAIN` (px→wheel) via env like other knobs
+(e.g. `INPUT_WHEEL_GAIN`) so we can dial it on real hardware without a rebuild;
+bake the winning value as the default.
+
+### Phase 2 — trackpad gestures
+
+- **Pinch-to-zoom — DONE (controller-only, Mac-gated).** Chromium sends a pinch as
+  `wheel` + `ctrlKey=true` with no physical key. `handlePinchZoom` (in `handleWheel`,
+  Mac branch only) synthesizes a real **Ctrl (scancode)** held for the pinch burst
+  and releases it `PINCH_IDLE_MS`(140ms) after the last pinch wheel → the agent reads
+  Ctrl+wheel = zoom. Guard: a genuine physical Ctrl+scroll already forwards a real
+  Ctrl via the key path, so we only synthesize when `ctrlKey` is set AND no physical
+  Ctrl is held (`heldKeysRef`, now shared between the keyboard effect and the wheel
+  handler). Panic-release (blur/hide) drops the synthetic Ctrl too. **No agent/FFI or
+  protocol change** — reuses the verified scancode-key + px-wheel paths. A Windows
+  controller never enters the Mac branch → byte-identical (no regression).
+- **Two-finger swipe navigation** (optional): map horizontal swipe-nav to
+  Back/Forward. Lower value; most horizontal intent is covered by HWHEEL. Skip
+  unless asked.
+
+### Phase 3 — 0-latency native cursor SHAPE (mostly already built)
+
+**Key finding (2026-07-09):** with the shipping DXGI capturer (`VIDEO_CAPTURER=1`)
+the encoded video carries **NO cursor** — DXGI Desktop Duplication excludes the HW
+cursor and `main.cpp` never composites it (it only reads pointer metadata for
+change-detection/logging). So the pointer the owner sees is **already the local Mac
+cursor at 0 latency** — the "glued" latency goal is effectively met on the capturer
+path. The only gap is that it's **always an arrow** (wrong shape on text fields /
+links / resize edges).
+
+Phase 3 = give that local cursor the **correct shape**, which the **dormant
+`PR_CURSOR_OVERLAY` plumbing already does end-to-end** (built + koffi-verified in
+beta.4, shipped dormant in v1.32.0):
+- Agent (`input-helper/index.ts` + `cursorCapture.ts`): `GetCursorInfo` polls the
+  remote cursor, maps the handle to a semantic `CursorShape` (13 standard cursors +
+  `none`), sends it on a dedicated `'cursor'` data channel on change (~16 Hz, tiny).
+- Controller (`ControllerSession.tsx`, already wired with **no gate**): applies the
+  shape as a CSS `cursor` on the video element (`nativeActive && remoteCursor`), so
+  macOS renders the real native cursor at 0 latency + correct hotspot; degrades to
+  the local arrow if the channel never opens.
+
+**WC-VERIFIED on real hardware + BAKED DEFAULT (v1.33.0-beta.1).** Verified with
+`PR_CURSOR_OVERLAY=1`: correct shapes (I-beam/hand/resize/arrow), 0-latency, no double
+cursor. Now default via `cursorOverlayEnabled()` (`input-helper/index.ts`):
+`PR_CURSOR_OVERLAY=0` forces off (cancel switch), `=1` forces on, UNSET → on when
+`VIDEO_CAPTURER=1` (the only state where the video is guaranteed cursor-free). The
+ffmpeg fallback composites the cursor, so the overlay auto-disables there → no double
+cursor. Shipped as a prerelease (golden rule #1, FFI now in the default path); promote
+after WC confirms the baked default works with the env removed. The controller render
+is shared, so a Windows controller (v1.32.0-beta.1+) gets the same feature (native OS
+cursor glyph).
+
+## Safety / process
+
+- `injectWheelWin32` is **koffi SendInput = native FFI** → **golden rule #1**:
+  ship as a PRERELEASE, verify on the real Windows agent (WC) before any full
+  release. The `scan?` design showed the pattern: opt-in/additive so the default
+  path stays byte-identical.
+- Backward compatible both directions: old agent (no `dx`/accumulator) still
+  scrolls vertically; old controller (no `dx`) still works against a new agent.
+- Non-Windows agent unaffected (nut.js path untouched off win32).
+
+## WC real-hardware test checklist (Phase 1)
+
+1. Gentle two-finger trackpad scroll → smooth, no dead zone on slow flicks.
+2. Momentum: flick + lift → inertia continues and decays on the remote.
+3. Horizontal two-finger scroll → remote scrolls sideways (HWHEEL).
+4. Fast flick under load → no runaway/backlog (coalescing holds).
+5. A real USB mouse wheel → still notchy/normal (accumulator degrades correctly).
+6. Tune `INPUT_WHEEL_GAIN` until 1:1 with local Mac feel; bake the default.
+
+## Open decision for the owner
+
+- **No toggle (recommended)** vs an explicit "Mac trackpad mode" switch. Default
+  plan assumes auto/no-toggle.
+- Do Phase 1 now; Phase 2 (pinch) right after if it feels worth it; Phase 3
+  (cursor overlay) only if the pointer-trail still bugs you.

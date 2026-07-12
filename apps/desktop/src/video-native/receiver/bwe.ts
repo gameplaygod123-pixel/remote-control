@@ -1,0 +1,294 @@
+// Bandwidth estimator (BWE) for the native video receiver — AIMD, loss + jitter.
+//
+// The native video pc is media-only (no data channel, so no built-in WebRTC BWE /
+// REMB), so the Mac receiver estimates congestion ITSELF and steers the SENDER's
+// NVENC bitrate over signaling. The capturer accepts a live `B<kbps>` on stdin
+// (nvEncReconfigureEncoder, no respawn — WC verified 25→12→45 Mbps), so the loop is:
+// receiver measures congestion → AIMD target → signaling `video-bitrate` → agent →
+// capturer stdin. See docs/bwe-hevc-plan.md.
+//
+// Model = AIMD (TCP-style). Each ~1s window: calm link → additive-increase (gentle
+// probe up); congested → multiplicative-decrease (back off fast). Congestion = seq-
+// gap packet LOSS **or** a frame-pacing JITTER spike — the jitter term is what makes
+// this see BUFFERBLOAT (a full link queues + delays AUs long before it drops them;
+// v1.27.0-beta.1 used loss only, capped 60 Mbps, and bloated the ~40 Mbps link). The
+// ceiling is now 25 Mbps (v1.26.0's proven-smooth target) so BWE can only back OFF
+// from a known-good point, never overshoot. Pure + unit-tested (dev/verify-...) — no
+// I/O, so the control law is reviewable in isolation (a bad number just changes
+// bitrate; it can't crash anything, unlike the native FFI paths).
+
+/** Never starve the encoder below this — a floor keeps the picture decodable even
+ *  on a bad link (mirrors the WebRTC x-google-min-bitrate floor from v1.22.0). */
+export const BWE_FLOOR_KBPS = 5_000
+/**
+ * Hard ceiling. Set to **25 Mbps** = v1.26.0's proven-smooth VBR target (its
+ * maxrate ~40 Mbps was owner-verified "smooth like Parsec" on this exact link).
+ *
+ * NOT 60 (the owner's first ask): v1.27.0-beta.1 capped 60 and BUFFERBLOATED — the
+ * link is ~40 Mbps, so a 60 Mbps VBR burst filled the queue → AUs arrived late/in
+ * clumps → double cursor (local Mac cursor vs the delayed video cursor), higher
+ * end-to-end latency, and eventual freeze. Loss-only AIMD never saw it (bloat is
+ * DELAY, not packet loss, until the queue finally overflows). Capping at v1.26.0's
+ * proven target means BWE's worst case == v1.26.0 (smooth) and it can only back OFF
+ * below that on a bad link — it can never overshoot into bloat. The real "Parsec
+ * runs 1440p60 at ~3 Mbps" win is H.265 (Feature B, 1.6× efficiency), NOT pushing
+ * H.264 higher. See docs/bwe-hevc-plan.md + the WC bufferbloat diagnosis.
+ */
+// AVERAGE-bitrate ceiling = 25 Mbps. This is the AIMD TARGET cap, NOT the peak: the
+// capturer sets VBR maxrate = target × (launch maxrate/bitrate ratio, = 2.0 when the
+// agent runs bitrate=25000/maxrate=50000), so ceiling 25 → BURST/maxrate 50 = the owner's
+// "auto to max 50Mbps" (2026-07-10). SETTING THIS TO 50 WAS A BUG — it made maxrate 100 on
+// the real link (WC saw ~98 Mbps live). Keep the average at 25 (proven-safe on the ~40 Mbps
+// link) and let the 2× VBR headroom give the 50 peak on motion. Do NOT raise this to 50.
+export const BWE_CEIL_KBPS = 25_000
+/**
+ * HEVC ceiling — **15 Mbps**, LOWER than H.264's 25 on purpose. HEVC is ~1.6×
+ * more efficient, so HEVC@15 ≈ H.264@25 in quality; capping HEVC at 25 wastes its
+ * whole advantage AND caused v1.28.0-beta.1's ~2s freezes: on the owner's
+ * Parsec-shared ~35-45 Mbps link, an HEVC VBR burst to maxrate (target×~1.4) at an
+ * IDR/scene-change overflowed the queue → seq-gap loss → VideoToolbox stalls on the
+ * broken reference until the next periodic IDR (gop 2s) = the "freeze ~2s" WC saw.
+ * At 15 the burst stays under the link, so no overflow, no loss, no stall — and it
+ * showcases HEVC's low-bitrate win (the reason we added it). WC real-hardware e2e:
+ * decode itself is clean (ndc win32 H265 + VideoToolbox proven); only the bitrate
+ * was too high for HEVC on this link. Codec-aware because the same 25 stays right
+ * for H.264. See docs/bwe-hevc-plan.md + the beta.1 WC diagnosis.
+ */
+// HEVC average ceiling = 25 (raised 15→25 for the owner's "max 50": with the agent's 2×
+// maxrate ratio that gives a 50 Mbps BURST, while the AVERAGE stays 25 — safe on ~40 Mbps.
+// HEVC is efficient so it will usually sit below 25. Matches H.264's 25 now (the old 15 was
+// extra-conservative). NOT 50 — that made maxrate 100 (see BWE_CEIL_KBPS).
+export const BWE_HEVC_CEIL_KBPS = 25_000
+/** Start AT the 25 ceiling (= v1.26.0's proven-smooth target + the capturer's launch
+ *  bitrate) so there's no cold-start ramp; BWE only ever backs OFF from here on a
+ *  congested link, then probes back toward 25 when it clears. The 50 "max" the owner
+ *  wants is the VBR maxrate (2× this), not the average target. */
+export const BWE_START_KBPS = 25_000
+
+/** The AIMD ceiling for a codec: HEVC gets the lower 15 Mbps cap (see above). */
+export function bweCeilingForCodec(codec: 'h264' | 'hevc'): number {
+  return codec === 'hevc' ? BWE_HEVC_CEIL_KBPS : BWE_CEIL_KBPS
+}
+
+// Loss thresholds (fraction of a 1s window's expected packets that went missing).
+const LOSS_LOW = 0.02 // < 2% sustained -> increase
+const LOSS_HIGH = 0.05 // > 5% -> decrease immediately
+// Delay signal (bufferbloat): jitter = smoothed AU inter-arrival deviation. A
+// saturated link delivers AUs in bursts -> jitter climbs BEFORE any packet loss, so
+// this catches congestion earlier than loss alone (the v1.27.0-beta.1 gap). Healthy
+// active streaming here measured 3-13ms, so 30ms = a clear queue-buildup signal and
+// 18ms = "calm enough to probe up again".
+const JITTER_CONGESTION_MS = 30 // > this -> back off (bloat precursor)
+const JITTER_PROBE_OK_MS = 18 // must be under this to probe UP
+const INCREASE_KBPS = 1_000 // additive-increase step per clean window (gentle probe)
+const DECREASE_FACTOR = 0.85 // multiplicative-decrease on congestion (~15% cut)
+// After a back-off, HOLD at the lower rate for a few calm windows before probing up
+// again. Without this the ramp bounced straight back into the loss zone: a real video
+// showed loss -> 12.75 -> +2Mbps -> 14.75 in ONE second -> hit the next burst ~15s
+// later, forever. Holding lets AIMD CONVERGE to a sustainable rate just below the burst
+// threshold (classic AIMD, but our old +2Mbps recovery was too fast for the decrease).
+const HOLD_WINDOWS_AFTER_BACKOFF = 3
+/** Hysteresis: don't signal a change smaller than this (avoid thrashing the encoder
+ *  / spamming signaling for sub-Mbps wiggles). */
+const EMIT_THRESHOLD_KBPS = 1_000
+
+export interface BweUpdate {
+  /** The new target bitrate (kbps) after this window's AIMD step. */
+  targetKbps: number
+  /** Measured packet-loss fraction for the window (0..1). */
+  lossFraction: number
+  /** True if the target moved > EMIT_THRESHOLD_KBPS since the last emit — the
+   *  caller only sends a `video-bitrate` signaling msg when this is set. */
+  changed: boolean
+}
+
+/**
+ * Signed 16-bit forward distance prev->cur (wrap-aware, RTP seq): 1 = in order,
+ * >1 = a gap of (d-1) lost packets, <=0 = reorder/dup (not a loss). Used by the
+ * receiver for real-time loss detection (loss -> PLI -> fast IDR recovery).
+ */
+export function seqForwardDistance(prev16: number, cur16: number): number {
+  let d = (cur16 - prev16) & 0xffff
+  if (d > 0x8000) d -= 0x10000
+  return d
+}
+
+/**
+ * Real-time packet-LOSS detector with reorder tolerance, for PLI-on-loss.
+ *
+ * The naive "any forward seq gap = loss -> PLI now" over-fires on a UDP link that
+ * merely REORDERS packets (a later seq arrives before an earlier one): it would force
+ * an unnecessary IDR for a packet that was about to arrive 1-2ms later = a self-
+ * inflicted judder. So a gap is held PENDING and only declared lost if the missing
+ * seq hasn't shown up within `reorderWindow` newer packets (small, so real loss is
+ * still confirmed in a few ms). Reordered arrivals cancel the pending gap = no PLI.
+ * Returns the count of packets newly CONFIRMED lost on each observe (0 = in order or
+ * still-tolerating reorder); the caller PLIs when it's > 0.
+ */
+export class LossDetector {
+  private extender = new SeqExtender()
+  private highest = -1
+  private pktCount = 0
+  // extendedSeq -> the pktCount by which it must arrive or it's declared lost.
+  private pending = new Map<number, number>()
+
+  constructor(private readonly reorderWindow: number = 8) {}
+
+  observe(seq16: number): number {
+    const ext = this.extender.extend(seq16)
+    this.pktCount += 1
+    // A pending (previously-missing) seq just arrived out of order -> not a loss.
+    if (this.pending.delete(ext)) {
+      // fallthrough to the sweep (other gaps may still time out)
+    } else if (this.highest < 0) {
+      this.highest = ext
+    } else if (ext > this.highest + 1) {
+      // New forward gap: everything between highest+1..ext-1 is missing (pending).
+      for (let s = this.highest + 1; s < ext; s++)
+        this.pending.set(s, this.pktCount + this.reorderWindow)
+      this.highest = ext
+    } else if (ext > this.highest) {
+      this.highest = ext
+    }
+    // Sweep: any pending seq whose reorder deadline passed is confirmed lost.
+    let confirmed = 0
+    for (const [s, deadline] of this.pending) {
+      if (this.pktCount >= deadline) {
+        this.pending.delete(s)
+        confirmed += 1
+      }
+    }
+    return confirmed
+  }
+
+  reset(): void {
+    this.extender = new SeqExtender()
+    this.highest = -1
+    this.pktCount = 0
+    this.pending.clear()
+  }
+}
+
+// Extends a 16-bit RTP sequence number to a monotonic value, wrap-aware, so loss
+// math survives the 65535->0 rollover. Tracks the highest extended seq; each new
+// packet's extension = highest + shortest signed distance from the current low 16.
+export class SeqExtender {
+  private maxExtended = -1
+
+  extend(seq16: number): number {
+    if (this.maxExtended < 0) {
+      this.maxExtended = seq16
+      return seq16
+    }
+    const prev16 = this.maxExtended & 0xffff
+    let delta = seq16 - prev16
+    if (delta > 0x8000)
+      delta -= 0x10000 // seq16 is actually behind (reorder near wrap)
+    else if (delta < -0x8000) delta += 0x10000 // seq16 is ahead across a wrap
+    const extended = this.maxExtended + delta
+    if (extended > this.maxExtended) this.maxExtended = extended
+    return extended
+  }
+}
+
+// The AIMD control law, split out so it's trivially testable (feed loss+jitter
+// series, assert it backs off on either congestion signal and ramps to the cap
+// only when BOTH are calm). Congestion = loss OR high jitter (bufferbloat), which
+// is the v1.27.0-beta.1 fix: loss alone missed the delay-only bloat on a full link.
+class AimdController {
+  private readonly ceil: number
+  private target: number
+  private lastEmitted: number
+  // Emit the target on the FIRST closed window regardless of the dead-band, so the
+  // capturer syncs to BWE's ceiling even if it launched at a DIFFERENT bitrate. This
+  // matters for HEVC: the capturer launches at config.startBitrateKbps (25 Mbps) but
+  // BWE's HEVC ceiling is 15, and without this the |target-lastEmitted|==0 dead-band
+  // would never send the B15000 that actually brings it down. For H.264 (launch ==
+  // ceiling) it's a harmless one-time reconfigure to the same value.
+  private firstEmit = true
+  // Consecutive calm windows since the last back-off (the hold gate for probing up).
+  private calmStreak = 0
+
+  // ceilKbps defaults to the H.264 cap; HEVC passes the lower BWE_HEVC_CEIL_KBPS.
+  // Start AT the ceiling so BWE only ever backs off from a known-good point.
+  constructor(ceilKbps: number = BWE_CEIL_KBPS) {
+    this.ceil = ceilKbps
+    this.target = Math.min(BWE_START_KBPS, ceilKbps)
+    this.lastEmitted = this.target
+  }
+
+  update(lossFraction: number, jitterMs: number | null): BweUpdate {
+    const congested =
+      lossFraction > LOSS_HIGH || (jitterMs != null && jitterMs > JITTER_CONGESTION_MS)
+    const calm = lossFraction < LOSS_LOW && (jitterMs == null || jitterMs < JITTER_PROBE_OK_MS)
+    if (congested) {
+      // Back off fast on loss OR a jitter spike (queue building = bloat precursor),
+      // and reset the calm streak so we HOLD here before probing back up.
+      this.target = Math.max(BWE_FLOOR_KBPS, Math.round(this.target * DECREASE_FACTOR))
+      this.calmStreak = 0
+    } else if (calm) {
+      // Probe back up toward the cap only after HOLD_WINDOWS_AFTER_BACKOFF calm windows
+      // (so a recurring burst converges to a stable rate instead of sawtoothing back
+      // into the loss zone every second).
+      this.calmStreak += 1
+      if (this.calmStreak >= HOLD_WINDOWS_AFTER_BACKOFF && this.target < this.ceil) {
+        this.target = Math.min(this.ceil, this.target + INCREASE_KBPS)
+      }
+    } else {
+      // Dead-band (mild loss/jitter): neither congested nor calm -> don't probe up.
+      this.calmStreak = 0
+    }
+    // In the dead-band (mild loss/jitter): hold — don't oscillate. But always emit
+    // the very first window so the sender adopts BWE's (codec-aware) target.
+    const changed =
+      this.firstEmit || Math.abs(this.target - this.lastEmitted) >= EMIT_THRESHOLD_KBPS
+    if (changed) this.lastEmitted = this.target
+    this.firstEmit = false
+    return { targetKbps: this.target, lossFraction, changed }
+  }
+}
+
+/**
+ * Observe RTP sequence numbers, and once per ~1s window (`tick(jitterMs)`) run AIMD
+ * on the measured loss + the receiver's frame-pacing jitter (bufferbloat signal) and
+ * return the new bitrate target (with a `changed` flag for the caller's hysteresis).
+ * Static screens produce NO packets (change-detection capture) → `tick()` returns
+ * null → the caller HOLDS the current target (no signal to measure, so don't probe
+ * up or back off on silence).
+ */
+export class BandwidthEstimator {
+  private extender = new SeqExtender()
+  private controller: AimdController
+  private windowMin = Infinity
+  private windowMax = -Infinity
+  private count = 0
+
+  // ceilKbps: the AIMD ceiling (H.264 default 25 Mbps; HEVC passes 15). The receiver
+  // re-creates the estimator with the codec's ceiling once it detects the codec.
+  constructor(ceilKbps: number = BWE_CEIL_KBPS) {
+    this.controller = new AimdController(ceilKbps)
+  }
+
+  /** Feed the 16-bit RTP sequence number of one received MEDIA packet (skip RTCP). */
+  observe(seq16: number): void {
+    const ext = this.extender.extend(seq16)
+    if (ext < this.windowMin) this.windowMin = ext
+    if (ext > this.windowMax) this.windowMax = ext
+    this.count += 1
+  }
+
+  /** Close the window: loss = 1 - received/expected across [min..max] seq, plus the
+   *  receiver's current smoothed `jitterMs` (bufferbloat signal; null when idle/
+   *  unknown). Returns the AIMD result, or null if no packets arrived (idle → hold). */
+  tick(jitterMs: number | null): BweUpdate | null {
+    if (this.count === 0) return null
+    const expected = this.windowMax - this.windowMin + 1
+    // Reorder/dup can push count slightly past expected -> clamp to [0,1].
+    const lossFraction =
+      expected > 0 ? Math.max(0, Math.min(1, (expected - this.count) / expected)) : 0
+    this.windowMin = Infinity
+    this.windowMax = -Infinity
+    this.count = 0
+    return this.controller.update(lossFraction, jitterMs)
+  }
+}

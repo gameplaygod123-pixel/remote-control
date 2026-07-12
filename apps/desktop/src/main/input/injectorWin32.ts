@@ -16,9 +16,15 @@ import { CODE_TO_VK } from './keyMapWin32'
 // injector.ts) -- only keyboard ever silently failed there.
 
 const INPUT_KEYBOARD = 1
+const INPUT_MOUSE = 0
 const KEYEVENTF_EXTENDEDKEY = 0x0001
 const KEYEVENTF_KEYUP = 0x0002
 const KEYEVENTF_UNICODE = 0x0004
+const KEYEVENTF_SCANCODE = 0x0008
+
+// MOUSEINPUT dwFlags for wheel scrolling.
+const MOUSEEVENTF_WHEEL = 0x0800
+const MOUSEEVENTF_HWHEEL = 0x01000
 
 // Lazily initialized on first actual injection call, NOT at module load:
 // this module is imported unconditionally by injector.ts (whose isWin32
@@ -53,6 +59,20 @@ function ensureInit(): void {
     ki: 'KEYBDINPUT',
     _tail: 'uint64'
   })
+  // Mouse view of the same 40-byte tagged union. MOUSEINPUT is already 32 bytes
+  // (its own uint64 padding), so INPUT_M is 8+32=40 -- the same size as the
+  // keyboard INPUT above, so SendInput's uniform cbSize is happy either way. We
+  // pass a plain Buffer to the pointer param, so encoding it as INPUT_M and
+  // reusing sendInputFn (typed INPUT*) is ABI-correct.
+  koffi.struct('MOUSEINPUT', {
+    dx: 'int32',
+    dy: 'int32',
+    mouseData: 'int32',
+    dwFlags: 'uint32',
+    time: 'uint32',
+    dwExtraInfo: 'uint64'
+  })
+  koffi.struct('INPUT_M', { type: 'uint32', _pad: 'uint32', mi: 'MOUSEINPUT' })
   sendInputFn = user32.func(
     'uint32 SendInput(uint32 cInputs, _Inout_ INPUT *pInputs, int cbSize)'
   ) as (count: number, buf: Buffer, size: number) => number
@@ -113,13 +133,63 @@ export function typeTextWin32(text: string): void {
 // combos (Ctrl+C) and any key held across time, neither of which
 // typeTextWin32 can express. Unmapped codes are silently ignored, matching
 // keyToggle()'s existing behavior in injector.ts.
-export function keyToggleWin32(code: string, down: boolean): void {
+//
+// `scan` (GAME MODE): inject as a pure hardware scan code (KEYEVENTF_SCANCODE,
+// wVk=0) so DirectInput/RawInput games -- which ignore VK-flagged SendInput --
+// see a real keyboard press. Windows still derives the VK from the scan code
+// for the foreground layout, so GetAsyncKeyState-based games work too. The
+// default (VK) path is unchanged, keeping normal typing/shortcuts identical.
+export function keyToggleWin32(code: string, down: boolean, scan = false): void {
   const entry = CODE_TO_VK[code]
   if (entry === undefined) return
   ensureInit()
-  sendOne({
-    wVk: entry.vk,
-    wScan: scanCodeFor(entry.vk),
-    dwFlags: (down ? 0 : KEYEVENTF_KEYUP) | (entry.extended ? KEYEVENTF_EXTENDEDKEY : 0)
+  const extended = entry.extended ? KEYEVENTF_EXTENDEDKEY : 0
+  const up = down ? 0 : KEYEVENTF_KEYUP
+  if (scan) {
+    sendOne({ wVk: 0, wScan: scanCodeFor(entry.vk), dwFlags: KEYEVENTF_SCANCODE | up | extended })
+    return
+  }
+  sendOne({ wVk: entry.vk, wScan: scanCodeFor(entry.vk), dwFlags: up | extended })
+}
+
+function sendMouseData(mouseData: number, dwFlags: number): void {
+  ensureInit()
+  const buf = Buffer.alloc(inputSize)
+  koffi.encode(buf, 0, 'INPUT_M', {
+    type: INPUT_MOUSE,
+    _pad: 0,
+    mi: { dx: 0, dy: 0, mouseData, dwFlags, time: 0, dwExtraInfo: 0n }
   })
+  sendInputFn!(1, buf, inputSize)
+}
+
+// px->wheel-unit gain (wheel units per trackpad pixel). Default 1.5 =
+// owner-verified 1:1 with the Mac trackpad on real hardware (v1.32.0-beta.1: 1
+// felt slightly slow, 1.5 "พอดีเลย กำลังดี"). Override live via INPUT_WHEEL_GAIN.
+const WHEEL_GAIN = Number(process.env.INPUT_WHEEL_GAIN) || 1.5
+
+// Fractional remainders kept across events so sub-notch scrolls aren't lost and
+// fast flicks stay smooth (mouseData can be < 120 -- true high-resolution wheel,
+// honored by every modern Windows app).
+let wheelAccX = 0
+let wheelAccY = 0
+
+// Smooth high-resolution wheel from raw trackpad pixel deltas (Mac controller,
+// px:true). Bypasses nut.js's whole-notch scroll entirely -- the same reason
+// the keyboard moved to raw SendInput.
+export function injectWheelWin32(dx: number, dy: number): void {
+  // Vertical: Windows wheel +up, browser deltaY +down -> negate.
+  wheelAccY += -dy * WHEEL_GAIN
+  const outY = Math.trunc(wheelAccY)
+  if (outY !== 0) {
+    wheelAccY -= outY
+    sendMouseData(outY, MOUSEEVENTF_WHEEL)
+  }
+  // Horizontal: HWHEEL +right matches browser deltaX +right (no negate).
+  wheelAccX += dx * WHEEL_GAIN
+  const outX = Math.trunc(wheelAccX)
+  if (outX !== 0) {
+    wheelAccX -= outX
+    sendMouseData(outX, MOUSEEVENTF_HWHEEL)
+  }
 }

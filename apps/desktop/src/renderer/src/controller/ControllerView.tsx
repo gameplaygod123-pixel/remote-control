@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import DeviceListView from './DeviceListView'
 import FileTransferView from './FileTransferView'
 import ControllerSession from './ControllerSession'
-import ThemeToggle, { type ThemeName } from './ThemeToggle'
-import GlassToggle from './GlassToggle'
+import ThemeTriToggle, { type ThemeName } from './ThemeTriToggle'
+import PipelineToggle, { type PipelineName } from './PipelineToggle'
 import TitleBar from '../shared/components/TitleBar'
 import { AUTO_CONNECT_DEVICE_ID, FIXED_PIN } from '../shared/config'
 
@@ -53,6 +53,7 @@ function ControllerView(): React.JSX.Element {
   const [activeDevice, setActiveDevice] = useState<ActiveDevice | null>(ENV_AUTO_CONNECT)
   const [page, setPage] = useState<Page>('computers')
   const [theme, setTheme] = useState<ThemeName>('dark')
+  const [pipeline, setPipeline] = useState<PipelineName>('webrtc')
 
   // Apply the saved theme as the controller mounts so there's no flash before
   // the toggles render. ControllerView owns the theme so the sun/moon slider
@@ -62,6 +63,19 @@ function ControllerView(): React.JSX.Element {
       setTheme(t)
       document.documentElement.dataset.theme = t
     })
+    window.api.pipeline.get().then(setPipeline)
+  }, [])
+
+  // Parsec-style window X: tell main whether a session is live so it knows
+  // whether the X should drop back to the main page (session live) or hide to
+  // the tray (main page). Subscribe once to main's "go home" -- the X pressed
+  // during a session -> leave it and return to the device list.
+  useEffect(() => {
+    window.api.controller.setSessionActive(activeDevice !== null)
+  }, [activeDevice])
+
+  useEffect(() => {
+    window.api.controller.onGoHome(() => setActiveDevice(null))
   }, [])
 
   // Persist + apply live. The macOS window is always transparent, so every
@@ -70,6 +84,13 @@ function ControllerView(): React.JSX.Element {
     setTheme(next)
     document.documentElement.dataset.theme = next
     void window.api.theme.set(next)
+  }
+
+  // Persist the video-pipeline choice. Unlike the theme this can't apply live:
+  // the receiver host is wired at startup, so it engages on the NEXT session.
+  function changePipeline(next: PipelineName): void {
+    setPipeline(next)
+    void window.api.pipeline.set(next)
   }
 
   function handleConnect(deviceId: string, pin: string, name?: string): void {
@@ -92,7 +113,11 @@ function ControllerView(): React.JSX.Element {
 
   return (
     <div className="ctl-shell">
-      <TitleBar title={page === 'computers' ? 'Personal Remote — Computers' : 'Personal Remote — File Transfer'} />
+      <TitleBar
+        title={
+          page === 'computers' ? 'Personal Remote — Computers' : 'Personal Remote — File Transfer'
+        }
+      />
       <div className="ctl-main">
         <nav className="ctl-side">
           <button
@@ -110,11 +135,15 @@ function ControllerView(): React.JSX.Element {
             <FilesIcon />
           </button>
           <div className="ctl-side__spacer" />
-          <GlassToggle theme={theme} onChange={changeTheme} />
-          <ThemeToggle theme={theme} onChange={changeTheme} />
+          <PipelineToggle pipeline={pipeline} onChange={changePipeline} />
+          <ThemeTriToggle theme={theme} onChange={changeTheme} />
         </nav>
         <div className="ctl-content">
-          {page === 'computers' ? <DeviceListView onConnect={handleConnect} /> : <FileTransferView />}
+          {page === 'computers' ? (
+            <DeviceListView onConnect={handleConnect} />
+          ) : (
+            <FileTransferView />
+          )}
         </div>
       </div>
     </div>

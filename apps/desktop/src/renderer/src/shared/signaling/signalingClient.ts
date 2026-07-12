@@ -20,6 +20,16 @@ export interface ConnectSignalingOptions {
 // silently die from inactivity between signaling messages.
 const HEARTBEAT_INTERVAL_MS = 25_000
 
+// The server answers every 'ping' with a 'pong', and normal traffic counts as
+// activity too. If NOTHING comes back for this long we treat the socket as
+// dead and force a reconnect. This is what recovers from a HALF-OPEN socket:
+// when the Mac (tunnel host) sleeps, the peer's TCP connection often gets no
+// FIN/RST, so the 'close' event never fires -- the old client then kept pinging
+// into the void with readyState still OPEN and never reconnected (the exact
+// "agent stayed offline until I restarted it" symptom after a lid-close). Set
+// to ~2.5 missed heartbeats so ordinary network jitter never trips it.
+const LIVENESS_TIMEOUT_MS = 65_000
+
 // Reconnect backoff after a real drop (network blip, tunnel restart, etc.).
 // Capped at 30s so it doesn't hammer the server but still recovers promptly.
 const RECONNECT_MIN_DELAY_MS = 1_000
@@ -43,6 +53,10 @@ export function connectSignaling(
 ): Promise<SignalingClient> {
   const handlers: Array<(message: unknown) => void> = []
   let ws: WebSocket | null = null
+  // Last time ANY frame arrived on the current socket -- the liveness watchdog
+  // (in the heartbeat tick) force-closes a socket that's gone silent past
+  // LIVENESS_TIMEOUT_MS, turning a half-open dead connection into a reconnect.
+  let lastActivityAt = Date.now()
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
   let reconnectDelay = RECONNECT_MIN_DELAY_MS
@@ -71,8 +85,19 @@ export function connectSignaling(
 
       socket.addEventListener('open', () => {
         reconnectDelay = RECONNECT_MIN_DELAY_MS
+        lastActivityAt = Date.now()
         heartbeatTimer = setInterval(() => {
-          socket.send(JSON.stringify({ type: 'ping' }))
+          // Watchdog first: if the peer has gone silent (e.g. the tunnel host
+          // slept and left us half-open), close now so the 'close' handler
+          // schedules a reconnect that re-resolves the URL. socket.close()
+          // fires 'close' locally regardless of network reachability.
+          if (Date.now() - lastActivityAt > LIVENESS_TIMEOUT_MS) {
+            socket.close()
+            return
+          }
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'ping' }))
+          }
         }, HEARTBEAT_INTERVAL_MS)
 
         if (!settled) {
@@ -84,6 +109,7 @@ export function connectSignaling(
       })
 
       socket.addEventListener('message', (event) => {
+        lastActivityAt = Date.now()
         const message = JSON.parse(event.data as string)
         handlers.forEach((handler) => handler(message))
       })
