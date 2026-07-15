@@ -52,6 +52,19 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  # The Mac build is ad-hoc signed (`electron-builder --mac -c.mac.identity="-"`):
+  # there's no Apple Developer ID for this app, and the Mac only ever runs the
+  # controller for its owner. That's why build/entitlements.mac.plist carries
+  # cs.disable-library-validation -- library validation demands every loaded library
+  # share the main binary's Team ID, an ad-hoc signature has NO Team ID, so the
+  # hardened runtime rejects Electron Framework in dyld before main() ("...have
+  # different Team IDs") and the app dies at launch. Running the executable straight
+  # from a terminal masks this; a Finder / LaunchServices launch does not -- the
+  # symptom is "double-click does nothing". Don't drop that entitlement unless the
+  # build gains a real Developer ID identity, which makes it unnecessary. (AMFI can't
+  # parse XML comments inside an entitlements plist -- codesign dies with
+  # "AMFIUnserializeXML: syntax error" -- hence this note lives here, not next to the
+  # key it explains.)
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.

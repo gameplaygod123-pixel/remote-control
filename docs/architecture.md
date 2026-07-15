@@ -428,6 +428,18 @@ generic script files.
   and verified with `file`. `main/index.ts` now sets the `icon` window
   option on all platforms (was Linux-only) and the macOS Dock icon
   explicitly, so it shows in dev mode too, not just a packaged build.
+  - **Superseded in v1.40.0 -- `qlmanage -t` composites onto an opaque white
+    page.** Every icon it produced therefore carried four solid white
+    corners outside the rounded plate: invisible while previewing on a white
+    page, glaring against a dark Dock/taskbar, and worst in the 16px tray
+    where the corners are a big fraction of the icon. All four assets are
+    now rendered by `scripts/make-icons.py` (PIL -- `pip install pillow`),
+    which redraws icon.svg's geometry with a real alpha channel,
+    supersampled 4x, and emits a proper multi-size `.ico` rather than the
+    hand-packed single-size one. After regenerating, check the corner
+    pixel's alpha is 0 -- that one pixel is the whole bug. `icon.svg`
+    remains the design source; it and the script are kept in sync by hand
+    (the drawing is 4 primitives).
 - **"Personal Remote Controller.app"** (repo root) is a minimal real macOS
   app bundle -- `Info.plist` + a one-line shell launcher + `icon.icns` --
   replacing reliance on the classic "set icon of file to clipboard"

@@ -1,6 +1,30 @@
-<svg width="1024" height="1024" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
-  <rect width="120" height="120" rx="26" fill="#171310"/>
-  <rect x="24" y="34" width="46" height="34" rx="4" fill="none" stroke="#5c4a3d" stroke-width="3.5"/>
-  <rect x="50" y="52" width="46" height="34" rx="4" fill="#1c1611" stroke="#e8825a" stroke-width="3.5"/>
-  <circle cx="24" cy="34" r="3" fill="#8bc34a"/>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Design source for the app icon. The shipped .icns/.ico/.png are NOT rasterized
+       from this file -- scripts/make-icons.py redraws these shapes with PIL, because
+       every SVG rasterizer available here composites onto an opaque white page, which
+       is exactly what left solid white corners on every icon before v1.40.0 (see
+       docs/architecture.md). Keep this file and that script in sync by hand.
+
+       Plate sits on macOS's icon grid -- 855x855 at (85,92) in a 1024 canvas --
+       measured off Mail/Safari/Notes, so the Dock renders it the same size as its
+       neighbours instead of noticeably bigger. Background copies MuMuPlayer's:
+       45-degree black -> dark navy. The rim runs bright at the top to dark at the
+       bottom, which is what makes the slab read as lit and convex. -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#000000"/>
+      <stop offset="1" stop-color="#000E2E"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5C5E68"/>
+      <stop offset="1" stop-color="#14141A"/>
+    </linearGradient>
+  </defs>
+  <rect x="85" y="92" width="855" height="855" rx="192" fill="url(#rim)"/>
+  <rect x="93.5" y="100.5" width="838" height="838" rx="184" fill="url(#plate)"/>
+  <g transform="translate(85 92) scale(7.125)">
+    <rect x="24" y="34" width="46" height="34" rx="4" fill="none" stroke="#5c4a3d" stroke-width="3.5"/>
+    <rect x="50" y="52" width="46" height="34" rx="4" fill="#1c1611" stroke="#e8825a" stroke-width="3.5"/>
+    <circle cx="24" cy="34" r="3" fill="#8bc34a"/>
+  </g>
 </svg>

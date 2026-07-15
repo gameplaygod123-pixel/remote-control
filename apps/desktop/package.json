@@ -1,6 +1,6 @@
 {
   "name": "desktop",
-  "version": "1.39.0",
+  "version": "1.40.0",
   "description": "An Electron application with React and TypeScript",
   "main": "./out/main/index.js",
   "author": "example.com",
@@ -20,7 +20,7 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "release:win": "npm run build && electron-builder --win --publish always",
-    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:mac": "electron-vite build && electron-builder --mac -c.mac.identity=-",
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {

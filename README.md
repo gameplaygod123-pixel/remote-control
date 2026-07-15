@@ -47,6 +47,29 @@ Releases (live, not draft -- see `electron-builder.yml`). Anyone with the
 app installed gets it automatically within 6 hours, or immediately if they
 click "Check for updates" in the app.
 
+## Building the Mac controller app
+
+The Mac side can run the controller two ways: `start-controller.command` (dev
+mode -- electron-vite, keeps a Terminal window open, picks up code changes), or
+a packaged `.app` that opens like any other Mac app:
+
+```
+cd apps/desktop
+pnpm build:mac        # -> apps/desktop/dist/mac-arm64/Personal Remote.app
+cp -R dist/mac-arm64/"Personal Remote.app" /Applications/
+```
+
+It's ad-hoc signed (`-c.mac.identity=-`, already in the script) because there's
+no Apple Developer ID here -- see the comment in `electron-builder.yml`'s `mac:`
+section before touching the entitlements, ad-hoc + hardened runtime is a trap.
+The build is local-only: it isn't published to GitHub Releases (those are the
+Windows agent installers), so "Check for updates" in the Mac app does nothing --
+rebuild to update it.
+
+Unlike the Windows agents, the packaged Mac controller reaches signaling through
+the public tunnel URL from `signaling-url.json` (`resolveSignalingUrl` only uses
+localhost in dev), even though the server is on this same Mac.
+
 ## When the signaling tunnel URL changes
 
 Installed builds (v1.13.0+) fetch the current signaling URL from

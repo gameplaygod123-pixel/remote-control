@@ -3,6 +3,24 @@
 # from -- three levels up from Contents/MacOS is the .app bundle itself,
 # one more level up is the repo root.
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-cd "$DIR/apps/desktop"
-export VITE_SIGNALING_URL="wss://worldcat-preferences-vocal-storage.trycloudflare.com"
-exec pnpm dev >> /tmp/personal-remote-launcher.log 2>&1
+
+exec >>/tmp/personal-remote-launcher.log 2>&1
+echo "[launcher] $(date '+%F %T') starting from $DIR"
+
+# This bundle CANNOT read the repo itself. The repo lives under ~/Desktop, which
+# is TCC-protected, and an unsigned script-only .app gets no Desktop grant and
+# no consent prompt (there's no GUI run loop for macOS to attach one to) -- so
+# every file access outside the bundle fails with "Operation not permitted".
+# `open` hands the .command to Terminal via LaunchServices instead: Terminal is
+# launched by launchd, so it -- not this bundle -- is the responsible process,
+# and it already holds the Desktop grant from the user running .command files.
+# Hence the indirection: don't "simplify" this back to running the script here.
+#
+# start-controller.command is the real launcher (Homebrew PATH via Terminal's
+# login shell, strips a leaked ELECTRON_RUN_AS_NODE, points at the local
+# signaling server on ws://localhost:8080 instead of a hardcoded tunnel URL that
+# goes stale on every tunnel restart, sources the TURN creds, builds the native
+# render dylib). Signaling itself is kept alive independently by the
+# com.personalremote.signaling LaunchAgent, so there's nothing to start here.
+open -a Terminal "$DIR/start-controller.command"
+echo "[launcher] handed off to Terminal (exit $?)"
